@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.0.0
+// @version      1.0.1
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -26,7 +26,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
- * 1.0.0  第一版：整合 7 支腳本，新增 Threads 音量記憶與 X 音量記憶，LINE 動態貼圖改成直接在 LINE 頁面轉 GIF
+ * 1.0.1  Threads 影片上的音量條改成預設不顯示，音量在設定面板調（面板裡可以再打開）
+ * 1.0.0第一版：整合 7 支腳本，新增 Threads 音量記憶與 X 音量記憶，LINE 動態貼圖改成直接在 LINE 頁面轉 GIF
  * ==/更新紀錄== */
 
 (function () {
@@ -1585,27 +1586,42 @@ button, input, select, output { font: inherit; }
       group: 'video',
       name: 'Threads 音量記憶',
       site: 'Threads',
-      desc: '滑鼠移到影片上會出現音量條，也能用滾輪微調；調好的音量會套用到之後每一支影片。',
-      fields: [{ key: 'volume', label: '目前記住的音量', type: 'memory', memKey: 'mem.threadsVolume', def: 0.1 }],
+      desc: '把音量記住並套用到之後每一支影片（Threads 原本每支都是 100%）。音量在這裡調，也可以打開影片上的音量條。',
+      defaults: { bar: 'hide' },
+      fields: [
+        { key: 'volume', label: '目前記住的音量', type: 'memory', memKey: 'mem.threadsVolume', def: 0.1 },
+        { key: 'bar', label: '影片上的音量條', type: 'select', options: [['hide', '不顯示'], ['show', '顯示']] },
+      ],
       frames: 'all',
       phase: 'start',
       match: () => /(^|\.)threads\.(com|net)$/.test(HOST),
-      start() {
+      start(ctx) {
         const keeper = startVolumeKeeper('mem.threadsVolume', 0.1);
         let overlay = null;
-        const mount = () => {
-          overlay = createVolumeOverlay(keeper, {
-            label: 'Threads 影片音量',
-            title: 'Threads 影片音量（滾輪可微調），之後的影片都會用這個音量',
-            mutedTitle: '影片目前靜音；取消靜音後就會用這個音量',
-          });
+        // 音量條要不要出現由設定決定，切換時立即生效
+        const sync = () => {
+          if (document.readyState === 'loading') return;
+          const want = ctx.cfg().bar === 'show';
+          if (want && !overlay) {
+            overlay = createVolumeOverlay(keeper, {
+              label: 'Threads 影片音量',
+              title: 'Threads 影片音量（滾輪可微調），之後的影片都會用這個音量',
+              mutedTitle: '影片目前靜音；取消靜音後就會用這個音量',
+            });
+          } else if (!want && overlay) {
+            overlay.destroy();
+            overlay = null;
+          }
         };
-        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
-        else mount();
-        return () => {
-          document.removeEventListener('DOMContentLoaded', mount);
-          if (overlay) overlay.destroy();
-          keeper.stop();
+        document.addEventListener('DOMContentLoaded', sync, { once: true });
+        sync();
+        return {
+          onConfig: sync,
+          stop() {
+            document.removeEventListener('DOMContentLoaded', sync);
+            if (overlay) overlay.destroy();
+            keeper.stop();
+          },
         };
       },
     },
@@ -2134,19 +2150,28 @@ button, input, select, output { font: inherit; }
       pending.delete(m.id);
       if (running.has(m.id) || !shouldRun(m)) return;
       try {
-        const stop = m.start({ cfg: () => getCfg(m) });
-        running.set(m.id, typeof stop === 'function' ? stop : () => {});
+        // start() 可以回傳 stop 函式，或 { stop, onConfig }（設定改變時即時套用）
+        const inst = m.start({ cfg: () => getCfg(m) });
+        if (typeof inst === 'function') running.set(m.id, { stop: inst });
+        else if (inst && typeof inst.stop === 'function') running.set(m.id, inst);
+        else running.set(m.id, { stop() {} });
       } catch (e) { console.error(`[MAOBOO] 「${m.name}」啟動失敗`, e); }
     });
   }
   function stopModule(m) {
     pending.delete(m.id);
-    const stop = running.get(m.id);
-    if (!stop) return;
+    const inst = running.get(m.id);
+    if (!inst) return;
     running.delete(m.id);
-    try { stop(); } catch (e) { console.error(`[MAOBOO] 「${m.name}」停止失敗`, e); }
+    try { inst.stop(); } catch (e) { console.error(`[MAOBOO] 「${m.name}」停止失敗`, e); }
   }
   const syncModule = (m) => (shouldRun(m) ? startModule(m) : stopModule(m));
+  function notifyConfig(m) {
+    const inst = running.get(m.id);
+    if (inst && typeof inst.onConfig === 'function') {
+      try { inst.onConfig(getCfg(m)); } catch (e) { console.error(`[MAOBOO] 「${m.name}」套用設定失敗`, e); }
+    }
+  }
 
   /* ======================================================================
    * 油猴選單
@@ -2235,6 +2260,7 @@ button, input, select, output { font: inherit; }
     const cur = Object.assign({}, store.get('cfg.' + m.id, {}) || {});
     cur[key] = value;
     store.set('cfg.' + m.id, cur);
+    notifyConfig(m);
     renderMenu();
   }
 
@@ -2432,6 +2458,7 @@ button, input, select, output { font: inherit; }
       if (IS_TOP) { renderMenu(); if (remote && panel) panel.refresh(); }
     });
     store.watch('cfg.' + m.id, (_v, remote) => {
+      notifyConfig(m);
       if (IS_TOP) { renderMenu(); if (remote && panel) panel.refresh(); }
     });
   }
