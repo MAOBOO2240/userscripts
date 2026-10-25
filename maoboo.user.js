@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.0.1
+// @version      1.0.2
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -26,7 +26,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
- * 1.0.1  Threads 影片上的音量條改成預設不顯示，音量在設定面板調（面板裡可以再打開）
+ * 1.0.2  Threads 自己的音量條會跟記住的音量同步，拉的時候不會突然變大聲；在 Threads 音量條上調的音量也會記住
+ * 1.0.1Threads 影片上的音量條改成預設不顯示，音量在設定面板調（面板裡可以再打開）
  * 1.0.0第一版：整合 7 支腳本，新增 Threads 音量記憶與 X 音量記憶，LINE 動態貼圖改成直接在 LINE 頁面轉 GIF
  * ==/更新紀錄== */
 
@@ -303,7 +304,7 @@ button, input, select, output { font: inherit; }
    * - 網站自己把音量改回去（例如換片、取消靜音時重設成 100%）→ 改回記住的音量
    * - 使用者在網站自己的音量條上調整（指標按著或剛操作過、且在影片附近）→ 記住新音量
    */
-  function startVolumeKeeper(memKey, defVol) {
+  function startVolumeKeeper(memKey, defVol, afterApply) {
     let vol = clamp01(store.get(memKey, defVol));
     const state = new WeakMap();
     const listeners = new Set();
@@ -318,11 +319,14 @@ button, input, select, output { font: inherit; }
     };
     function setVideo(v, value) {
       const s = st(v);
-      if (Math.abs(v.volume - value) < 0.0005) { s.volume = v.volume; s.muted = v.muted; return; }
-      s.expect = value;
-      try { v.volume = value; } catch (_) { /* 有些播放器會鎖住 volume */ }
+      if (Math.abs(v.volume - value) >= 0.0005) {
+        s.expect = value;
+        try { v.volume = value; } catch (_) { /* 有些播放器會鎖住 volume */ }
+      }
       s.volume = v.volume;
       s.muted = v.muted;
+      // 讓網站自己的播放器也知道這個音量（例如 Threads 的音量條），避免一拉就跳回 100%
+      if (afterApply) { try { afterApply(v, value); } catch (_) { /* 網站改版時略過 */ } }
     }
     function applyAll() {
       const list = document.getElementsByTagName('video');
@@ -397,6 +401,50 @@ button, input, select, output { font: inherit; }
     };
     keepers.set(memKey, api);
     return api;
+  }
+
+  /**
+   * Threads 的播放器（Meta VideoPlayer）自己記一份音量，音量條顯示的是它，不是影片實際的音量。
+   * 從播放器按鈕的 React 資料找到控制器，用它的 setVolume 同步，音量條就會跟記住的音量一致。
+   */
+  const threadsCtrlCache = new WeakMap(); // video → { c, t }
+  const isPlayerCtrl = (v) => v && typeof v === 'object' && typeof v.setVolume === 'function' && typeof v.getCurrentState === 'function';
+  function ctrlFromElement(el) {
+    const k = Object.keys(el).find((x) => x.startsWith('__reactFiber$'));
+    let f = k ? el[k] : null;
+    for (let i = 0; f && i < 25; i++, f = f.return) {
+      for (let d = f.dependencies && f.dependencies.firstContext; d; d = d.next) {
+        if (isPlayerCtrl(d.memoizedValue)) return d.memoizedValue;
+      }
+    }
+    return null;
+  }
+  function findThreadsController(video) {
+    const seen = new Set();
+    let box = video.parentElement;
+    for (let up = 0; box && up < 10; up++, box = box.parentElement) {
+      const cands = box.querySelectorAll('[role="button"], [role="slider"], button');
+      for (let i = 0, n = 0; i < cands.length && n < 80; i++) {
+        const el = cands[i];
+        if (seen.has(el)) continue;
+        seen.add(el);
+        n++;
+        const c = ctrlFromElement(el);
+        if (c && typeof c.internal_getVideoElement === 'function' && c.internal_getVideoElement() === video) return c;
+      }
+    }
+    return null;
+  }
+  function syncThreadsPlayer(video, vol) {
+    let hit = threadsCtrlCache.get(video);
+    if (!hit || (!hit.c && performance.now() - hit.t > 2000)) {
+      hit = { c: findThreadsController(video), t: performance.now() };
+      threadsCtrlCache.set(video, hit);
+    }
+    const c = hit.c;
+    if (!c) return;
+    const st = c.getCurrentState();
+    if (!st || typeof st.volume !== 'number' || Math.abs(st.volume - vol) > 0.004) c.setVolume(vol); // 不會改變靜音狀態
   }
 
   /** 滑鼠移到影片上時，在左下角顯示音量條（可拖、可用滾輪微調） */
@@ -1586,7 +1634,7 @@ button, input, select, output { font: inherit; }
       group: 'video',
       name: 'Threads 音量記憶',
       site: 'Threads',
-      desc: '把音量記住並套用到之後每一支影片（Threads 原本每支都是 100%）。音量在這裡調，也可以打開影片上的音量條。',
+      desc: '把音量記住並套用到之後每一支影片（Threads 原本每支都是 100%），Threads 自己的音量條也會同步。在 Threads 音量條或這裡調都可以。',
       defaults: { bar: 'hide' },
       fields: [
         { key: 'volume', label: '目前記住的音量', type: 'memory', memKey: 'mem.threadsVolume', def: 0.1 },
@@ -1596,7 +1644,7 @@ button, input, select, output { font: inherit; }
       phase: 'start',
       match: () => /(^|\.)threads\.(com|net)$/.test(HOST),
       start(ctx) {
-        const keeper = startVolumeKeeper('mem.threadsVolume', 0.1);
+        const keeper = startVolumeKeeper('mem.threadsVolume', 0.1, syncThreadsPlayer);
         let overlay = null;
         // 音量條要不要出現由設定決定，切換時立即生效
         const sync = () => {
