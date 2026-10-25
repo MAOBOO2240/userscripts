@@ -2803,7 +2803,7 @@ button, input, select, output { font: inherit; }
     }
 
     /* ---------- 免費模式 ---------- */
-    const loc = { worker: null, lang: '', failed: '', failedAt: 0, detect: null, tries: 0 };
+    const loc = { worker: null, lang: '', failed: '', failedAt: 0 };
     async function tessWorker(lang, rec) {
       if (loc.failed && Date.now() - loc.failedAt < 60000) throw mtErr('local', loc.failed);
       if (loc.worker && loc.lang === lang) return loc.worker;
@@ -2832,41 +2832,52 @@ button, input, select, output { font: inherit; }
       }
     }
     async function ocrRun(s, lang, plan, rec) {
+      s.ocr = s.ocr || {};
+      if (s.ocr[lang]) return s.ocr[lang]; // 判斷語言時已經辨識過
       const w = await tessWorker(lang, rec);
       const scale = plan.W < 800 ? 1.5 : 1;
       if (!s.clean) s.clean = mtOcrClean(s.canvas, plan.W, s.y1 - s.y0, scale);
       const { data } = await w.recognize(s.clean, {}, { blocks: true, text: false });
-      return mtOcrGroups(data, lang, scale);
+      s.ocr[lang] = mtOcrGroups(data, lang, scale);
+      return s.ocr[lang];
     }
-    /** 免費模式要先知道原文語言：設定 > 網站 > 這個網站上次測到的 > 實際試試看 */
-    function pickOcrLang(rec, s, plan) {
+    /**
+     * 免費模式要先知道原文語言：設定 > 網站 > 這個網站之前測到的 > 實際試試看。
+     * 實際測試時一片一片試（第一片常常是翻譯組的說明或沒有字），測到有把握才記住；
+     * 整張圖都測不出來就當作沒有字，不硬翻出亂碼。
+     */
+    function imageLang(rec, slices, plan) {
       const set = cfg().ocrLang;
       if (set && set !== 'auto') return Promise.resolve(set);
-      const byHost = mtHostLang() || (store.get('mt.lang', {}) || {})[HOST];
-      if (byHost) return Promise.resolve(byHost);
-      if (loc.detect) return loc.detect;
-      loc.detect = ocrQ(async () => {
-        let best = 'eng';
-        let bestScore = 0;
-        for (const lang of ['eng', 'kor', 'jpn']) {
-          let groups = [];
-          try { groups = await ocrRun(s, lang, plan, rec); } catch (e) { if (lang === 'eng') throw e; continue; }
-          const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
-          if (score > bestScore) { best = lang; bestScore = score; }
-          if (score >= 16) break; // 這個語言辨識得很順，就不用再下載其他語言試
-        }
-        if (bestScore >= 4 || ++loc.tries >= 3) {
-          const map = Object.assign({}, store.get('mt.lang', {}) || {});
-          map[HOST] = best;
-          store.set('mt.lang', map);
-        } else setTimeout(() => { loc.detect = null; }, 0); // 這一片沒什麼字，下一片再判斷
-        return best;
-      });
-      loc.detect.catch(() => { loc.detect = null; });
-      return loc.detect;
+      const known = mtHostLang() || (store.get('mt.lang', {}) || {})[HOST];
+      if (known) return Promise.resolve(known);
+      if (!rec.langP) {
+        rec.langP = ocrQ(async () => {
+          let best = null;
+          let bestScore = 0;
+          for (const s of slices) {
+            for (const lang of ['eng', 'kor', 'jpn']) {
+              let groups = [];
+              try { groups = await ocrRun(s, lang, plan, rec); } catch (e) { if (lang === 'eng') throw e; continue; }
+              const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
+              if (score > bestScore) { best = lang; bestScore = score; }
+              if (score >= 16) break; // 這個語言辨識得很順，就不用再試其他語言
+            }
+            if (bestScore >= 16) break;
+          }
+          if (bestScore >= 8) {
+            const map = Object.assign({}, store.get('mt.lang', {}) || {});
+            map[HOST] = best;
+            store.set('mt.lang', map);
+          }
+          return bestScore >= 4 ? best : null;
+        });
+      }
+      return rec.langP;
     }
-    async function localSlice(rec, s, plan, alive) {
-      const lang = await pickOcrLang(rec, s, plan);
+    async function localSlice(rec, s, plan, alive, slices) {
+      const lang = await imageLang(rec, slices, plan);
+      if (!lang) return [];
       return ocrQ(async () => {
         if (!alive()) throw mtErr('cancel');
         const groups = await ocrRun(s, lang, plan, rec);
@@ -2900,7 +2911,7 @@ button, input, select, output { font: inherit; }
       if (stopped || rec.state === 'busy') return;
       const gen = ++rec.gen;
       if (rec.overlay) { rec.overlay.destroy(); rec.overlay = null; }
-      Object.assign(rec, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '讀取圖片…', engines: new Set(), src: mtImgUrl(rec.img), attr: attrKey(rec.img), shown: true, started: Date.now() });
+      Object.assign(rec, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '讀取圖片…', engines: new Set(), src: mtImgUrl(rec.img), attr: attrKey(rec.img), shown: true, started: Date.now(), langP: null });
       renderRec(rec);
       const alive = () => !stopped && rec.gen === gen;
       try {
@@ -2956,9 +2967,9 @@ button, input, select, output { font: inherit; }
               } catch (e) {
                 if (e && e.kind === 'cancel') return;
                 allGemini = false;
-                blocks = await localSlice(rec, s, plan, alive);
+                blocks = await localSlice(rec, s, plan, alive, slices);
               }
-            } else blocks = await localSlice(rec, s, plan, alive);
+            } else blocks = await localSlice(rec, s, plan, alive, slices);
           } catch (e) {
             if (e && e.kind === 'cancel') return;
             failed++;
