@@ -13,11 +13,21 @@
 | YouTube Shorts 自動下一部 | YouTube | 快播完自動跳下一部，背景分頁也會繼續播；只在 Shorts 頁面作用 |
 | Threads 音量記憶 | Threads | 記住音量，之後每支影片都用這個音量；Threads 自己的音量條會同步，在那裡或設定面板調都可以 |
 | X 音量記憶 | X | 第一次 1%，之後記住你在 X 播放器上調的音量 |
+| 漫畫翻譯 | 漫畫網站（Alt+T 任何網站） | 英文、日文、韓文漫畫翻成繁體中文，用白底蓋住原文；滑到圖片上按「翻譯」，或按 Alt+T 翻譯整頁 |
 | X 直連影片音量 | video.twimg.com | 直接開影片網址時設成 5%，只設一次 |
 | X 影片下載按鈕 | X | 推文旁的下載鈕，用 cobalt.tools 下載 |
 | LINE 貼圖下載 | LINE Store | 靜態圖打包 ZIP；動態圖直接在 LINE 頁面轉成去背 GIF 再打包（不需要另開網頁） |
 | 網址追蹤參數清除 | 所有網站 | 清掉 utm_、fbclid、gclid 等，以及 YouTube／Spotify 的 si、X 的 s 和 t、Threads 的 xmt |
 | 手機版自動轉電腦版 | m. 網址 | m. 開頭的網址自動換成 www.，維基百科的 zh.m. 也會轉 |
+
+## 漫畫翻譯
+
+- **用法：** 在支援的網站把滑鼠移到漫畫圖片上，右上角會出現「翻譯｜整頁」。按「翻譯」只翻這張；按「整頁」或 Alt+T 會一路翻譯捲到的每張圖。再按一次 Alt+T 可以暫時看原文。手機上是右下角的「譯」按鈕。
+- **Gemini 金鑰（建議）：** 到 [Google AI Studio](https://aistudio.google.com/apikey) 免費申請，貼到設定面板的「Gemini 金鑰」，按「測試」。金鑰只存在你的瀏覽器裡。
+- **不會收費：** 每個 Gemini 模型每天有免費額度，用完會自動換下一個模型；全部用完就改用免費模式，隔天（台灣時間下午）自動換回 Gemini。只要沒有自己在 Google 開啟付費，就不會被收費。
+- **免費模式：** 沒有金鑰或額度用完時，在瀏覽器裡辨識文字（Tesseract.js）再用 Google 翻譯（跟 Chrome 右鍵翻譯同一套；連不上時改用 Chrome 離線翻譯），品質比 Gemini 差一些。
+- **支援的網站：** 預設有 kingofshojo.com、ezmanga.org、comix.to、telltome.net（G站、包子漫畫）、Naver／Kakao 等韓國條漫網站，可以在設定面板或選單裡增減。
+- 翻過的圖會記住（最多 400 張），重看不會再花額度。
 
 ## 開關功能
 
@@ -44,6 +54,10 @@
 
 ## 更新紀錄
 
+### 1.1.0
+- 新增漫畫翻譯：英文、日文、韓文漫畫翻成繁體中文，用白底蓋住原文（日文直排的對話框會用直排中文）
+- 使用 Gemini（自己的免費金鑰）；額度用完自動換模型，全部用完改用免費模式，不會收費
+
 ### 1.0.2
 - Threads 自己的音量條會跟記住的音量同步，拉的時候不會突然變大聲；在 Threads 音量條上調的音量也會記住
 
@@ -60,3 +74,4 @@
 ---
 
 GIF 編碼與色彩量化改寫自 [gifenc](https://github.com/mattdesl/gifenc)（MIT License © Matt DesLauriers）。
+免費模式的文字辨識使用 [Tesseract.js](https://github.com/naptha/tesseract.js)（Apache License 2.0），需要時才從 jsDelivr 載入。
