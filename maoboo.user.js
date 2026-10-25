@@ -2342,9 +2342,13 @@ button, input, select, output { font: inherit; }
       let text = g.map((l) => l.text).join(joiner).replace(/(\w)- (\w)/g, '$1$2').trim();
       if (lang === 'jpn') text = text.replace(/\s+/g, '');
       if (lang === 'eng') text = mtSentenceCase(text.replace(/(^|[\s.!?])[1|](?=\s+[A-Za-z]{2,})/g, '$1I'));
+      // 辨識框不含分開的標點（句點、驚嘆號常常是獨立的小點），往行尾多留一點
+      const t = g.reduce((n, l) => n + Math.min(l.x1 - l.x0, l.y1 - l.y0), 0) / g.length;
       out.push({
-        x0: Math.min(...g.map((l) => l.x0)), y0: Math.min(...g.map((l) => l.y0)),
-        x1: Math.max(...g.map((l) => l.x1)), y1: Math.max(...g.map((l) => l.y1)),
+        x0: Math.min(...g.map((l) => l.x0)) - t * 0.2,
+        y0: Math.min(...g.map((l) => l.y0)) - t * 0.15,
+        x1: Math.max(...g.map((l) => l.x1)) + t * (vertical ? 0.2 : 0.6),
+        y1: Math.max(...g.map((l) => l.y1)) + t * (vertical ? 0.6 : 0.15),
         text,
         vertical,
       });
