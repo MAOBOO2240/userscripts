@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.2.0
+// @version      1.3.0
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -37,6 +37,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.3.0  漫畫翻譯預設改成快速模式：瀏覽器認字＋Google 翻譯馬上顯示，Gemini 只收文字幫忙修正（很多張合成一次，很省次數）；
+ *        加上進度條：狀態列顯示翻到第幾張、正在做什麼，圖上也標出進度；太久沒有進度會提示，可以按「重試」。Gemini 看圖翻譯改成設定裡的「精準」
  * 1.2.0  漫畫翻譯：深色底、沒有白底的字也會翻；Gemini 同時用多個模型、邊翻邊顯示，快很多；整頁翻譯會先下載後面的圖先翻好（翻頁式也是）；
  *        狀態列縮小並避開網站按鈕；字壓在格線上不會再被切開翻錯，譯文不會互相蓋住；混進簡體字會自動轉繁體
  * 1.1.0  新增漫畫翻譯：英文、日文、韓文漫畫翻成繁體中文並用白底蓋住原文；滑到圖片上按「翻譯」，或按 Alt+T 翻譯整頁
@@ -258,13 +260,21 @@ button, input, select, output { font: inherit; }
   font-weight: 600; line-height: 1; box-shadow: 0 6px 18px rgba(0, 0, 0, .28); opacity: 0; pointer-events: none;
   transform: translateY(6px); transition: opacity .18s, transform .18s; }
 .mt-chip.is-on { opacity: 1; pointer-events: auto; transform: none; }
-.mt-chip-text { overflow: hidden; min-width: 0; margin-right: 4px; white-space: nowrap; text-overflow: ellipsis;
+.mt-chip-text { overflow: hidden; min-width: 0; max-width: 460px; margin-right: 4px; white-space: nowrap; text-overflow: ellipsis;
   font-variant-numeric: tabular-nums; }
 .mt-chip button { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: 13px; background: rgba(255, 255, 255, .14);
   color: #FFFFFF; font: inherit; cursor: pointer; }
 .mt-chip button:hover { background: rgba(255, 255, 255, .24); }
 .mt-chip button.mt-x { width: 26px; padding: 0; background: transparent; color: #AEB9C5; font-size: 16px; }
 .mt-chip button.mt-x:hover { background: rgba(255, 255, 255, .14); color: #FFFFFF; }
+.mt-chip button.mt-retry { background: #F2C94C; color: #1E1B12; }
+.mt-chip button.mt-retry:hover { background: #F7D97A; }
+.mt-chip button[hidden] { display: none; }
+.mt-bar { position: absolute; left: 12px; right: 12px; bottom: 3px; height: 3px; overflow: hidden; border-radius: 2px;
+  background: rgba(255, 255, 255, .16); pointer-events: none; }
+.mt-bar i { display: block; width: 0; height: 100%; border-radius: 2px; background: #8DB8FF; transition: width .4s; }
+.mt-chip.is-done .mt-bar i { background: #6FCF97; }
+.mt-chip.is-stuck .mt-bar i { background: #F2C94C; }
 .mt-chip button:focus-visible, .mt-fab:focus-visible { outline: 2px solid #9DBAFF; outline-offset: 2px; }
 .mt-fab { position: fixed; right: 16px; bottom: 16px; width: 44px; height: 44px; border: 0; border-radius: 50%;
   background: rgba(15, 22, 30, .82); color: #FFFFFF; font-family: var(--font); font-size: 16px; font-weight: 700; cursor: pointer;
@@ -1500,6 +1510,9 @@ button, input, select, output { font: inherit; }
   const TESS_WORKER = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js';
   const TESS_CORE = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0';
   const MTC_MAX = 400; // 最多記住幾張圖的翻譯
+  // 免費模式同時開幾個文字辨識程式（看電腦有幾個核心，最多 3 個）
+  const MT_TESS_N = Math.max(1, Math.min((() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })() ? 2 : 3,
+    Math.floor(((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2) / 2)));
   const MT_LANG = { eng: 'en', kor: 'ko', jpn: 'ja' };
   const MT_CJK = /[⺀-鿿豈-﫿＀-￯　-〿]/;
   const MT_NO_START = /^[，。、．！？；：」』）》〉】〕｝…—～·,.!?;:)\]}%’”]+$/u; // 不放在行首的標點
@@ -1598,80 +1611,108 @@ button, input, select, output { font: inherit; }
   }
   function mtHint(c) {
     const s = mtEngineState(c);
-    if (s.kind === 'nokey') return '還沒填金鑰，目前用免費模式（瀏覽器辨識文字＋Google 翻譯，品質較普通）。Gemini 金鑰可以免費申請；免費額度用完只會改回免費模式，不會收費。';
-    if (s.kind === 'badkey') return '金鑰無效或沒有權限，目前用免費模式。請重新貼上金鑰再按「測試」。';
-    if (s.kind === 'quota') return `Gemini 今天的免費額度都用完了，目前用免費模式；${mtWhen(s.until)} 後自動換回 Gemini。`;
-    return `使用 Gemini（同時用你帳號裡所有免費的模型，例如 ${modelLabel(s.model)}）。每個模型每天都有免費額度，用完會自動換下一個，全部用完就改用免費模式，不會收費。`;
+    const fast = c.mode !== 'accurate';
+    if (s.kind === 'nokey') {
+      return fast ? '還沒填金鑰：目前只用瀏覽器辨識文字＋Google 翻譯。填了 Gemini 金鑰（可以免費申請）會再幫忙修正認錯的字、翻得不順的地方，只送文字、很省次數；免費額度用完也不會收費。'
+        : '還沒填金鑰，目前用免費模式（瀏覽器辨識文字＋Google 翻譯，品質較普通）。Gemini 金鑰可以免費申請；免費額度用完只會改回免費模式，不會收費。';
+    }
+    if (s.kind === 'badkey') return '金鑰無效或沒有權限，目前只用免費模式。請重新貼上金鑰再按「測試」。';
+    if (s.kind === 'quota') return `Gemini 今天的免費額度都用完了，目前只用免費模式；${mtWhen(s.until)} 後自動恢復。`;
+    if (fast) return `快速模式：瀏覽器辨識文字＋Google 翻譯，畫面上很快就有譯文；再用 Gemini（例如 ${modelLabel(s.model)}）依前後文修正，只送文字、很多張合成一次，很省次數。免費額度用完不會收費。`;
+    return `精準模式：Gemini 直接看圖翻譯（同時用你帳號裡所有免費的模型，例如 ${modelLabel(s.model)}），每張圖都會用到次數。額度用完會自動換模型，全部用完就改用免費模式，不會收費。`;
   }
 
   /* ---------- Gemini 連線 ---------- */
 
+  // 進行中的 Gemini 請求：卡住時可以全部中斷重來
+  const mtLiveReqs = new Set();
+  function mtAbortAll() {
+    for (const r of [...mtLiveReqs]) { try { r.abort(); } catch (_) { /* 已結束 */ } }
+  }
+
   function mtRequest(method, url, key, body, timeout) {
     return new Promise((resolve) => {
-      GM_xmlhttpRequest({
+      let req = null;
+      const done = (v) => { mtLiveReqs.delete(req); resolve(v); };
+      req = GM_xmlhttpRequest({
         method,
         url,
         timeout,
         headers: Object.assign({ 'x-goog-api-key': key }, body ? { 'Content-Type': 'application/json' } : {}),
         data: body ? JSON.stringify(body) : undefined,
-        onload: (res) => resolve({ status: res.status, text: res.responseText || '' }),
-        onerror: () => resolve({ status: 0, text: '' }),
-        ontimeout: () => resolve({ status: -1, text: '' }),
+        onload: (res) => done({ status: res.status, text: res.responseText || '' }),
+        onerror: () => done({ status: 0, text: '' }),
+        ontimeout: () => done({ status: -1, text: '' }),
+        onabort: () => done({ status: -1, text: '' }),
       });
+      if (req) mtLiveReqs.add(req);
     });
   }
 
   /**
    * 送出請求；有 onRaw 時用串流（Gemini 邊產生邊回傳），每收到一段就把目前收到的全部文字交給 onRaw。
-   * 不支援串流的管理器會在最後一次給完整回應。
+   * 不支援串流的管理器會在最後一次給完整回應。idle 毫秒內都沒收到資料就中斷（避免一直卡著）。
    */
-  function mtPost(url, key, body, timeout, onRaw) {
+  function mtPost(url, key, body, timeout, onRaw, idle) {
     return new Promise((resolve) => {
       let raw = '';
       let status = 0;
       let streamed = false;
       let finished = false;
       let cut = false;
+      let req = null;
+      let lastData = Date.now();
       const finish = (st) => {
         if (finished) return;
         finished = true;
+        clearInterval(dog);
+        mtLiveReqs.delete(req);
         resolve({ status: st, text: raw, cut });
       };
       const feed = () => { if (onRaw) { try { onRaw(raw); } catch (e) { console.warn('[MAOBOO] 串流處理', e); } } };
-      GM_xmlhttpRequest({
+      const readStream = async (stream) => {
+        streamed = true;
+        const reader = stream.getReader();
+        const dec = new TextDecoder();
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            lastData = Date.now();
+            raw += typeof value === 'string' ? value : dec.decode(value, { stream: true });
+            feed();
+          }
+        } catch (_) { cut = true; } // 連線中斷：用已收到的部分
+        finish(status || 200);
+      };
+      const isStream = (x) => !!x && typeof x.getReader === 'function';
+      const dog = setInterval(() => {
+        if (idle && Date.now() - lastData > idle && req) { cut = true; try { req.abort(); } catch (_) { /* 已結束 */ } finish(status || -1); }
+      }, 2000);
+      req = GM_xmlhttpRequest({
         method: 'POST',
         url,
         timeout,
         headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
         data: JSON.stringify(body),
         responseType: onRaw ? 'stream' : undefined,
-        onloadstart: onRaw ? async (r) => {
-          const stream = r && r.response;
-          if (!stream || typeof stream.getReader !== 'function') return;
-          streamed = true;
-          if (r.status) status = r.status;
-          const reader = stream.getReader();
-          const dec = new TextDecoder();
-          try {
-            for (;;) {
-              const { value, done } = await reader.read();
-              if (done) break;
-              raw += typeof value === 'string' ? value : dec.decode(value, { stream: true });
-              feed();
-            }
-          } catch (_) { cut = true; } // 連線中斷：用已收到的部分
-          finish(status || 200);
+        onloadstart: onRaw ? (r) => {
+          if (r && r.status) status = r.status;
+          if (!streamed && isStream(r && r.response)) readStream(r.response);
         } : undefined,
         onload: (r) => {
           if (r && r.status) status = r.status;
           if (streamed) return;
+          if (isStream(r && r.response)) { readStream(r.response); return; } // 有些管理器到最後才給串流
           raw = (r && (r.responseText || (typeof r.response === 'string' ? r.response : ''))) || '';
           feed();
           finish(status);
         },
         onerror: () => finish(0),
         ontimeout: () => finish(-1),
+        onabort: () => finish(-1),
       });
+      if (req) mtLiveReqs.add(req);
     });
   }
 
@@ -1795,6 +1836,36 @@ button, input, select, output { font: inherit; }
       'Write every translation in Traditional Chinese characters (正體字) only; never use Simplified Chinese characters.',
       'If a block is cut off at the top or bottom edge of an image, still include its visible part.',
       'If an image has no text, return no items for it.',
+    ].join('\n');
+  }
+
+  const MT_FIX_SCHEMA = {
+    type: 'object',
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer', description: 'The line number' },
+            zh: { type: 'string', description: 'Traditional Chinese (Taiwan) translation, or empty when the line is not story text' },
+          },
+          required: ['id', 'zh'],
+        },
+      },
+    },
+    required: ['items'],
+  };
+
+  /** 只送文字的修正：瀏覽器認出來的字可能有錯，請 Gemini 依前後文猜出原文再翻譯 */
+  function mtFixPrompt(sfx) {
+    return [
+      'You are an expert comic translator. You receive numbered lines of comic text (speech bubbles, narration, captions, signs) in reading order. They were read from the comic images by OCR software and may contain recognition errors: missing or extra spaces, wrong or missing letters, words split across lines, stray symbols, or pure noise.',
+      'For every line, work out what the original text most likely says from the surrounding lines and the story, then translate it into natural, fluent Traditional Chinese as used in Taiwan (繁體中文，台灣用語) that fits the speaker and the tone.',
+      'Use full-width punctuation and Taiwanese wording. Keep names and terms consistent with the recent translations. Write Traditional Chinese characters only, never Simplified Chinese.',
+      sfx ? 'Translate sound effects too, as natural Chinese onomatopoeia.' : 'Return an empty zh for lines that are only a sound effect (like BAM, THUD, ドン, 쾅).',
+      'Return an empty zh for lines that are not story text (OCR noise, watermarks, website names, scanlator or translator credits, page numbers) or that cannot be made sense of.',
+      'Answer with JSON only: {"items":[{"id":1,"zh":"..."}]}, exactly one item per input line, using the same id.',
     ].join('\n');
   }
 
@@ -1946,10 +2017,12 @@ button, input, select, output { font: inherit; }
       try { return await createImageBitmap(img); } catch (_) { /* 改用下載 */ }
     }
     let blob = null;
+    const ac = typeof AbortController === 'function' ? new AbortController() : null;
+    const to = ac ? setTimeout(() => ac.abort(), 30000) : 0;
     try {
-      const res = await fetch(url, inline ? {} : { mode: 'cors', credentials: same ? 'include' : 'omit', cache: 'force-cache' });
+      const res = await fetch(url, Object.assign(inline ? {} : { mode: 'cors', credentials: same ? 'include' : 'omit', cache: 'force-cache' }, ac ? { signal: ac.signal } : {}));
       if (res.ok) blob = await res.blob();
-    } catch (_) { /* 圖庫不允許跨站讀取，改用油猴下載 */ }
+    } catch (_) { /* 圖庫不允許跨站讀取，改用油猴下載 */ } finally { clearTimeout(to); }
     if ((!blob || !blob.size) && !inline) blob = await mtGmBlob(url, noRef ? '' : location.href);
     if (!blob) throw new Error('讀不到圖片');
     try { return await createImageBitmap(blob); } catch (_) { throw new Error('圖片格式無法讀取'); }
@@ -2308,6 +2381,14 @@ button, input, select, output { font: inherit; }
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 .t > div { display: block; }
 .t.v { writing-mode: vertical-rl; text-orientation: mixed; }
+.mt-badge { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; gap: 5px; padding: 6px 10px 7px;
+  border-radius: 10px; background: rgba(15, 22, 30, .84); color: #FFFFFF; font-family: ${MT_FONT}; font-size: 12px; font-weight: 600;
+  line-height: 1.2; white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); pointer-events: none; }
+.mt-badge[hidden] { display: none; }
+.mt-badge.is-soft { background: rgba(15, 22, 30, .62); }
+.mt-badge i { display: block; min-width: 110px; height: 3px; overflow: hidden; border-radius: 2px; background: rgba(255, 255, 255, .25); }
+.mt-badge i[hidden] { display: none; }
+.mt-badge b { display: block; width: 0; height: 100%; border-radius: 2px; background: #8DB8FF; transition: width .3s; }
 `;
 
   /**
@@ -2322,7 +2403,11 @@ button, input, select, output { font: inherit; }
     const root = host.attachShadow({ mode: 'open' });
     adoptCss(root, MT_CSS);
     const layer = h('div', { class: 'mt-layer' });
-    root.append(h('div', { class: 'mt-clip' }, layer));
+    const badgeText = h('span');
+    const badgeFill = h('b');
+    const badgeBar = h('i', {}, badgeFill);
+    const badge = h('div', { class: 'mt-badge', hidden: true }, badgeText, badgeBar);
+    root.append(h('div', { class: 'mt-clip' }, layer, badge));
     const anchor = () => (img.parentElement && img.parentElement.tagName === 'PICTURE' ? img.parentElement : img);
     let L = 0;
     let T = 0;
@@ -2384,6 +2469,12 @@ button, input, select, output { font: inherit; }
       layer.style.top = (content.top - box.top) / (sy || 1) + 'px';
       layer.style.width = ncw + 'px';
       layer.style.height = nch + 'px';
+      if (!badge.hidden) {
+        // 進度標籤放在圖片「看得到的部分」的左上角，長條圖捲到中間也看得到
+        const seen = Math.max(0, -content.top) / (sy || 1);
+        const y = (content.top - box.top) / (sy || 1) + Math.max(8, Math.min(seen + 8, nch - 48));
+        badge.style.transform = `translate(${Math.round((content.left - box.left) / k + 8)}px, ${Math.round(y)}px)`;
+      }
       cw = ncw;
       ch = nch;
       if (Math.abs(cw - laidW) > 1 || Math.abs(ch - laidH) > 1) layout();
@@ -2525,6 +2616,17 @@ button, input, select, output { font: inherit; }
       align,
       setBlocks(list) { blocks = list.slice(); laidW = -1; align(); },
       show(v) { shown = !!v; layer.hidden = !shown; },
+      /** 這張圖的進度（text 為空就不顯示）；frac 是 0～1 的進度條，soft 用淡一點的底色 */
+      setBadge(text, frac, soft) {
+        if (!text) { if (!badge.hidden) badge.hidden = true; return; }
+        const was = badge.hidden;
+        badge.hidden = false;
+        badge.classList.toggle('is-soft', !!soft);
+        if (badgeText.textContent !== text) badgeText.textContent = text;
+        badgeBar.hidden = frac == null;
+        if (frac != null) badgeFill.style.width = Math.round(Math.max(0.04, Math.min(1, frac)) * 100) + '%';
+        if (was) align();
+      },
       get shown() { return shown; },
       alive: () => !dead,
       destroy,
@@ -2862,7 +2964,8 @@ button, input, select, output { font: inherit; }
     const out = new Array(texts.length).fill('');
     const run = async (idx) => {
       const joined = idx.map((i) => texts[i].replace(/\n/g, ' ')).join('\n');
-      const res = await mtGtxOnce(joined, sl);
+      // 一下子翻太多次被暫時擋下時，等一下再試一次
+      const res = await mtGtxOnce(joined, sl).catch(() => new Promise((r) => setTimeout(r, 1500)).then(() => mtGtxOnce(joined, sl)));
       const parts = res.split('\n');
       if (parts.length === idx.length) idx.forEach((i, k) => { out[i] = parts[k].trim(); });
       else for (const i of idx) out[i] = (await mtGtxOnce(texts[i], sl)).trim();
@@ -2949,6 +3052,14 @@ button, input, select, output { font: inherit; }
     const told = new Set();
     const tell = (id, msg, opts) => { if (told.has(id)) return; told.add(id); toast(msg, Object.assign({ timeout: 6000 }, opts)); };
     const keyAction = { label: '設定金鑰', primary: true, run: () => openPanel() };
+    // 進度：任何一點進展都記下時間；太久沒有進展就提示「好像卡住了」
+    let lastProgress = Date.now();
+    const bump = () => { lastProgress = Date.now(); };
+    function step(P, text) {
+      if (P) P.step = text;
+      bump();
+      setStatus();
+    }
 
     /* ---------- 漫畫頁（以圖片網址為準）與畫面上顯示它的 <img> ---------- */
     const pages = new Map(); // 網址代號 → 這張圖的翻譯
@@ -2960,7 +3071,7 @@ button, input, select, output { font: inherit; }
       let P = pages.get(k);
       if (!P) {
         P = {
-          key: k, url, els: new Set(), gen: 0, state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '',
+          key: k, url, els: new Set(), gen: 0, state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', step: '', fix: '', lang: '', w0: 0, h0: 0,
           engines: new Set(), shown: true, order: order++, noRef: false, langP: null, started: 0, queued: false, guess: false, userCancel: false,
         };
         pages.set(k, P);
@@ -2996,22 +3107,30 @@ button, input, select, output { font: inherit; }
       for (const img of P.els) {
         const V = views.get(img);
         if (!V) continue;
-        if (!P.blocks.length) { if (V.overlay) { V.overlay.destroy(); V.overlay = null; visibleOv.delete(V); } continue; }
-        if (!V.overlay || !V.overlay.alive()) {
-          V.overlay = mtOverlay(img);
-          ovIO.observe(img);
-          ro.observe(img);
-        }
+        if (!P.blocks.length) { if (V.overlay) V.overlay.setBlocks([]); continue; }
+        ensureOverlay(V);
         V.overlay.setBlocks(P.blocks);
         V.overlay.show(shouldShow(P) && ready(img, P));
       }
+    }
+    function ensureOverlay(V) {
+      if (V.overlay && V.overlay.alive()) return V.overlay;
+      V.overlay = mtOverlay(V.img);
+      ovIO.observe(V.img);
+      ro.observe(V.img);
+      return V.overlay;
+    }
+    function dropOverlay(V) {
+      if (V.overlay) V.overlay.destroy();
+      V.overlay = null;
+      visibleOv.delete(V);
     }
     function showAll() {
       for (const V of views.values()) if (V.overlay) V.overlay.show(shouldShow(V.P) && ready(V.img, V.P));
     }
     function resetPage(P) {
       P.gen++;
-      Object.assign(P, { state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', shown: true, langP: null, queued: false });
+      Object.assign(P, { state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', step: '', fix: '', shown: true, langP: null, queued: false });
       render(P);
       setStatus();
     }
@@ -3106,7 +3225,7 @@ button, input, select, output { font: inherit; }
     }
     // 畫面上的圖直接準備；後面的圖等 Gemini 或免費模式消化得差不多再準備，才不會一次佔用太多記憶體
     const prepQ = prioQueue(3, (p) => p < 1 || (gq.jobs.length < 24 && ocrQ.pending() < 8));
-    const ocrQ = prioQueue(1);
+    const ocrQ = prioQueue(MT_TESS_N);
     ocrQ.after = () => prepQ.kick();
 
     /* ---------- 狀態更新（合併成每一格畫面最多一次） ---------- */
@@ -3116,6 +3235,7 @@ button, input, select, output { font: inherit; }
       statusRaf = requestAnimationFrame(() => {
         statusRaf = 0;
         chip();
+        badges();
         if (hv && hv.img) paintHover();
         if (panel) panel.refresh();
       });
@@ -3131,14 +3251,15 @@ button, input, select, output { font: inherit; }
         if (img.complete && img.naturalWidth && v.w && v.h && Math.abs(img.naturalWidth / img.naturalHeight - v.w / v.h) > 0.02) return null;
       }
       return {
-        m: v.m || '', t: v.t || 0, blk: !!v.blk,
-        blocks: v.b.map((a) => ({ x0: a[0], y0: a[1], x1: a[2], y1: a[3], zh: String(a[4] || ''), vertical: !!a[5], lang: a[6] || '', edge: false })),
+        m: v.m || '', t: v.t || 0, blk: !!v.blk, fx: !!v.fx, w: v.w || 0, h: v.h || 0,
+        blocks: v.b.map((a) => ({ x0: a[0], y0: a[1], x1: a[2], y1: a[3], zh: String(a[4] || ''), vertical: !!a[5], lang: a[6] || '', src: a[7] || '', edge: false })),
       };
     }
-    function cachePut(P, model, w, h, blk) {
+    function cachePut(P, model, w, h, blk, fx) {
       const k = cacheKeyOf(P);
       const r4 = (n) => Math.round(n * 10000) / 10000;
-      store.set(k, { v: 2, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang]) });
+      store.set(k, { v: 2, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0,
+        b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang, b.src || '']) });
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       idx = idx.filter((x) => x !== k);
@@ -3175,13 +3296,20 @@ button, input, select, output { font: inherit; }
       console.warn('[MAOBOO] Gemini 金鑰無法使用：', e.message);
     }
     function onFallback(st) {
-      if (st.kind === 'nokey') tell('nokey', '還沒設定 Gemini 金鑰，先用免費模式翻譯（品質較普通）。', { title: '漫畫翻譯', actions: [keyAction] });
-      else if (st.kind === 'quota') tell('quota:' + new Date().toDateString(), `Gemini 今天的免費額度都用完了，改用免費模式（品質較普通）；${mtWhen(st.until)} 後自動換回 Gemini。`, { title: '漫畫翻譯' });
+      const fast = cfg().mode !== 'accurate';
+      if (st.kind === 'nokey') {
+        tell('nokey', fast ? '還沒設定 Gemini 金鑰：先只用 Google 翻譯（認錯的字不會修正）。' : '還沒設定 Gemini 金鑰，先用免費模式翻譯（品質較普通）。',
+          { title: '漫畫翻譯', actions: [keyAction] });
+      } else if (st.kind === 'quota') {
+        tell('quota:' + new Date().toDateString(), fast
+          ? `Gemini 今天的次數用完了，先只用 Google 翻譯；${mtWhen(st.until)} 後自動恢復修正。`
+          : `Gemini 今天的免費額度都用完了，改用免費模式（品質較普通）；${mtWhen(st.until)} 後自動換回 Gemini。`, { title: '漫畫翻譯' });
+      }
     }
 
     /* ---------- Gemini：多個模型同時翻譯 ---------- */
     // 每個模型有自己的每分鐘、每天額度：同時使用帳號裡所有免費的模型，畫面上的圖先送、小批送，越快看到越好
-    const gq = { jobs: [], active: 0, wake: 0, soon: 0, pumping: false, again: false };
+    const gq = { jobs: [], active: 0, wake: 0, soon: 0, pumping: false, again: false, waitUntil: 0 };
     const MAX_ACTIVE = 6;
     const mstate = {};
     const ms = (m) => mstate[m] || (mstate[m] = { active: 0, times: [], lat: /-lite$/.test(m) ? 1500 : 2800, ok: 0 });
@@ -3270,11 +3398,13 @@ button, input, select, output { font: inherit; }
           }
           const pick = pickModel(hp);
           if (!pick.model) {
+            gq.waitUntil = Date.now() + pick.wait;
             unlater(gq.wake);
             gq.wake = later(() => { gq.wake = 0; pump(); }, Math.min(Math.max(pick.wait, 200) + 50, 90000));
             setStatus();
             break;
           }
+          gq.waitUntil = 0;
           const batch = gq.jobs.splice(0, limit);
           const s = ms(pick.model);
           s.active++;
@@ -3307,18 +3437,21 @@ button, input, select, output { font: inherit; }
     }
 
     const flags = {};
-    /** 呼叫 Gemini；串流時每翻好一個對話框就交給 onItems，馬上顯示 */
-    async function geminiCall(model, input, onItems) {
+    /**
+     * 呼叫 Gemini；串流時每翻好一個就交給 onItems，馬上顯示。
+     * opts.system／opts.schema：看圖翻譯（預設）或只送文字的修正
+     */
+    async function geminiCall(model, input, onItems, opts = {}) {
       const f = flags[model] || (flags[model] = {});
       const body = {
         model,
         input,
-        system_instruction: mtSystemPrompt(cfg().sfx === 'translate')
-          + '\nAnswer with JSON only, in the form {"items":[{"image":1,"box_2d":[ymin,xmin,ymax,xmax],"lang":"en","vertical":false,"zh":"..."}]}.',
+        system_instruction: opts.system || (mtSystemPrompt(cfg().sfx === 'translate')
+          + '\nAnswer with JSON only, in the form {"items":[{"image":1,"box_2d":[ymin,xmin,ymax,xmax],"lang":"en","vertical":false,"zh":"..."}]}.'),
         store: false,
       };
       if (!f.noThink) body.generation_config = { thinking_level: f.think || (/-lite$/.test(model) ? 'minimal' : 'low') };
-      if (!f.noSchema) body.response_format = { type: 'text', mime_type: 'application/json', schema: MT_SCHEMA };
+      if (!f.noSchema) body.response_format = { type: 'text', mime_type: 'application/json', schema: opts.schema || MT_SCHEMA };
       const streaming = !f.noStream;
       if (streaming) body.stream = true;
 
@@ -3346,6 +3479,7 @@ button, input, select, output { font: inherit; }
           const it = ev.interaction;
           if (/start/.test(t) && (ev.step || ev.step_type)) stepType[ev.index] = (ev.step && ev.step.type) || ev.step_type;
           const dl = ev.delta;
+          bump(); // 有收到東西：沒有卡住
           // 只收模型輸出的文字，不收思考過程
           if (dl && typeof dl.text === 'string' && !/thought|reason/i.test(String(dl.type || '')) && !/thought|reason/i.test(String(stepType[ev.index] || ''))) {
             modelText += dl.text;
@@ -3357,8 +3491,8 @@ button, input, select, output { font: inherit; }
           if (ev.error) evErr = ev.error;
         }
       };
-      // 串流：請求內容加上 "stream": true，回應是 SSE（event: step.delta / data: {...}）
-      const res = await mtPost(`${GEMINI_API}/interactions`, key(), body, 180000, streaming ? onRaw : null);
+      // 串流：請求內容加上 "stream": true，回應是 SSE（event: step.delta / data: {...}）；60 秒都沒有資料就中斷重試
+      const res = await mtPost(`${GEMINI_API}/interactions`, key(), body, opts.timeout || 180000, streaming ? onRaw : null, streaming ? 60000 : 0);
       if (streaming && buf.trim()) onRaw(res.text + '\n\n'); // 最後一個事件沒有空白行結尾
       const text = String(res.text || '').trim();
       let json = null;
@@ -3366,12 +3500,12 @@ button, input, select, output { font: inherit; }
       const retry = (e) => {
         // 這個模型不支援某些參數：拿掉後再試
         if (e.kind !== 'bad') return null;
-        if (!f.noStream && /stream|alt=sse|\balt\b/i.test(e.message)) { f.noStream = true; return geminiCall(model, input, onItems); }
+        if (!f.noStream && /stream|alt=sse|\balt\b/i.test(e.message)) { f.noStream = true; return geminiCall(model, input, onItems, opts); }
         if (!f.noThink && /thinking/i.test(e.message)) {
           if (f.think !== 'low' && /-lite$/.test(model)) f.think = 'low'; else f.noThink = true;
-          return geminiCall(model, input, onItems);
+          return geminiCall(model, input, onItems, opts);
         }
-        if (!f.noSchema && /response_format|schema|mime/i.test(e.message)) { f.noSchema = true; return geminiCall(model, input, onItems); }
+        if (!f.noSchema && /response_format|schema|mime/i.test(e.message)) { f.noSchema = true; return geminiCall(model, input, onItems, opts); }
         return null;
       };
       if (json && json.error) {
@@ -3399,7 +3533,7 @@ button, input, select, output { font: inherit; }
       if (sawSse && !modelText && !completed && !f.noStream && !res.cut) {
         // 收到串流卻讀不出任何文字（格式和預期的不同）：這個模型改用一般請求，馬上重送
         f.noStream = true;
-        return geminiCall(model, input, onItems);
+        return geminiCall(model, input, onItems, opts);
       }
       if (sawSse && !completed) throw mtErr('net', 'Gemini 連線中斷'); // 已經顯示的保留，這一片重試
       if (streaming && !sawSse && !json) f.noStream = true; // 看不懂串流的格式：之後改用一般請求
@@ -3497,99 +3631,190 @@ button, input, select, output { font: inherit; }
       return out;
     }
 
-    /* ---------- 免費模式 ---------- */
-    const loc = { worker: null, lang: '', failed: '', failedAt: 0 };
-    async function tessWorker(lang, P) {
+    /* ---------- 免費模式：瀏覽器辨識文字（同時開幾個辨識程式，速度比較快） ---------- */
+    const loc = { workers: [], making: null, failed: '', failedAt: 0, status: '', prog: 0, gen: 0, cancel: null };
+    /** 按「重試」時，所有還在等辨識程式的工作立刻放棄（不然卡住的會一直佔著位子） */
+    function cancelSignal() {
+      if (!loc.cancel) {
+        let rej = null;
+        const p = new Promise((_, r) => { rej = r; });
+        p.catch(() => null);
+        loc.cancel = { p, rej };
+      }
+      return loc.cancel.p;
+    }
+    const orCancel = (p) => Promise.race([p, cancelSignal()]);
+    const TESS_TEXT = {
+      'loading tesseract core': '下載文字辨識程式',
+      'loading language traineddata': '下載文字辨識資料',
+      'initializing tesseract': '準備文字辨識',
+      'initializing api': '準備文字辨識',
+    };
+    function tessLog(wk, m) {
+      if (!m || !m.status) return;
+      bump();
+      if (m.status === 'recognizing text') { wk.prog = Number(m.progress) || 0; return; }
+      const t = TESS_TEXT[String(m.status).replace(/\s*\(.*\)$/, '')];
+      if (t) { loc.status = t; loc.prog = Number(m.progress) || 0; setStatus(); }
+    }
+    function dropWorker(wk) {
+      const i = loc.workers.indexOf(wk);
+      if (i >= 0) loc.workers.splice(i, 1);
+      try { if (wk.w) wk.w.terminate(); } catch (_) { /* 已結束 */ }
+    }
+    /** 全部辨識程式關掉重開（卡住時「重試」用） */
+    function resetWorkers() {
+      loc.workers.slice().forEach(dropWorker);
+      if (loc.cancel) loc.cancel.rej(mtErr('cancel'));
+      Object.assign(loc, { making: null, failed: '', failedAt: 0, status: '', prog: 0, gen: loc.gen + 1, cancel: null });
+    }
+    /** 拿一個閒著的辨識程式（語言不同就切換）；還沒開滿就再開一個 */
+    async function takeWorker(lang, P) {
       if (loc.failed && Date.now() - loc.failedAt < 60000) throw mtErr('local', loc.failed);
-      if (loc.worker && loc.lang === lang) return loc.worker;
       const langs = lang === 'jpn' ? 'jpn_vert' : lang; // 日文漫畫幾乎都是直排
+      const idle = () => loc.workers.find((w) => !w.busy && w.lang === lang) || loc.workers.find((w) => !w.busy);
+      const gen0 = loc.gen;
+      let wk = idle();
       try {
-        P.note = '準備免費模式…';
-        setStatus();
-        if (loc.worker) await loc.worker.reinitialize(langs, 1);
-        else {
-          const T = await mtLoadTesseract();
-          loc.worker = await mtTimeout(T.createWorker(langs, 1, { workerPath: TESS_WORKER, corePath: TESS_CORE }), 120000);
+        if (!wk) {
+          // 一次只開一個：第一個下載好語言資料後，後面開的直接用瀏覽器快取
+          while (loc.making) await orCancel(loc.making.catch(() => null));
+          wk = idle();
         }
-        // 橫排用「零散文字」模式；直排用「直排文字」模式，否則不同對話框的直行會被接在一起
-        await loc.worker.setParameters({ tessedit_pageseg_mode: lang === 'jpn' ? '5' : '11', preserve_interword_spaces: '1', user_defined_dpi: '300' });
-        loc.lang = lang;
-        return loc.worker;
+        if (wk) wk.busy = true;
+        else {
+          if (P) step(P, '準備文字辨識');
+          Object.assign(loc, { status: '準備文字辨識', prog: 0 });
+          const made = { w: null, lang: '', busy: true, prog: 0 };
+          const mk = (async () => {
+            const T = await mtLoadTesseract();
+            made.w = await mtTimeout(T.createWorker(langs, 1, { workerPath: TESS_WORKER, corePath: TESS_CORE, logger: (m) => tessLog(made, m) }), 120000);
+            made.init = langs;
+          })();
+          loc.making = mk;
+          // 按過「重試」之後才載入好的，用不到了：關掉
+          mk.then(() => { if (gen0 !== loc.gen && made.w) { try { made.w.terminate(); } catch (_) { /* 已結束 */ } } }, () => null);
+          try { await orCancel(mk); } finally { if (loc.making === mk) { loc.making = null; loc.status = ''; } }
+          if (gen0 !== loc.gen) { try { made.w.terminate(); } catch (_) { /* 已結束 */ } throw mtErr('cancel'); } // 按過「重試」：這個作廢
+          wk = made;
+          loc.workers.push(wk);
+        }
+        if (wk.lang !== lang) {
+          if (wk.init !== langs) { if (P) step(P, '切換辨識語言'); await orCancel(wk.w.reinitialize(langs, 1)); wk.init = langs; }
+          // 橫排用「零散文字」模式；直排用「直排文字」模式，否則不同對話框的直行會被接在一起
+          await orCancel(wk.w.setParameters({ tessedit_pageseg_mode: lang === 'jpn' ? '5' : '11', preserve_interword_spaces: '1', user_defined_dpi: '300' }));
+          wk.lang = lang;
+        }
+        wk.prog = 0;
+        return wk;
       } catch (e) {
+        if (wk) dropWorker(wk);
+        if ((e && e.kind === 'cancel') || gen0 !== loc.gen) throw mtErr('cancel');
         console.warn('[MAOBOO] 免費模式（Tesseract）載入失敗', e);
-        loc.failed = '免費模式載入失敗（這個網站可能不允許，或網路有問題）';
+        loc.failed = '文字辨識載入失敗（這個網站可能不允許，或網路有問題）';
         loc.failedAt = Date.now();
-        tell('local-failed', '免費模式的文字辨識載入失敗：這個網站可能不允許，或網路有問題。設定 Gemini 金鑰就不需要它。', { title: '漫畫翻譯', actions: [keyAction] });
+        tell('local-failed', '免費模式的文字辨識載入失敗：這個網站可能不允許，或網路有問題。可以按狀態列的「重試」，或在設定改用 Gemini 看圖翻譯。', { title: '漫畫翻譯' });
         throw mtErr('local', loc.failed);
-      } finally {
-        P.note = '';
-        setStatus();
       }
     }
+    function releaseWorker(wk) { wk.busy = false; wk.prog = 0; wk.page = null; }
+    /** 這張圖正在辨識的那一段做了多少（0～1） */
+    const ocrPart = (P) => Math.min(0.99, loc.workers.reduce((n, w) => n + (w.busy && w.page === P ? w.prog : 0), 0));
+
     async function ocrRun(s, lang, plan, P) {
       s.ocr = s.ocr || {};
       if (s.ocr[lang]) return s.ocr[lang]; // 判斷語言時已經辨識過
-      const w = await tessWorker(lang, P);
       const scale = plan.W < 800 ? 1.5 : 1;
       if (!s.clean) {
         const bmp = await createImageBitmap(s.blob);
         try {
           s.clean = mtOcrClean(bmp, plan.W, s.y1 - s.y0, scale, false);
-          // 深色底的白字（旁白框、黑色對話框、有外框的白字）：反過來再辨識一次
+          // 深色底的白字（旁白框、黑色對話框、有外框的白字）：反過來再辨識一次（用原本大小，比較快）
           if (s.clean.darkRatio > 0.06) {
-            const inv = mtOcrClean(bmp, plan.W, s.y1 - s.y0, scale, true);
+            const inv = mtOcrClean(bmp, plan.W, s.y1 - s.y0, 1, true);
             if (inv.kept >= 8) s.cleanInv = inv;
           }
         } finally { if (typeof bmp.close === 'function') bmp.close(); }
       }
-      const { data } = await w.recognize(s.clean, {}, { blocks: true, text: false });
-      let groups = mtOcrGroups(data, lang, scale);
-      if (s.cleanInv) {
-        const r2 = await w.recognize(s.cleanInv, {}, { blocks: true, text: false });
-        groups = mtMergeGroups(groups, mtOcrGroups(r2.data, lang, scale));
-      }
-      s.ocr[lang] = groups;
-      return groups;
+      const wk = await takeWorker(lang, P);
+      wk.page = P;
+      try {
+        const { data } = await orCancel(wk.w.recognize(s.clean, {}, { blocks: true, text: false }));
+        let groups = mtOcrGroups(data, lang, scale);
+        if (s.cleanInv) {
+          const r2 = await orCancel(wk.w.recognize(s.cleanInv, {}, { blocks: true, text: false }));
+          groups = mtMergeGroups(groups, mtOcrGroups(r2.data, lang, 1));
+        }
+        s.ocr[lang] = groups;
+        bump();
+        return groups;
+      } finally { releaseWorker(wk); }
     }
     /**
      * 免費模式要先知道原文語言：設定 > 網站 > 這個網站之前測到的 > 實際試試看。
      * 實際測試時一片一片試（第一片常常是翻譯組的說明或沒有字），測到有把握才記住；
      * 整張圖都測不出來就當作沒有字，不硬翻出亂碼。
      */
+    let hostLang = null; // 正在判斷這部漫畫語言的那一張
+    // 同一個網站可能有不同語言的漫畫（例如 nhentai）：語言記在「網站＋前兩層路徑」（同一部作品）
+    const seriesKey = () => HOST + '/' + location.pathname.split('/').filter(Boolean).slice(0, 2).join('/');
     function imageLang(P, slices, plan) {
       const set = cfg().ocrLang;
       if (set && set !== 'auto') return Promise.resolve(set);
-      const known = mtHostLang() || (store.get('mt.lang', {}) || {})[HOST];
+      const known = mtHostLang() || (store.get('mt.lang', {}) || {})[seriesKey()];
       if (known) return Promise.resolve(known);
-      if (!P.langP) {
-        P.langP = ocrQ(P, async () => {
-          let best = null;
-          let bestScore = 0;
-          for (const s of slices) {
-            for (const lang of ['eng', 'kor', 'jpn']) {
-              let groups = [];
-              try { groups = await ocrRun(s, lang, plan, P); } catch (e) { if (lang === 'eng') throw e; continue; }
-              const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
-              if (score > bestScore) { best = lang; bestScore = score; }
-              if (score >= 16) break; // 這個語言辨識得很順，就不用再試其他語言
-            }
-            if (bestScore >= 16) break;
-          }
-          if (bestScore >= 8) {
-            const map = Object.assign({}, store.get('mt.lang', {}) || {});
-            map[HOST] = best;
-            store.set('mt.lang', map);
-          }
-          return bestScore >= 4 ? best : null;
-        });
+      if (P.langP) return P.langP;
+      // 同一個網站一次只判斷一張，其他張等它的結果（那張沒有字才自己判斷）
+      if (hostLang && hostLang.P !== P) {
+        P.langP = hostLang.p.then((l) => l || detectLang(P, slices, plan), () => detectLang(P, slices, plan));
+        return P.langP;
       }
+      P.langP = detectLang(P, slices, plan);
+      const mine = { P, p: P.langP };
+      hostLang = mine;
+      const clear = () => { if (hostLang === mine) hostLang = null; };
+      P.langP.then((l) => { if (!l) clear(); }, clear);
       return P.langP;
     }
+    function detectLang(P, slices, plan) {
+      return ocrQ(P, async () => {
+        step(P, '判斷原文語言');
+        let best = null;
+        let bestScore = 0;
+        // 先試這個網站上次的語言：猜對的話，這次辨識的結果直接拿來用，不多花時間
+        const last = (store.get('mt.lang', {}) || {})[HOST];
+        const order = [...new Set([last, 'eng', 'kor', 'jpn'].filter((l) => MT_LANG[l]))];
+        for (const s of slices) {
+          for (const lang of order) {
+            let groups = [];
+            try { groups = await ocrRun(s, lang, plan, P); } catch (e) { if (lang === 'eng') throw e; continue; }
+            const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
+            if (score > bestScore) { best = lang; bestScore = score; }
+            if (score >= 16) break; // 這個語言辨識得很順，就不用再試其他語言
+          }
+          if (bestScore >= 16) break;
+        }
+        if (bestScore >= 8) {
+          const map = Object.assign({}, store.get('mt.lang', {}) || {});
+          const sk = seriesKey();
+          delete map[sk];
+          map[sk] = best;
+          map[HOST] = best;
+          const keys = Object.keys(map);
+          if (keys.length > 300) keys.slice(0, keys.length - 300).forEach((k) => { if (k !== HOST) delete map[k]; });
+          store.set('mt.lang', map);
+        }
+        return bestScore >= 4 ? best : null;
+      });
+    }
+    /** 一段圖：辨識文字，再用 Google 翻譯（馬上就能顯示） */
     async function localSlice(P, s, plan, alive, slices) {
       const lang = await imageLang(P, slices, plan);
       if (!lang) return [];
+      P.lang = lang;
       return ocrQ(P, async () => {
         if (!alive()) throw mtErr('cancel');
+        step(P, `辨識文字 ${Math.min(P.done + 1, P.total)}/${P.total} 段`);
         const groups = await ocrRun(s, lang, plan, P);
         if (!groups.length) return [];
         const zh = await mtFreeTranslate(groups.map((g) => g.text), lang);
@@ -3601,6 +3826,7 @@ button, input, select, output { font: inherit; }
           y0: (s.y0 + g.y0) / plan.H,
           y1: (s.y0 + g.y1) / plan.H,
           zh: mtCleanZh(zh[i]),
+          src: g.text,
           lang: MT_LANG[lang],
           vertical: g.vertical,
           edge: (s.y0 > 0 && g.y0 < 6) || (s.y1 < plan.H && g.y1 > sh - 6),
@@ -3609,36 +3835,192 @@ button, input, select, output { font: inherit; }
     }
     /** 使用者剛按過按鈕：Google 翻譯連不上時，趁這時候準備 Chrome 離線翻譯（第一次要下載語言，必須由使用者操作觸發） */
     function warmLocal() {
-      if (!mtGtxFailed || mtEngineState(cfg()).kind === 'gemini') return;
+      if (!mtGtxFailed) return;
       const set = cfg().ocrLang;
       const lang = (set && set !== 'auto' ? set : '') || mtHostLang() || (store.get('mt.lang', {}) || {})[HOST] || 'eng';
       mtChromeTranslator(MT_LANG[lang] || 'en');
     }
 
+    /* ---------- Gemini 修正：只送認出來的文字（不送圖片），很多張圖合成一次，省次數 ---------- */
+    const fq = { jobs: [], active: 0, soon: 0, wake: 0, waitUntil: 0, pumping: false, again: false };
+    const FIX_LINES = 60; // 一次最多幾行
+    const FIX_CHARS = 5000;
+    const fixLines = (P) => P.blocks.filter((b) => b.src);
+    function fixEnqueue(P) {
+      if (!fixLines(P).length || fq.jobs.some((j) => j.P === P)) return;
+      P.fix = 'wait';
+      fq.jobs.push({ P, gen: P.gen, t: Date.now(), tries: 0 });
+      fixSoon(0);
+      setStatus();
+    }
+    function fixSoon(ms2) {
+      if (fq.soon) return;
+      fq.soon = later(() => { fq.soon = 0; fixPump(); }, ms2);
+    }
+    async function fixPump() {
+      if (stopped) return;
+      if (fq.pumping) { fq.again = true; return; }
+      fq.pumping = true;
+      try {
+        await ensureChain();
+        while (!stopped && fq.jobs.length && fq.active < 2) {
+          fq.jobs = fq.jobs.filter((j) => {
+            if (j.gen === j.P.gen) return true;
+            if (j.P.fix === 'wait') j.P.fix = '';
+            return false;
+          });
+          if (!fq.jobs.length) break;
+          const st = mtEngineState(cfg());
+          if (st.kind !== 'gemini') {
+            for (const j of fq.jobs.splice(0)) j.P.fix = '';
+            onFallback(st);
+            setStatus();
+            break;
+          }
+          const pr = new Map();
+          const pOf = (P) => { if (!pr.has(P)) pr.set(P, prioOf(P)); return pr.get(P); };
+          fq.jobs.sort((a, b) => (pOf(a.P) - pOf(b.P)) || (a.P.order - b.P.order));
+          const hp = pOf(fq.jobs[0].P);
+          const lines = fq.jobs.reduce((n, j) => n + fixLines(j.P).length, 0);
+          const oldest = Math.min(...fq.jobs.map((j) => j.t));
+          // 不是畫面上的圖：等後面幾張也認完字，湊成一次送（省每天的次數）
+          if (hp >= 1 && lines < FIX_LINES * 0.6 && (prepQ.pending() || ocrQ.pending()) && Date.now() - oldest < 8000) { fixSoon(700); break; }
+          const pick = pickModel(hp);
+          if (!pick.model) {
+            fq.waitUntil = Date.now() + pick.wait;
+            unlater(fq.wake);
+            fq.wake = later(() => { fq.wake = 0; fixPump(); }, Math.min(Math.max(pick.wait, 200) + 50, 90000));
+            setStatus();
+            break;
+          }
+          fq.waitUntil = 0;
+          const batch = [];
+          let n = 0;
+          let chars = 0;
+          while (fq.jobs.length) {
+            const ls = fixLines(fq.jobs[0].P);
+            const c = ls.reduce((k, b) => k + b.src.length, 0);
+            if (batch.length && (n + ls.length > FIX_LINES || chars + c > FIX_CHARS)) break;
+            batch.push(fq.jobs.shift());
+            n += ls.length;
+            chars += c;
+          }
+          batch.forEach((j) => { j.P.fix = 'busy'; });
+          const s = ms(pick.model);
+          s.active++;
+          s.times.push(Date.now());
+          fq.active++;
+          setStatus();
+          runFix(pick.model, batch).catch((e) => console.error('[MAOBOO] 漫畫翻譯（修正）', e)).finally(() => { fq.active--; s.active--; fixPump(); });
+        }
+      } finally {
+        fq.pumping = false;
+        if (fq.again) { fq.again = false; fixSoon(0); }
+      }
+    }
+    async function runFix(model, batch) {
+      const t0 = Date.now();
+      const lines = [];
+      for (const j of batch) {
+        const ls = fixLines(j.P).slice().sort((a, b) => (a.y0 - b.y0) || (a.x0 - b.x0));
+        for (const b of ls) lines.push({ j, b });
+      }
+      const LN = { en: 'English', ja: 'Japanese', ko: 'Korean' };
+      const langs = [...new Set(lines.map((l) => LN[l.b.lang]).filter(Boolean))];
+      const text = [
+        contextText(),
+        langs.length ? `Original language: ${langs.join(', ')}` : '',
+        'Lines:',
+        ...lines.map((l, i) => `${i + 1}. ${l.b.src.replace(/\s+/g, ' ')}`),
+      ].filter(Boolean).join('\n');
+      const applied = new Set();
+      const touched = new Set();
+      const apply = (got) => {
+        for (const it of got) {
+          const i = Math.round(Number(it && it.id)) - 1;
+          const l = lines[i];
+          if (!l || applied.has(i) || l.j.gen !== l.j.P.gen) continue;
+          applied.add(i);
+          const zh = mtCleanZh(it.zh);
+          if (zh) { l.b.zh = zh; l.b.fixed = true; } else l.j.P.blocks = l.j.P.blocks.filter((b) => b !== l.b); // 不是對話（雜訊、浮水印）：拿掉
+          touched.add(l.j.P);
+        }
+        touched.forEach((P) => render(P));
+        touched.clear();
+        bump();
+        setStatus();
+      };
+      let items;
+      try {
+        items = await geminiCall(model, [{ type: 'text', text }], apply, { system: mtFixPrompt(cfg().sfx === 'translate'), schema: MT_FIX_SCHEMA, timeout: 90000 });
+      } catch (e) { onFixError(model, batch, e); return; }
+      apply(items);
+      remember(items);
+      for (const j of batch) {
+        if (j.gen !== j.P.gen) continue;
+        j.P.fix = 'done';
+        j.P.engines.add('fix');
+        if (j.P.w0) cachePut(j.P, 'free', j.P.w0, j.P.h0, false, true);
+      }
+      const s = ms(model);
+      s.lat = s.lat * 0.6 + (Date.now() - t0) * 0.4;
+      setStatus();
+    }
+    function onFixError(model, batch, e) {
+      const now = Date.now();
+      const h = kh();
+      const back = () => { batch.forEach((j) => { j.P.fix = 'wait'; }); fq.jobs.unshift(...batch); };
+      if (e.kind === 'rate') {
+        mtSetBlock(h, model, now + Math.max(4000, e.delay || 30000), 'rate');
+        setRpm(model, rpmOf(model) * 0.7);
+        back();
+      } else if (e.kind === 'daily') {
+        mtSetBlock(h, model, e.nofree ? now + 3 * 86400000 : mtNextReset(now), e.nofree ? 'nofree' : 'daily');
+        back();
+      } else if (e.kind === 'model') {
+        mtSetBlock(h, model, now + 3 * 86400000, 'missing');
+        back();
+      } else if (e.kind === 'key' || e.kind === 'region') {
+        markBad(h, e);
+        batch.forEach((j) => { j.P.fix = ''; });
+      } else {
+        // 網路、忙碌、讀不懂：再試一次；內容被擋就不再試。都先留著 Google 的翻譯
+        const keep = e.kind === 'blocked' ? [] : batch.filter((j) => ++j.tries <= 1);
+        batch.filter((j) => !keep.includes(j)).forEach((j) => { j.P.fix = 'fail'; });
+        if (keep.length) { keep.forEach((j) => { j.P.fix = 'wait'; }); fq.jobs.unshift(...keep); mtSetBlock(h, model, now + 3000, 'rate'); }
+        console.warn('[MAOBOO] Gemini 修正失敗', model, e.kind, e.message);
+      }
+      setStatus();
+    }
+
     /* ---------- 翻譯一張圖 ---------- */
+    const mode = () => (cfg().mode === 'accurate' ? 'accurate' : 'fast');
     async function translateP(P) {
       if (stopped || P.state === 'busy') return;
       const gen = ++P.gen;
-      Object.assign(P, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '', engines: new Set(), started: Date.now(), langP: null, queued: true });
+      Object.assign(P, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '', step: '排隊中', fix: '', engines: new Set(), started: Date.now(), langP: null, queued: true });
       render(P);
+      bump();
       setStatus();
       const alive = () => !stopped && P.gen === gen;
       try {
         const st0 = mtEngineState(cfg());
+        const fast = mode() === 'fast';
         const hit = cacheGet(P);
-        // 免費模式的結果只在 Gemini 不能用（或 Gemini 拒絕這張圖）時沿用
-        if (hit && (hit.m !== 'free' || hit.blk || st0.kind !== 'gemini')) {
+        // 快速模式：有翻過就用；精準模式：免費模式翻的只在 Gemini 不能用（或 Gemini 拒絕這張圖）時沿用
+        if (hit && (fast || hit.m !== 'free' || hit.blk || st0.kind !== 'gemini')) {
           if (hit.m) P.engines.add(hit.m);
-          P.blocks = hit.blocks;
-          Object.assign(P, { state: 'done', done: 1, total: 1 });
+          if (hit.fx) P.engines.add('fix');
+          Object.assign(P, { blocks: hit.blocks, state: 'done', done: 1, total: 1, step: '', w0: hit.w, h0: hit.h, fix: hit.fx ? 'done' : '' });
           render(P);
+          if (fast && hit.m === 'free' && !hit.fx && st0.kind === 'gemini') fixEnqueue(P); // 上次還沒修正完
           setStatus();
           return;
         }
+        const useImage = !fast && st0.kind === 'gemini';
         const job = await prepQ(P, async () => {
           if (!alive()) return null;
-          P.note = '讀取圖片…';
-          setStatus();
+          step(P, '讀取圖片');
           const img = [...P.els].find((i) => i.isConnected && i.complete && i.naturalWidth && mtAbs(i.currentSrc) === P.url) || null;
           const bmp = await mtCaptureUrl(P.url, img, P.noRef || pg.noRefDirs.has(mtDirOf(P.url)));
           try {
@@ -3646,22 +4028,22 @@ button, input, select, output { font: inherit; }
             if (!P.els.size && pg.minW && bmp.width < pg.minW * 0.5) return { small: true }; // 背景找到的縮圖
             const plan = mtPlanSlices(bmp);
             const slices = [];
-            const lossless = mtEngineState(cfg()).kind !== 'gemini';
-            for (let i = 0; i < plan.cuts.length; i++) slices.push(await mtSliceImage(bmp, plan, i, lossless));
+            for (let i = 0; i < plan.cuts.length; i++) slices.push(await mtSliceImage(bmp, plan, i, !useImage));
             // 要送 Gemini 的話，先轉好編碼（準備完才算準備好，畫面上的圖才會排在最前面送出）
-            if (!lossless) await Promise.all(slices.map(async (sl) => { sl.b64 = await mtBase64(sl.blob); }));
+            if (useImage) await Promise.all(slices.map(async (sl) => { sl.b64 = await mtBase64(sl.blob); }));
             return { plan, slices };
           } finally { if (typeof bmp.close === 'function') bmp.close(); }
         });
         if (!alive()) return;
-        if (!job || job.small) { Object.assign(P, { state: 'skip', note: '' }); setStatus(); return; } // 不是漫畫頁（太小）
+        if (!job || job.small) { Object.assign(P, { state: 'skip', note: '', step: '' }); setStatus(); return; } // 不是漫畫頁（太小）
         const { plan, slices } = job;
+        P.w0 = plan.W0;
+        P.h0 = plan.H0;
         const st = mtEngineState(cfg());
-        const useGemini = st.kind === 'gemini';
-        if (!useGemini) onFallback(st);
+        const useGemini = useImage && st.kind === 'gemini';
+        if (!useGemini && (!fast || st.kind !== 'gemini')) onFallback(st);
         P.total = slices.length;
-        P.note = '';
-        setStatus();
+        step(P, useGemini ? `Gemini 翻譯 0/${P.total} 段` : `辨識文字 0/${P.total} 段`);
         let allGemini = useGemini;
         let refused = false;
         let failed = 0;
@@ -3670,7 +4052,7 @@ button, input, select, output { font: inherit; }
         if (useGemini) {
           await Promise.all(slices.map(async (s) => { if (!s.b64) s.b64 = await mtBase64(s.blob); }));
           if (!alive()) return;
-          jobs = gEnqueueAll(P, slices, (s, got) => { if (alive()) { addBlocks(P, mapGemini(got, s, plan)); setStatus(); } });
+          jobs = gEnqueueAll(P, slices, (s, got) => { if (alive()) { addBlocks(P, mapGemini(got, s, plan)); bump(); setStatus(); } });
         }
         await Promise.all(slices.map(async (s, idx) => {
           let blocks = null;
@@ -3693,24 +4075,34 @@ button, input, select, output { font: inherit; }
             lastErr = e;
             allGemini = false;
           }
+          // 這一段處理完：放掉圖片資料，整話先翻時才不會佔太多記憶體
+          s.blob = null;
+          s.b64 = null;
+          s.clean = null;
+          s.cleanInv = null;
           if (!alive()) return;
           if (blocks && blocks.length) addBlocks(P, blocks);
           P.done++;
-          setStatus();
+          step(P, `${useGemini ? 'Gemini 翻譯' : '辨識文字'} ${P.done}/${P.total} 段`);
         }));
         if (!alive()) return;
         if (failed === slices.length) throw lastErr || new Error('翻譯失敗');
         P.state = 'done';
+        P.step = '';
         P.error = failed ? mtErrText(lastErr) : '';
-        if (!failed) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free') || 'gemini') : 'free', plan.W0, plan.H0, refused);
+        if (!failed) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free') || 'gemini') : 'free', plan.W0, plan.H0, refused, false);
+        // 快速模式：Google 的譯文已經顯示了，再請 Gemini 依前後文修正（只送文字）
+        if (fast && !allGemini && mtEngineState(cfg()).kind === 'gemini') fixEnqueue(P);
       } catch (e) {
         if (!alive() || (e && e.kind === 'cancel')) return;
-        if (P.guess) { Object.assign(P, { state: 'skip', note: '' }); setStatus(); return; } // 猜的下一頁網址不存在
+        if (P.guess) { Object.assign(P, { state: 'skip', note: '', step: '' }); setStatus(); return; } // 猜的下一頁網址不存在
         P.state = 'error';
+        P.step = '';
         P.error = mtErrText(e);
         console.warn('[MAOBOO] 漫畫翻譯失敗', e);
       }
       P.note = '';
+      bump();
       render(P);
       setStatus();
     }
@@ -3858,7 +4250,7 @@ button, input, select, output { font: inherit; }
       let label = '翻譯';
       let title = '把這張圖裡的英文、日文、韓文翻成中文';
       if (st === 'busy') {
-        label = P.note || (P.total ? `翻譯中 ${P.done}/${P.total}` : '排隊中…');
+        label = loc.making && loc.status && /文字辨識/.test(P.step || '') ? `${loc.status}…` : (P.step || '翻譯中');
         title = '翻譯中，按一下取消';
       } else if (st === 'done') {
         label = shouldShow(P) ? '原文' : '譯文';
@@ -4031,6 +4423,7 @@ button, input, select, output { font: inherit; }
       Object.assign(pg, { mo: null, perf: null, scanT: 0, liveT: 0 });
       liveSet(false);
       for (const P of pages.values()) resetPage(P);
+      for (const V of views.values()) dropOverlay(V);
       afterPageChange();
     }
     function pageToggle(force) {
@@ -4117,52 +4510,107 @@ button, input, select, output { font: inherit; }
       el.style.bottom = pick[1] === 'bottom' ? '16px' : 'auto';
     }
     function counts() {
-      let done = 0;
-      let busy = 0;
-      let total = 0;
-      let free = false;
-      let gem = false;
+      const c = { done: 0, busy: 0, total: 0, err: 0, frac: 0, free: false, gem: false, fixWait: 0, fixBusy: 0, fixDone: 0 };
       for (const P of pages.values()) {
         if (!P.queued || P.state === 'skip' || P.state === 'idle') continue;
-        total++;
-        if (P.state === 'done') done++;
-        else if (P.state === 'busy') busy++;
-        for (const m of P.engines) { if (m === 'free') free = true; else gem = true; }
+        c.total++;
+        if (P.state === 'done') { c.done++; c.frac += 1; } else if (P.state === 'error') { c.err++; c.frac += 1; } else if (P.state === 'busy') {
+          c.busy++;
+          c.frac += P.total ? Math.min(1, (P.done + ocrPart(P)) / P.total) * 0.97 : 0.02;
+        }
+        if (P.fix === 'wait') c.fixWait++; else if (P.fix === 'busy') c.fixBusy++; else if (P.fix === 'done') c.fixDone++;
+        for (const m of P.engines) { if (m === 'free') c.free = true; else if (m !== 'fix') c.gem = true; }
       }
-      return { done, busy, total, free, gem };
+      return c;
     }
+    /** 第幾張（照網頁上的順序） */
+    function pageNo(P) {
+      let n = 1;
+      for (const Q of pages.values()) if (Q.queued && Q.state !== 'skip' && Q.order < P.order) n++;
+      return n;
+    }
+    const secs = (t) => Math.max(1, Math.ceil((t - Date.now()) / 1000));
+    /** 現在在做什麼：畫面上的圖優先 */
+    function activity(c) {
+      if (loc.making && loc.status) return loc.status + (loc.prog > 0 && loc.prog < 1 ? ` ${Math.round(loc.prog * 100)}%` : '…');
+      let cur = null;
+      let cp = Infinity;
+      for (const P of pages.values()) {
+        if (P.state !== 'busy') continue;
+        const p = prioOf(P);
+        if (p < cp) { cp = p; cur = P; }
+      }
+      if (cur) {
+        let t = `第 ${pageNo(cur)} 張：${cur.step || '翻譯中'}`;
+        if (gq.waitUntil > Date.now() && /Gemini/.test(cur.step || '')) t += `（等 Gemini ${secs(gq.waitUntil)} 秒）`;
+        return t;
+      }
+      if (c.fixBusy || c.fixWait) {
+        if (fq.waitUntil > Date.now() && !c.fixBusy) return `等 Gemini 修正（${secs(fq.waitUntil)} 秒）`;
+        return `Gemini 修正中 ${c.fixDone}/${c.fixDone + c.fixBusy + c.fixWait} 張`;
+      }
+      return '';
+    }
+    let tick = 0;
     function chip(force) {
       if (!pg.on) {
         if (chipEl) { chipEl.remove(); chipEl = null; }
         unlater(chipHideT);
         chipHideT = 0;
+        clearInterval(tick);
+        tick = 0;
         return;
       }
       const r = ui();
       if (!r) return;
       if (!chipEl) {
+        const fill = h('i');
+        const bar = h('span', { class: 'mt-bar', 'aria-hidden': 'true' }, fill);
         const textEl = h('span', { class: 'mt-chip-text' });
+        const retry = h('button', { type: 'button', class: 'mt-retry', text: '重試', hidden: true, title: '重新開始卡住或失敗的圖', onclick: () => retryAll() });
         const toggle = h('button', { type: 'button', onclick: () => pageShow(pg.hidden) });
         const close = h('button', { type: 'button', class: 'mt-x', 'aria-label': '關閉漫畫翻譯', title: '關閉漫畫翻譯，恢復原文', text: '×', onclick: () => pageStop() });
-        chipEl = h('div', { class: 'mt-chip', role: 'status' }, textEl, toggle, close);
+        chipEl = h('div', { class: 'mt-chip', role: 'status' }, bar, textEl, retry, toggle, close);
         ['pointerdown', 'mousedown', 'click'].forEach((t) => chipEl.addEventListener(t, stopEv));
         r.root.append(chipEl);
-        chipEl.v = { textEl, toggle };
+        chipEl.v = { textEl, toggle, retry, fill };
       }
       const c = counts();
-      const st = mtEngineState(cfg());
-      const engine = c.gem && c.free ? 'Gemini＋免費模式' : c.free ? '免費模式' : c.gem ? 'Gemini' : st.kind === 'gemini' ? 'Gemini' : '免費模式';
-      const what = pg.hidden ? '顯示原文中' : c.busy ? `翻譯中 ${c.done}/${c.total}` : `已翻譯 ${c.done} 張`;
-      chipEl.v.textEl.textContent = `漫畫翻譯　${what} · ${engine}`;
+      const now = Date.now();
+      // 有圖在翻、但超過 30 秒完全沒有進展（也不是在等 Gemini 的每分鐘次數）：好像卡住了
+      const waiting = Math.max(gq.waitUntil, fq.waitUntil) > now;
+      const stuck = c.busy > 0 && !waiting && now - lastProgress > 30000;
+      const fixing = c.fixBusy + c.fixWait;
+      const act = activity(c);
+      let text;
+      if (pg.hidden) text = '顯示原文中';
+      else if (c.busy) text = `${c.done}/${c.total} 張 · ${stuck ? `好像卡住了（${act}）` : act}`;
+      else if (c.err) text = `已翻譯 ${c.done} 張，${c.err} 張失敗`;
+      else if (fixing) text = `已翻譯 ${c.done} 張 · ${act}`;
+      else {
+        const how = c.gem && !c.free ? 'Gemini' : c.fixDone ? 'Google 翻譯＋Gemini 修正' : c.gem ? 'Gemini＋Google 翻譯' : 'Google 翻譯';
+        text = `已翻譯 ${c.done} 張 · ${how}`;
+      }
+      chipEl.v.textEl.textContent = `漫畫翻譯　${text}`;
+      chipEl.title = `漫畫翻譯　${text}`;
       chipEl.v.toggle.textContent = pg.hidden ? '顯示譯文' : '顯示原文';
-      if (c.busy || pg.hidden || force) {
+      chipEl.v.retry.hidden = !(stuck || (c.err && !c.busy));
+      chipEl.classList.toggle('is-stuck', stuck);
+      const pct = c.total ? c.frac / c.total : 0;
+      chipEl.v.fill.style.width = `${Math.round(Math.max(c.busy ? 0.03 : 0, pct) * 1000) / 10}%`;
+      chipEl.classList.toggle('is-done', !c.busy);
+      const active = c.busy || fixing || stuck || c.err;
+      if (active || pg.hidden || force) {
         unlater(chipHideT);
         chipHideT = 0;
         chipEl.classList.add('is-on');
         if (fab) fabSync();
       }
-      if (!c.busy && !pg.hidden && chipEl.classList.contains('is-on')) hideChipLater(4000);
+      if (!active && !pg.hidden && chipEl.classList.contains('is-on')) hideChipLater(4000);
       if (chipEl.classList.contains('is-on')) placeCorner(chipEl, force);
+      // 翻譯中每秒更新一次（倒數、卡住偵測）
+      if (active && !tick) tick = setInterval(() => { if (!stopped) setStatus(); }, 1000);
+      else if (!active && tick) { clearInterval(tick); tick = 0; }
     }
     /** 沒在翻譯時收起狀態列；滑鼠停在上面時先不收 */
     function hideChipLater(ms) {
@@ -4172,7 +4620,8 @@ button, input, select, output { font: inherit; }
         if (!chipEl) return;
         let hover = false;
         try { hover = chipEl.matches(':hover'); } catch (_) { /* 舊瀏覽器 */ }
-        if (hover || pg.hidden || counts().busy) { hideChipLater(1500); return; }
+        const c = counts();
+        if (hover || pg.hidden || c.busy || c.fixBusy || c.fixWait || c.err) { hideChipLater(1500); return; }
         chipEl.classList.remove('is-on');
         fabSync();
       }, ms);
@@ -4194,6 +4643,46 @@ button, input, select, output { font: inherit; }
           chipEl.classList.add('is-on');
         } else if (chipEl.classList.contains('is-on')) hideChipLater(1500);
       });
+    }
+
+    /** 每張正在翻的圖，在圖上標出進度（只標畫面附近的） */
+    function badges() {
+      const vh = innerHeight || 800;
+      for (const V of views.values()) {
+        const P = V.P;
+        const busy = P.state === 'busy';
+        let want = busy || P.fix === 'busy' || P.fix === 'wait';
+        if (want) {
+          const r = V.img.getBoundingClientRect();
+          if (!(r.width || r.height) || r.bottom < -vh || r.top > vh * 2) want = false;
+        }
+        if (!want) {
+          if (V.overlay) { V.overlay.setBadge(null); if (!P.blocks.length) dropOverlay(V); }
+          continue;
+        }
+        const fresh = !V.overlay || !V.overlay.alive();
+        const ov = ensureOverlay(V);
+        if (fresh && P.blocks.length) { ov.setBlocks(P.blocks); ov.show(shouldShow(P) && ready(V.img, P)); }
+        if (busy) {
+          const t = loc.making && loc.status && /文字辨識/.test(P.step || '') ? `${loc.status}${loc.prog > 0 && loc.prog < 1 ? ` ${Math.round(loc.prog * 100)}%` : '…'}` : (P.step || '翻譯中');
+          ov.setBadge(t, P.total ? (P.done + ocrPart(P)) / P.total : 0.03, false);
+        } else ov.setBadge(P.fix === 'busy' ? 'Gemini 修正中…' : '等 Gemini 修正', null, true);
+      }
+    }
+    /** 卡住或失敗時重來：中斷進行中的請求、重開文字辨識，沒翻完的圖重新排隊 */
+    function retryAll() {
+      mtAbortAll();
+      if (loc.making || loc.failed || Date.now() - lastProgress > 30000) resetWorkers();
+      loc.failed = '';
+      for (const P of pages.values()) {
+        if (P.state === 'busy' || P.state === 'error') {
+          resetPage(P);
+          P.userCancel = false;
+          if (pg.on) queueP(P); else translateP(P);
+        } else if (P.fix === 'fail') fixEnqueue(P);
+      }
+      bump();
+      setStatus();
     }
 
     /* ---------- 觸控裝置：「譯」按鈕 ---------- */
@@ -4314,6 +4803,7 @@ button, input, select, output { font: inherit; }
         cancelAnimationFrame(alignRaf);
         cancelAnimationFrame(statusRaf);
         cancelAnimationFrame(nearRaf);
+        clearInterval(tick);
         srcMo.disconnect();
         ovIO.disconnect();
         ro.disconnect();
@@ -4327,7 +4817,7 @@ button, input, select, output { font: inherit; }
         if (hv) hv.el.remove();
         if (chipEl) chipEl.remove();
         if (fab) fab.remove();
-        if (loc.worker) { try { loc.worker.terminate(); } catch (_) { /* 已結束 */ } }
+        resetWorkers();
       },
     };
   }
@@ -4963,13 +5453,14 @@ button, input, select, output { font: inherit; }
       name: '漫畫翻譯',
       site: '漫畫網站',
       desc: '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕；任何網站都可以按 Alt+T 翻譯整頁。',
-      defaults: { apiKey: '', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
+      defaults: { apiKey: '', mode: 'fast', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
       fields: [
         { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k) },
+        { key: 'mode', label: '翻譯方式', type: 'select', options: [['fast', '快速：Google 翻譯＋Gemini 修正（省次數）'], ['accurate', '精準：Gemini 看圖翻譯（很耗次數）']] },
         { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站' },
         { key: 'auto', label: '在這些網站', type: 'select', options: [['off', '按了才翻譯'], ['on', '打開漫畫就自動翻譯整話']] },
         { key: 'sfx', label: '狀聲詞', type: 'select', options: [['skip', '不翻'], ['translate', '也翻']] },
-        { key: 'ocrLang', label: '免費模式的原文', type: 'select', options: [['auto', '自動判斷'], ['eng', '英文'], ['kor', '韓文'], ['jpn', '日文']] },
+        { key: 'ocrLang', label: '漫畫原文（辨識文字用）', type: 'select', options: [['auto', '自動判斷'], ['eng', '英文'], ['kor', '韓文'], ['jpn', '日文']] },
       ],
       hint: (c) => mtHint(c),
       here: (c) => !!mtSiteMatch(c.sites), // 面板上的「本頁」只在漫畫網站顯示（Alt+T 在哪裡都能用）
