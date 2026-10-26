@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.4.0
+// @version      1.4.1
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,7 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.4.1  設定面板：「X 音量記憶」和「X 直連影片音量」合成一個「X 影片音量」，兩條音量在同一張卡片裡（之前設的音量會保留）
  * 1.4.0  漫畫翻譯的免費認字改用 PaddleOCR（PP-OCRv6），英文、日文直排、韓文都認得準很多；
  *        辨識模型第一次下載後存在瀏覽器裡，之後不用再下載；載入失敗時自動改用原本的 Tesseract
  * 1.3.0  漫畫翻譯預設改成快速模式：瀏覽器認字＋Google 翻譯馬上顯示，Gemini 只收文字幫忙修正（很多張合成一次，很省次數）；
@@ -5814,42 +5815,32 @@ button, input, select, output { font: inherit; }
       },
     },
 
-    /* ---------------- X 音量記憶 ---------------- */
+    /* ---------------- X 影片音量（X 上的影片＋直接打開的影片網址） ---------------- */
     {
       id: 'xVolume',
       group: 'video',
-      name: 'X 音量記憶',
+      name: 'X 影片音量',
       site: 'X',
-      desc: '第一次是 1%，之後記住你在 X 播放器上調的音量，下一支影片沿用。',
-      fields: [{ key: 'volume', label: '目前記住的音量', type: 'memory', memKey: 'mem.xVolume', def: 0.01 }],
+      desc: 'X 上的影片會記住你在播放器上調的音量（第一次 1%）；直接打開 video.twimg.com 的影片網址時，用下面設定的音量。',
+      defaults: { direct: 5 },
+      fields: [
+        { key: 'volume', label: 'X 上的影片', type: 'memory', memKey: 'mem.xVolume', def: 0.01 },
+        { key: 'direct', label: '直接打開網址', type: 'percent' },
+      ],
       frames: 'all',
       phase: 'start',
-      match: () => HOST === 'x.com' || HOST === 'twitter.com',
-      start() {
-        const keeper = startVolumeKeeper('mem.xVolume', 0.01);
-        return () => keeper.stop();
-      },
-    },
-
-    /* ---------------- X 直連影片音量 ---------------- */
-    {
-      id: 'twimgVolume',
-      group: 'video',
-      name: 'X 直連影片音量',
-      site: 'video.twimg.com',
-      desc: '直接打開 video.twimg.com 的影片網址時，把音量設成指定大小；只設一次，不會蓋掉你之後調的音量。',
-      defaults: { volume: 5 },
-      fields: [{ key: 'volume', label: '音量', type: 'percent' }],
-      menu: (c) => `X 直連影片音量（${c.volume}%）`,
-      frames: 'all',
-      phase: 'start',
-      match: () => HOST === 'video.twimg.com',
+      match: () => HOST === 'x.com' || HOST === 'twitter.com' || HOST === 'video.twimg.com',
       start(ctx) {
+        if (HOST !== 'video.twimg.com') {
+          const keeper = startVolumeKeeper('mem.xVolume', 0.01);
+          return () => keeper.stop();
+        }
+        // 直接打開影片網址：每支影片只設一次，不會蓋掉之後自己調的音量
         const seen = new WeakSet();
         const apply = (v) => {
           if (!v || v.tagName !== 'VIDEO' || seen.has(v)) return;
           seen.add(v);
-          v.volume = clamp01(Number(ctx.cfg().volume) / 100);
+          v.volume = clamp01(Number(ctx.cfg().direct) / 100);
         };
         const scan = () => { const list = document.getElementsByTagName('video'); for (let i = 0; i < list.length; i++) apply(list[i]); };
         const onMedia = (e) => apply(e.target);
@@ -6727,6 +6718,12 @@ button, input, select, output { font: inherit; }
    * 啟動
    * ==================================================================== */
 
+  // 1.4.1：「X 直連影片音量」併進「X 影片音量」，之前設過的音量搬過來
+  (() => {
+    const old = store.get('cfg.twimgVolume', null);
+    const cur = store.get('cfg.xVolume', {}) || {};
+    if (old && Number.isFinite(Number(old.volume)) && cur.direct === undefined) store.set('cfg.xVolume', Object.assign({}, cur, { direct: Number(old.volume) }));
+  })();
   installUiGuard();
   MODULES.forEach(syncModule);
   for (const m of MODULES) {
