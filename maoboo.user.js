@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.4.6
-// @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
+// @version      1.5.0
+// @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、滑過圖片看大圖、隱藏 FB／Threads 推薦內容、解除複製限制、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
 // @supportURL   https://github.com/MAOBOO2240/userscripts/issues
@@ -41,6 +41,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.0  新功能：簡體轉繁體（簡體網頁自動轉成繁體）、解除複製限制（選單按一下，這個網站就能選取、複製、按右鍵）、
+ *        滑過圖片看大圖（X、Threads、IG）、隱藏推薦內容（FB、Threads 動態裡的贊助、推薦貼文、你可能認識的朋友、為你推薦的帳號收成一行）；
+ *        音量記憶多了 Instagram、Facebook，跟 Threads、X 合成一張「影片音量記憶」卡片；IG、FB 的 Reels 切到其他分頁也會繼續播
  * 1.4.6  「YouTube Shorts 自動下一部」改成「短影片自動下一部」：Instagram、Facebook 的 Reels 也會自動跳下一部；
  *        改成播完才跳：播到最後一格就換下一部，不會先聽到同一部重播的開頭（想提早跳可以調「提早幾秒跳」）
  * 1.4.5  漫畫翻譯：兩個連在一起、中間沒有外框的對話框（8 字形）分開翻，各自橫排，框裡沒認出來的字（像 Y—?）也一起蓋白底；
@@ -203,6 +206,8 @@ button, input, select, output { font: inherit; }
 .mb-row.is-off .mb-fields, .mb-row.is-off .mb-hint { opacity: .5; }
 .mb-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
 .mb-field-wide { flex-basis: 100%; }
+.mb-field-range { flex-basis: 100%; }
+.mb-field-range > span:first-child { min-width: 5.6em; }
 .mb-field input[type=number], .mb-field input[type=text], .mb-field select { height: 30px; padding: 0 8px; border: 1px solid #CDD4DC;
   border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 13px; }
 .mb-field input.is-masked { -webkit-text-security: disc; text-security: disc; }
@@ -242,6 +247,10 @@ button, input, select, output { font: inherit; }
 .mb-link:hover { text-decoration: underline; }
 
 /* ---------- 影片音量條（Threads） ---------- */
+.mb-zoom { position: fixed; top: 0; left: 0; z-index: 3; pointer-events: none; overflow: hidden; border-radius: 8px; background: #111;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .08); }
+.mb-zoom[hidden] { display: none; }
+.mb-zoom img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .mb-vol { position: fixed; top: 0; left: 0; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px 0 9px;
   border-radius: 17px; background: rgba(15, 22, 30, .76); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
   color: #FFFFFF; font-family: var(--font); font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums;
@@ -383,6 +392,359 @@ button, input, select, output { font: inherit; }
   }
 
   /* ======================================================================
+   * 滑過圖片看大圖（X、Threads、Instagram）
+   * ==================================================================== */
+  function startHoverZoom(ctx) {
+    const r = ui();
+    if (!r) return () => {};
+    const view = h('img', { alt: '' });
+    const box = h('div', { class: 'mb-zoom', hidden: true }, view);
+    r.root.append(box);
+    let px = -1;
+    let py = -1;
+    let shift = false;
+    let cur = null; // 滑鼠下的那張圖
+    let seq = 0;
+    let timer = 0;
+    let raf = 0;
+    /** 原尺寸的網址：X 的貼文圖改成 name=orig；Threads、IG 用 srcset 裡最大的那張。小圖、大頭貼不算 */
+    const bigUrl = (img) => {
+      const src = img.currentSrc || img.src;
+      if (!src) return null;
+      let u;
+      try { u = new URL(src, location.href); } catch (_) { return null; }
+      if (u.hostname === 'pbs.twimg.com') {
+        if (!u.pathname.startsWith('/media/')) return null; // 大頭貼、影片縮圖、表情符號
+        u.searchParams.set('name', 'orig');
+        return u.href;
+      }
+      let best = '';
+      let bw = 0;
+      for (const part of (img.srcset || '').split(',')) {
+        const [url, d] = part.trim().split(/\s+/);
+        const w = parseFloat(d) || 0;
+        if (url && w > bw) { bw = w; best = url; }
+      }
+      if (!best || bw < img.getBoundingClientRect().width * 1.3) return null; // 已經是原尺寸
+      try { return new URL(best, location.href).href; } catch (_) { return null; }
+    };
+    /** 滑鼠下面的圖（上面常常蓋著一層透明的區塊） */
+    const imgAt = (x, y) => {
+      let list = [];
+      try { list = document.elementsFromPoint(x, y); } catch (_) { return null; }
+      for (const el of list) {
+        if (el.tagName !== 'IMG') continue;
+        const rc = el.getBoundingClientRect();
+        if (rc.width < 80 || rc.height < 80) return null; // 大頭貼、表情符號
+        if (/大頭貼|profile picture|avatar/i.test(el.alt || '')) return null;
+        return el;
+      }
+      return null;
+    };
+    const hide = () => {
+      seq++;
+      clearTimeout(timer);
+      timer = 0;
+      box.hidden = true;
+      view.removeAttribute('src');
+    };
+    /** 放在滑鼠旁邊空間比較大的那一邊，整張圖都看得到，不放大超過原尺寸 */
+    const place = (nw, nh) => {
+      const W = innerWidth;
+      const H = innerHeight;
+      const m = 10;
+      const right = px < W / 2;
+      let x0 = right ? px + 24 : m;
+      let x1 = right ? W - m : px - 24;
+      if (x1 - x0 < W * 0.35) { x0 = m; x1 = W - m; } // 旁邊太窄：用整個畫面
+      const k = Math.min(1, (x1 - x0) / nw, (H - m * 2) / nh);
+      const w = Math.round(nw * k);
+      const hh = Math.round(nh * k);
+      const left = right ? x0 : x1 - w;
+      const top = Math.min(Math.max(m, py - hh / 2), H - m - hh);
+      Object.assign(box.style, { width: w + 'px', height: hh + 'px', transform: `translate(${Math.round(left)}px, ${Math.round(top)}px)` });
+    };
+    const show = (img, url) => {
+      const token = ++seq;
+      const big = new Image();
+      big.decoding = 'async';
+      big.onload = () => {
+        if (token !== seq || cur !== img) return;
+        if (big.naturalWidth <= img.getBoundingClientRect().width * 1.15) return; // 沒有比較大
+        place(big.naturalWidth, big.naturalHeight);
+        view.src = url;
+        box.hidden = false;
+      };
+      big.src = url;
+    };
+    const update = () => {
+      raf = 0;
+      if (px < 0) return;
+      const img = imgAt(px, py);
+      if (img === cur) { if (!box.hidden && view.naturalWidth) place(view.naturalWidth, view.naturalHeight); return; }
+      hide();
+      cur = img;
+      if (!img || (ctx.cfg().trigger === 'shift' && !shift)) return;
+      const url = bigUrl(img);
+      if (!url) return;
+      timer = setTimeout(() => { timer = 0; if (cur === img) show(img, url); }, 250);
+    };
+    const onMove = (e) => { px = e.clientX; py = e.clientY; if (!raf) raf = requestAnimationFrame(update); };
+    const reset = () => { hide(); cur = null; };
+    const onKey = (e) => {
+      if (e.key !== 'Shift' || ctx.cfg().trigger !== 'shift') { if (e.key === 'Escape') reset(); return; }
+      const down = e.type === 'keydown';
+      if (down === shift) return;
+      shift = down;
+      reset();
+      if (down) update();
+    };
+    const opts = { capture: true, passive: true };
+    const winEvents = [['pointermove', onMove], ['pointerdown', reset], ['wheel', reset], ['scroll', reset], ['blur', reset], ['keydown', onKey], ['keyup', onKey]];
+    winEvents.forEach(([t, fn]) => PAGE.addEventListener(t, fn, opts));
+    return () => {
+      winEvents.forEach(([t, fn]) => PAGE.removeEventListener(t, fn, opts));
+      if (raf) cancelAnimationFrame(raf);
+      hide();
+      box.remove();
+    };
+  }
+
+  /* ======================================================================
+   * 隱藏推薦內容（Facebook、Threads 的動態）
+   * ==================================================================== */
+  const FEED_SPONSOR = ['贊助', '赞助', 'Sponsored', '廣告', '广告', '広告'];
+  const FEED_FOLLOW = ['追蹤', '追踪', '關注', '关注', 'Follow', '加入', 'Join', '加入社團', '加入小组', 'Join group'];
+  /** 推薦區塊裡一排一排的按鈕（加朋友、加入社團、追蹤） */
+  const FEED_ADD = FEED_FOLLOW.concat(['加朋友', '加為朋友', '加好友', 'Add friend', 'Add Friend']);
+  /** Facebook 動態裡推薦區塊的標題 */
+  const FEED_FB_BLOCKS = ['你可能認識的朋友', '你可能認識的人', '你可能认识的朋友', '你可能认识的人', 'People you may know',
+    '為你推薦', '为你推荐', 'Suggested for you', '推薦社團', '推荐小组', 'Suggested groups', '推薦粉絲專頁', '推荐公共主页', 'Suggested Pages'];
+  const FEED_FB_REELS = ['Reel', 'Reels', 'Reels 和短片', 'Reels 和短影片', 'Reels and short videos'];
+  /** Threads 動態裡推薦帳號區塊的標題 */
+  const FEED_TH_BLOCKS = ['為你推薦', '为你推荐', 'Suggested for you', '建議追蹤', '建议关注', 'Suggested accounts'];
+
+  /**
+   * 把動態裡的贊助、推薦收起來：只在一則貼文的外框加上記號、用樣式藏起來，不改網站自己的內容
+   * - Facebook：一則一個 [aria-posinset]。贊助貼文的「贊助」是用 aria-labelledby 指到另一個元素（停下來看一下才出現，有的畫成圖），
+   *   還有「了解詳情」這類廣告按鈕、標題下沒有發文時間；推薦貼文的標題（h4）裡有「追蹤」或「加入」按鈕；你可能認識的朋友、Reels 是 h3 標題
+   * - Threads：一則一個 [data-virtualized]。推薦帳號是「為你推薦」加上一排「追蹤」按鈕；贊助貼文沒有發文時間、標著「贊助」
+   */
+  function startFeedClean(ctx) {
+    const doc = document;
+    const fb = /(^|\.)facebook\.com$/.test(HOST);
+    const TAG = '[隱藏推薦內容]';
+    const FOLD = 'data-maoboo-fold'; // 收起來（值是那一行要顯示的字）
+    const OPEN = 'data-maoboo-open'; // 點開了
+    const RUN = 'data-maoboo-run'; // 緊接在另一則收起來的後面：併進前面那一行
+    const SUM = 'data-maoboo-sum'; // 好幾則連在一起時，第一則顯示的總結
+    const UNIT = fb ? '[aria-posinset]' : '[data-virtualized]';
+    const SPONSOR_SEL = FEED_SPONSOR.map((s) => `a[aria-label="${s}"]`).join(',');
+    const norm = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+    const isIn = (list, t) => list.includes(norm(t));
+    const mode = () => (fb ? ctx.cfg().fb : ctx.cfg().threads) || 'all';
+    // Facebook 只整理首頁的動態（社團、個人頁面裡的貼文不動）
+    const active = () => mode() !== 'off' && (!fb || /^\/(home\.php)?$/.test(PAGE.location.pathname));
+
+    let style = null;
+    const hideAll = () => ctx.cfg().style === 'hide';
+    const css = () => {
+      if (hideAll()) return `[${FOLD}]:not([${OPEN}]) { display: none !important; }`;
+      const color = fb ? 'var(--secondary-text, #65676B)' : 'var(--text-secondary, #999999)';
+      // 網站捲遠了會把貼文整個拿掉（外框變空的）：那一行也不用留
+      return `[${FOLD}]:not([${OPEN}]) > *, [${FOLD}][${RUN}]:not([${OPEN}]), [${FOLD}]:empty { display: none !important; }
+[${FOLD}]:not([${OPEN}])::before { content: attr(${FOLD}); display: block; box-sizing: border-box; padding: 8px 16px;
+  ${fb ? 'margin: 0 0 12px;' : 'border-bottom: 1px solid rgba(128, 128, 128, .2);'} color: ${color}; font: 13px/1.5 ${FONT};
+  text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+[${FOLD}][${SUM}]:not([${OPEN}])::before { content: attr(${SUM}); }
+[${FOLD}]:not([${OPEN}]):hover::before { text-decoration: underline; }`;
+    };
+    const addStyle = () => {
+      if (style && style.isConnected) return;
+      const parent = doc.head || doc.documentElement;
+      if (!parent) return;
+      if (!style) { style = doc.createElement('style'); style.id = 'maoboo-feed-clean'; style.textContent = css(); }
+      parent.appendChild(style);
+    };
+
+    let state = new WeakMap(); // 貼文 → { sig, reason, text, box }
+    const folded = new Set(); // 收起來的外框（關掉時還原）
+    /** 一則貼文的外框：往上找只包著這則貼文的那幾層，取最外面、跟其他貼文並排的那層；只載入一則時先收貼文本身 */
+    const boxOf = (u) => {
+      let el = u;
+      for (let i = 0; i < 12; i++) {
+        const p = el.parentElement;
+        if (!p || p === doc.body || p.childElementCount !== 1) break;
+        el = p;
+      }
+      const p = el.parentElement;
+      if (p) for (const c of p.children) if (c !== el && (c.matches(UNIT) || c.querySelector(UNIT))) return el;
+      return u;
+    };
+    /** 這則是什麼貼文（換成別則時要重新判斷）；空的 = 還沒載入，或捲遠了內容被拿掉 */
+    const sigOf = (u) => {
+      if (!fb) return norm(u.textContent).slice(0, 80);
+      const hd = u.querySelector('h4, h3, h2');
+      return hd ? norm(hd.textContent).slice(0, 80) : '';
+    };
+    const nameOf = (u) => {
+      const a = fb ? u.querySelector('h4 a') : u.querySelector('a[href^="/@"]');
+      return a ? norm(a.textContent).slice(0, 30) : '';
+    };
+    const fbReason = (u, m) => {
+      const labels = [...u.querySelectorAll('[aria-labelledby]')].map((a) => {
+        let t = '';
+        for (const id of a.getAttribute('aria-labelledby').split(/\s+/)) {
+          const e = id ? doc.getElementById(id) : null;
+          if (e) t += e.textContent;
+        }
+        return norm(t);
+      });
+      if (labels.some((t) => isIn(FEED_SPONSOR, t)) || u.querySelector(SPONSOR_SEL)) return '贊助';
+      // 「贊助」字樣常常要停下來看一下才出現，有的還畫成圖：有「了解詳情」這類廣告按鈕、標題下又沒有發文時間的也算
+      if (!labels[0] && u.querySelector('[data-ad-rendering-role^="cta"]')) return '贊助';
+      if (m === 'ads') return '';
+      for (const hd of u.querySelectorAll('h2, h3')) {
+        if (isIn(FEED_FB_BLOCKS, hd.textContent)) return norm(hd.textContent);
+        if (m === 'reels' && isIn(FEED_FB_REELS, hd.textContent)) return 'Reels';
+      }
+      const h4 = u.querySelector('h4');
+      if (h4) {
+        for (const b of h4.querySelectorAll('[role="button"]')) if (isIn(FEED_FOLLOW, b.textContent)) return '推薦貼文';
+        return '';
+      }
+      // 其他推薦區塊（推薦社團、粉絲專頁…）：不是誰發的貼文，有一排「加朋友／加入／追蹤」按鈕
+      const hd = u.querySelector('h3, h2');
+      let n = 0;
+      if (hd) for (const b of u.querySelectorAll('[role="button"]')) if (isIn(FEED_ADD, b.textContent) && ++n >= 2) return norm(hd.textContent).slice(0, 20) || '推薦';
+      return '';
+    };
+    const thReason = (u, m) => {
+      if (u.querySelector('[data-pressable-container]')) {
+        if (u.querySelector('time')) return '';
+        for (const s of u.querySelectorAll('span')) if (!s.childElementCount && isIn(FEED_SPONSOR, s.textContent)) return '贊助';
+        return '';
+      }
+      if (m === 'ads') return '';
+      // 推薦帳號：不是貼文，有一排「追蹤」按鈕（標題通常是「為你推薦」）
+      let follows = 0;
+      for (const b of u.querySelectorAll('[role="button"]')) if (isIn(FEED_FOLLOW, b.textContent)) follows++;
+      if (follows >= 2) return '為你推薦的帳號';
+      if (follows) for (const s of u.querySelectorAll('span')) if (!s.childElementCount && isIn(FEED_TH_BLOCKS, s.textContent)) return '為你推薦的帳號';
+      return '';
+    };
+    const boxReason = new WeakMap(); // 外框 → 收起來的原因（算總結用）
+    const clearBox = (box) => {
+      if (!box) return;
+      [FOLD, OPEN, RUN, SUM].forEach((a) => box.removeAttribute(a));
+      folded.delete(box);
+    };
+    /** 收起來（或從貼文本身換到外框）；已經點開的維持打開 */
+    const setBox = (st, box) => {
+      if (st.box === box) return;
+      const open = !!st.box && st.box.hasAttribute(OPEN);
+      clearBox(st.box);
+      st.box = box;
+      box.setAttribute(FOLD, st.text);
+      if (open) box.setAttribute(OPEN, '');
+      boxReason.set(box, st.reason);
+      folded.add(box);
+    };
+    /** 前一個／後一個有內容的兄弟元素（跳過網站留的空 div、被網站整個拿掉的貼文） */
+    const sib = (el, dir) => {
+      for (let s = el[dir]; s; s = s[dir]) if (s.firstElementChild) return s;
+      return null;
+    };
+    const isFolded = (el) => !!el && el.hasAttribute(FOLD) && !el.hasAttribute(OPEN);
+    /** 一則接一則收起來的：併成一行「已收起 N 則：…」，點一下全部打開 */
+    const runOf = (head) => {
+      const list = [];
+      for (let x = head; isFolded(x); x = sib(x, 'nextElementSibling')) list.push(x);
+      return list;
+    };
+    const tidyRuns = () => {
+      for (const b of folded) {
+        if (!isFolded(b) || !b.firstElementChild) { b.removeAttribute(RUN); b.removeAttribute(SUM); continue; }
+        const tail = isFolded(sib(b, 'previousElementSibling'));
+        b.toggleAttribute(RUN, tail);
+        const list = tail ? [] : runOf(b);
+        if (list.length < 2) { b.removeAttribute(SUM); continue; }
+        const counts = new Map();
+        list.forEach((x) => { const r = boxReason.get(x) || ''; counts.set(r, (counts.get(r) || 0) + 1); });
+        const parts = [...counts].sort((p, q) => q[1] - p[1]).map(([r, k]) => `${r} ${k}`).join('、');
+        const text = `已收起 ${list.length} 則：${parts}（點一下全部打開）`;
+        if (b.getAttribute(SUM) !== text) b.setAttribute(SUM, text);
+      }
+    };
+    const scan = () => {
+      if (!active()) return;
+      addStyle();
+      const m = mode();
+      for (const u of doc.querySelectorAll(UNIT)) {
+        const sig = sigOf(u);
+        if (!sig) continue; // 還沒載入、或捲遠了內容被拿掉：維持原狀
+        let st = state.get(u);
+        if (st && st.sig === sig) {
+          // 收起來的一直收著（Facebook 的「贊助」字樣捲遠了會被拿掉）
+          if (st.reason) { if (st.box === u) setBox(st, boxOf(u)); continue; }
+          if (!fb) continue; // Threads：內容沒變就不用再看；Facebook 的「贊助」字樣可能晚一點才出現
+        } else if (st && st.reason) clearBox(st.box); // 換成別則貼文：重新判斷
+        const reason = fb ? fbReason(u, m) : thReason(u, m);
+        const name = reason === '贊助' || reason === '推薦貼文' ? nameOf(u) : '';
+        st = { sig, reason, text: `已收起「${reason}」${name ? '：' + name : ''}（點一下打開）`, box: null };
+        state.set(u, st);
+        if (reason) setBox(st, boxOf(u));
+      }
+      for (const b of folded) if (!b.isConnected) folded.delete(b);
+      if (!hideAll()) tidyRuns();
+    };
+    // 網站一直在改畫面：最多每 0.1 秒整理一次，在畫面更新之前做完（不會先閃一下）
+    let raf = 0;
+    let timer = 0;
+    let lastRun = 0;
+    const run = () => {
+      raf = 0;
+      lastRun = Date.now();
+      try { scan(); } catch (e) { console.error(TAG, e); }
+    };
+    const schedule = () => {
+      if (raf || timer) return;
+      const wait = 100 - (Date.now() - lastRun);
+      if (wait > 0) timer = setTimeout(() => { timer = 0; raf = requestAnimationFrame(run); }, wait);
+      else raf = requestAnimationFrame(run);
+    };
+    const mo = new MutationObserver(schedule);
+    mo.observe(doc, { childList: true, subtree: true });
+    // 點一下收起來的那一行：打開這則（併在一起的全部打開）
+    const onClick = (e) => {
+      const el = e.target;
+      if (!el || el.nodeType !== 1 || !isFolded(el)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      (el.hasAttribute(SUM) ? runOf(el) : [el]).forEach((x) => x.setAttribute(OPEN, ''));
+    };
+    PAGE.addEventListener('click', onClick, true);
+    schedule();
+    const clearAll = () => { [...folded].forEach(clearBox); state = new WeakMap(); };
+    return {
+      onConfig() {
+        clearAll();
+        if (style) style.textContent = css();
+        schedule();
+      },
+      stop() {
+        mo.disconnect();
+        if (raf) cancelAnimationFrame(raf);
+        clearTimeout(timer);
+        PAGE.removeEventListener('click', onClick, true);
+        clearAll();
+        if (style) style.remove();
+        style = null;
+      },
+    };
+  }
+
+  /* ======================================================================
    * 音量記憶（Threads、X 共用）
    * ==================================================================== */
 
@@ -494,10 +856,10 @@ button, input, select, output { font: inherit; }
   }
 
   /**
-   * Threads 的播放器（Meta VideoPlayer）自己記一份音量，音量條顯示的是它，不是影片實際的音量。
+   * Threads、Instagram 的播放器（Meta VideoPlayer）自己記一份音量，音量條顯示的是它，不是影片實際的音量。
    * 從播放器按鈕的 React 資料找到控制器，用它的 setVolume 同步，音量條就會跟記住的音量一致。
    */
-  const threadsCtrlCache = new WeakMap(); // video → { c, t }
+  const metaCtrlCache = new WeakMap(); // video → { c, t }
   const isPlayerCtrl = (v) => v && typeof v === 'object' && typeof v.setVolume === 'function' && typeof v.getCurrentState === 'function';
   function ctrlFromElement(el) {
     const k = Object.keys(el).find((x) => x.startsWith('__reactFiber$'));
@@ -509,7 +871,7 @@ button, input, select, output { font: inherit; }
     }
     return null;
   }
-  function findThreadsController(video) {
+  function findMetaController(video) {
     const seen = new Set();
     let box = video.parentElement;
     for (let up = 0; box && up < 10; up++, box = box.parentElement) {
@@ -525,11 +887,11 @@ button, input, select, output { font: inherit; }
     }
     return null;
   }
-  function syncThreadsPlayer(video, vol) {
-    let hit = threadsCtrlCache.get(video);
+  function syncMetaPlayer(video, vol) {
+    let hit = metaCtrlCache.get(video);
     if (!hit || (!hit.c && performance.now() - hit.t > 2000)) {
-      hit = { c: findThreadsController(video), t: performance.now() };
-      threadsCtrlCache.set(video, hit);
+      hit = { c: findMetaController(video), t: performance.now() };
+      metaCtrlCache.set(video, hit);
     }
     const c = hit.c;
     if (!c) return;
@@ -2240,8 +2602,8 @@ button, input, select, output { font: inherit; }
     return mtCtx;
   }
   /* ---------- 簡體字轉繁體（翻譯偶爾混進簡體字時） ---------- */
-  // 前 1001 個是只有簡體才用的字（看到才轉換），後面是簡體、繁體都有的字（確定是簡體文字時才一起轉）
-  const MT_S2T_N = 1001;
+  // 前 2001 個是只有簡體才用的字（看到才轉換），後面是簡體、繁體都有的字（確定是簡體文字時才一起轉）
+  const MT_S2T_N = 2001;
   const MT_S2T_S = '国为这个来会时学说们发对长过业经门动进区开产军还现机体与当两实么关从内没将员东头间无见战点场数样问并级应资务气汉总电声设义统处马儿领队计别权话报给变书华议称决张'
     + '导术结师达题条规县风运组听济论强黄选记却职号类传带农边联质阳难历专认车举线团备争众连调转该尔让较际亲单红约亚则属积图装许参观鱼办复远构随势热网语铁断爱纪况证编满'
     + '觉双乐标织项飞节龙响药轻击请离显罗营视护创兴虽费试宝识维宫环乡责严桥仅杀围态杨负层须续状银终钱赛独细冲获习医尽脸弹楼艺陆协镇检写苏验紧劳户优财养陈卫伤绝阶刘刚亿'
@@ -2254,8 +2616,20 @@ button, input, select, output { font: inherit; }
     + '滨饿缠怜撑肾胀谨鹅镑兑贞诞禀饼狭杩赔绵诱顽摊账鸭挣芦睁纱冻轩蛮晕郧鹏栖叠舆斋萧皱蚀钉阐逊铭硕赌饶沪雇掷厌渊氢溃颠铅禅韵婴悦肴凑兹烛歼钧渗窑谐厦谊壶赚谭勋饲裤畴耻'
     + '牺贩竖晒伞鳞龟泼屡瞒厮钩谅霉阙坟宠鳍讼虾涛巩洒枣滞哑焕娱捞婶娇厨嘱禄赠铃虏饥缔蕴鸦锻骤捣茎厢匀灏驼缚垄旷绸缴贱躯颂帜绑仑镖钠刹妆驴铝闸滥酱啸骚窃凿垫钙哟锥懒盏庐'
     + '谕屿酿诈锌沦卤凛蕲蚕搅哗呜搁骇鹃阎浏诵萝颊灿琼骄凄钊驳谏缅锤觅拢胪诀坠贿钓沧耸垒谜缁贬窜葱颖诡腻彦痒赣粤贮绮讽衬烫昼闽钾敛垱寝毙荫涡桩锣缮揽铲尴恳秃搂挠呐驿诧绒'
-    + '鞑谎讳泻苇谣蚁潇粪诛栋谴衮堕鲟浇绞窦鲍钞讶琐滤锰绅窍鸽捡驯骡澜洼鳌镶挟邹俭缆聂芜着后里于种万几党据广价准极划确余占采斗胜范适云愿筑叶厂丰挂虫尸杰涌腊涂咸荐郁夸仆'
-    + '丑朴柜佣蜡帘淀游';
+    + '鞑谎讳泻苇谣蚁潇粪诛栋谴衮堕鲟浇绞窦鲍钞讶琐滤锰绅窍鸽捡驯骡澜洼鳌镶挟邹俭缆聂芜骆呕羡厕窥铮矶晖瞩缀浊缉焖绽谬垦诰驹羁嚣辫蝇汹惭娴韧缕涩缎饷濒鳙筛椭鸪矫诲钥饵桨'
+    + '樱鹧笃侣咏翘鲤拣骞鳄栅绰鸠锯莹脓闺颐钛溅绢烁瘫疮蓦攒铀荤鲨诬镍槛鸳赎玺蝉馈删韬祷鸯烩锭胧坞轧觑绉毡慑鲢聋炖嫔瘾钝姹讥馒鲸镁颌颅讧锜绷赂蚂瓮辇陇辕狈袜栈筝铬糍涝驸'
+    + '椁惮绥荧枭殡尧桦呛赃挚搀袄岚侥箫砾睐秽诣拧砚橱馔锈诫榄惫龚谍沥掳萤鹊炽羟嘘辍涤贻缰崭阄衅堑烃绎驷谟颓谌绊镂涧钨珑鬓枫雏踌笺绾茧阉辙姗屉驮噜陨钵钳蓟镐咙钴栎锄跷骏'
+    + '讹鳖笋馋馏叽闵纨铖跄钗馍鳔饺矾掺莺庑痪娲渎谒锺棂谛涟酝喽锏绗辗癫稣鳃锚跻绛篱诘缭鳇珰鱿赘蹿钡饪轶殴铿鸾钒绚焘疡邺赈玮麽悯袅赁驭泾谥渍啧纶鳝娆昙巅嬷秆鲇迩镀绐缙斓'
+    + '鹘鳅蔼帧俨镏蜕嗳痉亸绯槟躏挛雳撵讪锂铐镰纭蔷讷藓绶骁恻绫镯阖挝匮颍椤绌祎谚鸱柠谙抠蹑谩怂钯虱涣哝肮峦锢绔缪钼怅龋镞谑馅诠迳鲵钮浒哒飕唠狞闩泸谝饬浃亵纣郸铂赡荪辏'
+    + '抡赍疟铢恺诃饴铣邬瓒垩馐贰鹄螨剐鲥谄缨榈骋谶鹦辄娄蜗篓晔绠蛊骈锑鸥埙龛缈崄砺惬滦觐骅莼牍擞鳜谤飚缄兖忏涞诅炀啰谀岘诙阑犊钑鲛龅缢辔纰帻龈鳊闾闫鞯鳗昵桧讫铎缤飙闰'
+    + '钰岖诽虬峣绦鲶铳毂嘤荚隽恸铠髅鲌轼銮脐绱誊荟烬饯颚谆涢琏鹗猬忾橹鲩飒戯獭胫鹉呗缥硚殓锵纫缂罂铵猕鳎疱萦牦缇莅锹瓯绻诳铡栉狰镌睑镉浐镣瘪狲妫鹫氲鹞荞颉箩俪飓偻啮掸'
+    + '骥崂闳桢囱颏辘潍轭嗫鸵涚缱籁啬辂鲈缫暧郓阈镗腼霭痈鹭碛趸缃铰谗妩裆癞馁痫鸩佥诩刍娅馄镫饨辎渌阂玑诤纾幂钤绁鹑撸铆诨铏诿摈阊饽荥咛缒颔砻魇泞诟硷诂腭娈鸨犷镕跸鲫缜'
+    + '诓绺铩谧唢赊缟龇沣锟觊鹪蛰苎癣贲弑觎钺锆撺绀鼋匦锨褴赟奁苋俣锉骊伫怆龌锗龊彨鸬孪谪厩梾欤靓鲑颧骢龃咝崃铨厍鳕怼愠钽飨绲懑桠逦椟谔蹒珐瑷珲馀绋纥骠钏谡褛饩浔垭诌龉'
+    + '镳浉蛎皑铛缌讵馊挞缡谯钍铤谲嵘苁闱殚痨铌廪镭刽桡锶诜诮蛏苌镦掼讴鲧铋瘿颦穑脍筜蒀赝鲎扪叆靥鲂雠镓钚韪铄傩婵缬帼铍氩鹜殒沤馕茏镬霁峥绂钹诒缛荨谠阗瘘赀阋锾馑郏阆鲆'
+    + '鹳镠鲱陉徕骛诋咤鹌眬谖鼍龀阕锷薮殁黾揿凫囵戗鸢诖蘖铯颞蝼铱钪蔺钿侬怄骧傥纡觯钎锲阇鹬眦荦轲顼芗颛箧呓赅讣錾籴赜狯砀闿龆觞诔箓缗缧荩鸮俦钜喾鸷鲷镢鞒谘奂碜荠阒栾饧'
+    + '潴炝铉铙齑辊炜讦镅麸厣旸鹁哕蛴粜虮蛲钖骜粝裢镊鸹魉饫韫锞铔铧缣锃闶聩蚬钋锝髋樯籼栀恽鲋砗篑趱妪锒榉蹰桤蛳邝镟鹆诹闼渑绡舻鲡镒侪膑跹锕阌镔氇溆轸垅颢抟莸彟驽轫铷殇'
+    + '钇缯砜撷阏糁缏缦锊濑埚垯诎栊烨偬呒赉鳟涠铟馓襕谇郦帏懔罴跶铊峤颀鹚鹕锓谵钌哔鲠鳏贽琎笕锇鲖硗峄锖鲀鸺箪鹂绨莴秾虿蝾锸镧鲅鲽鸶阍餍茔渖锩饣鲳呖钫鹇鞲蓥愦硖骓谳柽祢'
+    + '着后里于种万几党据广价准极划确余占采斗胜范适云愿筑叶厂丰挂虫尸杰涌腊涂咸荐郁夸仆丑朴柜佣蜡帘淀游';
   const MT_S2T_T = '國為這個來會時學說們發對長過業經門動進區開產軍還現機體與當兩實麼關從內沒將員東頭間無見戰點場數樣問並級應資務氣漢總電聲設義統處馬兒領隊計別權話報給變書華議稱決張'
     + '導術結師達題條規縣風運組聽濟論強黃選記卻職號類傳帶農邊聯質陽難歷專認車舉線團備爭眾連調轉該爾讓較際親單紅約亞則屬積圖裝許參觀魚辦復遠構隨勢熱網語鐵斷愛紀況證編滿'
     + '覺雙樂標織項飛節龍響藥輕擊請離顯羅營視護創興雖費試寶識維宮環鄉責嚴橋僅殺圍態楊負層須續狀銀終錢賽獨細衝獲習醫盡臉彈樓藝陸協鎮檢寫蘇驗緊勞戶優財養陳衛傷絕階劉剛億'
@@ -2268,11 +2642,23 @@ button, input, select, output { font: inherit; }
     + '濱餓纏憐撐腎脹謹鵝鎊兌貞誕稟餅狹榪賠綿誘頑攤賬鴨掙蘆睜紗凍軒蠻暈鄖鵬棲疊輿齋蕭皺蝕釘闡遜銘碩賭饒滬僱擲厭淵氫潰顛鉛禪韻嬰悅餚湊茲燭殲鈞滲窯諧廈誼壺賺譚勳飼褲疇恥'
     + '犧販豎曬傘鱗龜潑屢瞞廝鉤諒黴闕墳寵鰭訟蝦濤鞏灑棗滯啞煥娛撈嬸嬌廚囑祿贈鈴虜飢締蘊鴉鍛驟搗莖廂勻灝駝縛壟曠綢繳賤軀頌幟綁侖鏢鈉剎妝驢鋁閘濫醬嘯騷竊鑿墊鈣喲錐懶盞廬'
     + '諭嶼釀詐鋅淪滷凜蘄蠶攪譁嗚擱駭鵑閻瀏誦蘿頰燦瓊驕悽釗駁諫緬錘覓攏臚訣墜賄釣滄聳壘謎緇貶竄蔥穎詭膩彥癢贛粵貯綺諷襯燙晝閩鉀斂壋寢斃蔭渦樁鑼繕攬鏟尷懇禿摟撓吶驛詫絨'
-    + '韃謊諱瀉葦謠蟻瀟糞誅棟譴袞墮鱘澆絞竇鮑鈔訝瑣濾錳紳竅鴿撿馴騾瀾窪鰲鑲挾鄒儉纜聶蕪著後裡於種萬幾黨據廣價準極劃確餘佔採鬥勝範適雲願築葉廠豐掛蟲屍傑湧臘塗鹹薦鬱誇僕'
-    + '醜樸櫃傭蠟簾澱遊';
-  const MT_S2T_P = '头发 頭髮,理发 理髮,白发 白髮,金发 金髮,黑发 黑髮,银发 銀髮,长发 長髮,短发 短髮,秀发 秀髮,发型 髮型,发丝 髮絲,日历 日曆,农历 農曆,复杂 複雜,重复 重複,复制 複製,复习 複習,复印 複印,回复 回覆,答复 答覆,反复 反覆,胡须 鬍鬚,胡子 鬍子,冲洗 沖洗,冲澡 沖澡,冲泡 沖泡,收获 收穫,尽管 儘管,尽量 儘量,尽快 儘快,苏醒 甦醒,钟情 鍾情,钟爱 鍾愛,恶心 噁心,抽烟 抽菸,香烟 香菸,词汇 詞彙,标签 標籤,抽签 抽籤,书签 書籤,赞成 贊成,赞同 贊同,赞助 贊助,心脏 心臟,内脏 內臟,肝脏 肝臟,干什么 幹什麼,干嘛 幹嘛,干吗 幹嘛,干掉 幹掉,干活 幹活,能干 能幹,干得 幹得,干净 乾淨,干杯 乾杯,干脆 乾脆,干燥 乾燥,饼干 餅乾,皇后 皇后,王后 王后,太后 太后,公里 公里,千里 千里,万里 萬里,里程 里程,邻里 鄰里,故里 故里,英里 英里,不准 不准,批准 批准,准许 准許,占卜 占卜,风采 風采,神采 神采,文采 文采,北斗 北斗,漏斗 漏斗,斗篷 斗篷,小丑 小丑,佣金 佣金,拜托 拜託,委托 委託,托付 託付,家伙 傢伙,伙伴 夥伴,同伙 同夥,游泳 游泳,上游 上游,下游 下游,划船 划船,一只 一隻,两只 兩隻,几只 幾隻,这只 這隻,那只 那隻,每只 每隻,面条 麵條,拉面 拉麵,泡面 泡麵,关系 關係,没关系 沒關係,联系 聯繫,特征 特徵,象征 象徵,征求 徵求,凶手 兇手,凶狠 兇狠,凶残 兇殘';
+    + '韃謊諱瀉葦謠蟻瀟糞誅棟譴袞墮鱘澆絞竇鮑鈔訝瑣濾錳紳竅鴿撿馴騾瀾窪鰲鑲挾鄒儉纜聶蕪駱嘔羨廁窺錚磯暉矚綴濁緝燜綻謬墾誥駒羈囂辮蠅洶慚嫻韌縷澀緞餉瀕鱅篩橢鴣矯誨鑰餌槳'
+    + '櫻鷓篤侶詠翹鯉揀騫鱷柵綽鳩鋸瑩膿閨頤鈦濺絹爍癱瘡驀攢鈾葷鯊誣鎳檻鴛贖璽蟬饋刪韜禱鴦燴錠朧塢軋覷縐氈懾鰱聾燉嬪癮鈍奼譏饅鯨鎂頜顱訌錡繃賂螞甕輦隴轅狽襪棧箏鉻餈澇駙'
+    + '槨憚綏熒梟殯堯樺嗆贓摯攙襖嵐僥簫礫睞穢詣擰硯櫥饌鏽誡欖憊龔諜瀝擄螢鵲熾羥噓輟滌貽韁嶄鬮釁塹烴繹駟謨頹諶絆鏤澗鎢瓏鬢楓雛躊箋綰繭閹轍姍屜馱嚕隕缽鉗薊鎬嚨鈷櫟鋤蹺駿'
+    + '訛鱉筍饞餾嘰閔紈鋮蹌釵饃鰾餃礬摻鶯廡瘓媧瀆謁鍾欞諦漣醞嘍鐧絎輾癲穌鰓錨躋絳籬詰繚鰉璫魷贅躥鋇飪軼毆鏗鸞釩絢燾瘍鄴賑瑋麼憫嫋賃馭涇諡漬嘖綸鱔嬈曇巔嬤稈鯰邇鍍紿縉斕'
+    + '鶻鰍藹幀儼鎦蛻噯痙嚲緋檳躪攣靂攆訕鋰銬鐮紜薔訥蘚綬驍惻綾鐲闔撾匱潁欏絀禕諺鴟檸諳摳躡謾慫鈀蝨渙噥骯巒錮絝繆鉬悵齲鏃謔餡詮逕鯢鈕滸噠颼嘮獰閂瀘諞飭浹褻紂鄲鉑贍蓀輳'
+    + '掄齎瘧銖愷訶飴銑鄔瓚堊饈貳鵠蟎剮鰣諂纓櫚騁讖鸚輒婁蝸簍曄綆蠱駢銻鷗壎龕緲嶮礪愜灤覲驊蓴牘擻鱖謗飈緘兗懺淶詛煬囉諛峴詼闌犢鈒鮫齙縊轡紕幘齦鯿閭閆韉鰻暱檜訖鐸繽飆閏'
+    + '鈺嶇誹虯嶢絛鯰銃轂嚶莢雋慟鎧髏鮊軾鑾臍鞝謄薈燼餞顎諄溳璉鶚蝟愾櫓鯇颯戱獺脛鵡唄縹礄殮鏘紉緙罌銨獼鰨皰縈犛緹蒞鍬甌綣誑鍘櫛猙鐫瞼鎘滻鐐癟猻媯鷲氳鷂蕎頡籮儷颶僂齧撣'
+    + '驥嶗閎楨囪頦轆濰軛囁鴕涗繾籟嗇輅鱸繅曖鄆閾鏜靦靄癰鷺磧躉緗鉸讒嫵襠癩餒癇鴆僉詡芻婭餛鐙飩輜淥閡璣諍紓冪鈐紲鶉擼鉚諢鉶諉擯閶餑滎嚀縋頷礱魘濘詬礆詁顎孌鴇獷鎔蹕鯽縝'
+    + '誆綹鎩謐嗩賒縞齜灃錕覬鷦蟄苧癬賁弒覦鉞鋯攛紺黿匭鍁襤贇奩莧俁銼驪佇愴齷鍺齪彲鸕孿謫廄棶歟靚鮭顴驄齟噝崍銓厙鱈懟慍鉭饗緄懣椏邐櫝諤蹣琺璦琿餘紼紇驃釧謖褸餼潯埡謅齬'
+    + '鑣溮蠣皚鐺緦詎餿撻縭譙釷鋌譎嶸蓯闈殫癆鈮廩鐳劊橈鍶詵誚蟶萇鐓摜謳鯀鉍癭顰穡膾簹蒕贗鱟捫靉靨魴讎鎵鈈韙鑠儺嬋纈幗鈹氬鶩殞漚饢蘢鑊霽崢紱鈸詒縟蕁讜闐瘻貲鬩鍰饉郟閬鮃'
+    + '鸛鏐鯡陘徠騖詆吒鵪矓諼鼉齔闋鍔藪歿黽撳鳧圇戧鳶詿櫱銫顳螻銥鈧藺鈿儂慪驤儻紆觶釺鍥闍鷸眥犖軻頊薌顓篋囈賅訃鏨糴賾獪碭闓齠觴誄籙緡縲藎鴞儔鉅嚳鷙鯛钁鞽諮奐磣薺闃欒餳'
+    + '瀦熗鉉鐃齏輥煒訐鎇麩厴暘鵓噦蠐糶蟣蟯鍚驁糲褳鑷鴰魎飫韞錁錏鏵縑鋥閌聵蜆釙鍀髖檣秈梔惲鮒硨簣趲嫗鋃櫸躕榿螄鄺鏇鵒諏闥澠綃艫鱺鎰儕臏躚錒閿鑌氌漵軫壠顥摶蕕彠駑軔銣殤'
+    + '釔繒碸擷閼糝緶縵鋝瀨堝墶詘櫳燁傯嘸賚鱒潿銦饊襴誶酈幃懍羆躂鉈嶠頎鷀鶘鋟譫釕嗶鯁鰥贄璡筧鋨鮦磽嶧錆魨鵂簞鸝綈萵穠蠆蠑鍤鑭鮁鰈鷥閽饜塋瀋錈飠鯧嚦鈁鷳韝鎣憒硤騅讞檉禰'
+    + '著後裡於種萬幾黨據廣價準極劃確餘佔採鬥勝範適雲願築葉廠豐掛蟲屍傑湧臘塗鹹薦鬱誇僕醜樸櫃傭蠟簾澱遊';
+  const MT_S2T_P = '头发 頭髮,理发 理髮,白发 白髮,金发 金髮,黑发 黑髮,银发 銀髮,长发 長髮,短发 短髮,秀发 秀髮,发型 髮型,发丝 髮絲,日历 日曆,农历 農曆,复杂 複雜,重复 重複,复制 複製,复习 複習,复印 複印,回复 回覆,答复 答覆,反复 反覆,胡须 鬍鬚,胡子 鬍子,冲洗 沖洗,冲澡 沖澡,冲泡 沖泡,收获 收穫,尽管 儘管,尽量 儘量,尽快 儘快,苏醒 甦醒,钟情 鍾情,钟爱 鍾愛,恶心 噁心,抽烟 抽菸,香烟 香菸,词汇 詞彙,标签 標籤,抽签 抽籤,书签 書籤,赞成 贊成,赞同 贊同,赞助 贊助,心脏 心臟,内脏 內臟,肝脏 肝臟,干什么 幹什麼,干嘛 幹嘛,干吗 幹嘛,干掉 幹掉,干活 幹活,能干 能幹,干得 幹得,干净 乾淨,干杯 乾杯,干脆 乾脆,干燥 乾燥,饼干 餅乾,皇后 皇后,王后 王后,太后 太后,公里 公里,千里 千里,万里 萬里,里程 里程,邻里 鄰里,故里 故里,英里 英里,不准 不准,批准 批准,准许 准許,占卜 占卜,风采 風采,神采 神采,文采 文采,北斗 北斗,漏斗 漏斗,斗篷 斗篷,小丑 小丑,佣金 佣金,拜托 拜託,委托 委託,托付 託付,家伙 傢伙,伙伴 夥伴,同伙 同夥,游泳 游泳,上游 上游,下游 下游,划船 划船,一只 一隻,两只 兩隻,几只 幾隻,这只 這隻,那只 那隻,每只 每隻,面条 麵條,拉面 拉麵,泡面 泡麵,关系 關係,没关系 沒關係,联系 聯繫,特征 特徵,象征 象徵,征求 徵求,凶手 兇手,凶狠 兇狠,凶残 兇殘,制作 製作,制造 製造,制品 製品,印制 印製,绘制 繪製,录制 錄製,定制 訂製,放松 放鬆,轻松 輕鬆,松开 鬆開,松了 鬆了,宽松 寬鬆,舍不得 捨不得,舍弃 捨棄,施舍 施捨,精致 精緻,细致 細緻,别致 別緻,借口 藉口,防御 防禦,抵御 抵禦,注册 註冊,注释 註釋,注销 註銷,咨询 諮詢,周末 週末,周年 週年,周一 週一,周二 週二,周三 週三,周四 週四,周五 週五,周六 週六,周日 週日,一周 一週,上周 上週,下周 下週,本周 本週,每周 每週,手表 手錶,钟表 鐘錶,刮风 颳風';
   let mtS2TData = null;
-  function mtS2T(t) {
+  function mtS2TLoad() {
     if (!mtS2TData) {
       const chars = new Map();
       const uniq = new Set();
@@ -2289,7 +2675,10 @@ button, input, select, output { font: inherit; }
       }
       mtS2TData = { chars, uniq, phrases, maxP };
     }
-    const { chars, uniq, phrases, maxP } = mtS2TData;
+    return mtS2TData;
+  }
+  function mtS2T(t) {
+    const { chars, uniq, phrases, maxP } = mtS2TLoad();
     let simp = false;
     for (const ch of t) if (uniq.has(ch)) { simp = true; break; }
     if (!simp) return t; // 已經是繁體：不動（「皇后」「公里」這類詞才不會被改錯）
@@ -2307,6 +2696,135 @@ button, input, select, output { font: inherit; }
       i++;
     }
     return out;
+  }
+
+  /* ======================================================================
+   * 簡體網頁轉繁體：看出是簡體中文的網頁才轉（日文網頁不轉），之後載入的內容也會轉
+   * ==================================================================== */
+  let s2tOn = false; // 這一頁（最上層）正在轉成繁體：設定面板顯示「本頁」
+  function startPageS2T() {
+    const doc = document;
+    const SKIP = 'script,style,noscript,template,textarea,code,pre,kbd,samp,var';
+    const ATTRS = ['title', 'placeholder', 'alt', 'aria-label'];
+    const KANA = /[\u3040-\u30FF]/;
+    const CJK = /[\u4E00-\u9FFF]/;
+    const { uniq } = mtS2TLoad();
+    const lang = () => (doc.documentElement && doc.documentElement.lang) || '';
+    /** 這段文字是不是簡體中文：有夠多只有簡體才用的字，而且幾乎沒有假名（日文） */
+    const isSimp = (t) => {
+      let cjk = 0;
+      let simp = 0;
+      let kana = 0;
+      for (const ch of t) {
+        const c = ch.charCodeAt(0);
+        if (c >= 0x3040 && c <= 0x30FF) kana++;
+        else if (c >= 0x4E00 && c <= 0x9FFF) { cjk++; if (uniq.has(ch)) simp++; }
+      }
+      return simp >= 3 && simp >= cjk * 0.03 && kana < (cjk + kana) * 0.15; // 日文的假名通常佔三成以上
+    };
+    const origText = new WeakMap(); // 文字節點 → 原文（關掉時還原）
+    const origAttr = new WeakMap(); // 元素 → { 屬性: 原文 }
+    const skip = (el) => !el || !!el.closest(SKIP) || el.isContentEditable;
+    const convText = (n) => {
+      const t = n.nodeValue;
+      if (!t || !CJK.test(t) || KANA.test(t) || skip(n.parentElement)) return;
+      const z = mtS2T(t);
+      if (z === t) return;
+      if (!origText.has(n)) origText.set(n, t);
+      n.nodeValue = z;
+    };
+    const convAttrs = (el) => {
+      for (const a of ATTRS) {
+        const v = el.getAttribute(a);
+        if (!v || !CJK.test(v) || KANA.test(v)) continue;
+        const z = mtS2T(v);
+        if (z === v) continue;
+        let o = origAttr.get(el);
+        if (!o) { o = {}; origAttr.set(el, o); }
+        if (!(a in o)) o[a] = v;
+        el.setAttribute(a, z);
+      }
+    };
+    const walk = (root) => {
+      if (!root) return;
+      if (root.nodeType === 3) { convText(root); return; }
+      if (root.nodeType !== 1) return;
+      if (root.hasAttributes()) convAttrs(root);
+      const tw = doc.createTreeWalker(root, 5); // 元素＋文字
+      for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+        if (n.nodeType === 3) convText(n);
+        else if (n.hasAttributes()) convAttrs(n);
+      }
+    };
+    let conv = null;
+    let active = false;
+    function activate() {
+      if (active) return;
+      active = true;
+      if (IS_TOP) s2tOn = true;
+      if (sniff) sniff.disconnect();
+      walk(doc.documentElement);
+      conv = new MutationObserver((ms) => {
+        for (const m of ms) {
+          if (m.type === 'childList') m.addedNodes.forEach(walk);
+          else if (m.type === 'characterData') convText(m.target);
+          else if (m.type === 'attributes') convAttrs(m.target);
+        }
+      });
+      conv.observe(doc, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRS });
+    }
+    // 還沒確定是簡體網頁：收集新出現的中文字來判斷（網頁一邊載入一邊看，確定了馬上轉，不會先閃一下簡體字）
+    let buf = '';
+    let checkedAt = 0;
+    const check = () => {
+      if (active || /^ja/i.test(lang())) return;
+      if (isSimp(buf)) activate();
+      else if (buf.length > 6000) { buf = buf.slice(-3000); checkedAt = buf.length; }
+    };
+    const feed = (t) => {
+      if (active || !t || !/[\u3040-\u9FFF]/.test(t)) return;
+      buf += t;
+      if (buf.length - checkedAt < (checkedAt ? 200 : 40)) return;
+      checkedAt = buf.length;
+      check();
+    };
+    const sample = (node) => {
+      if (node.nodeType === 3) { if (!skip(node.parentElement)) feed(node.nodeValue); return; }
+      if (node.nodeType !== 1 || node.closest(SKIP)) return;
+      const tw = doc.createTreeWalker(node, 4);
+      let got = 0;
+      for (let n = tw.nextNode(); n && got < 3000; n = tw.nextNode()) {
+        if (n.parentElement && n.parentElement.closest(SKIP)) continue;
+        got += n.nodeValue.length;
+        feed(n.nodeValue);
+        if (active) return;
+      }
+    };
+    const sniff = new MutationObserver((ms) => {
+      for (const m of ms) {
+        if (m.type === 'childList') { for (const n of m.addedNodes) { sample(n); if (active) return; } } else sample(m.target);
+      }
+    });
+    // 從網頁一開始就看（還沒有 <html> 時也可以看整份文件）
+    sniff.observe(doc, { childList: true, subtree: true, characterData: true });
+    if (doc.documentElement) sample(doc.documentElement);
+    // 字比較少的網頁：載入完再判斷一次
+    doc.addEventListener('DOMContentLoaded', check, { once: true });
+    return () => {
+      doc.removeEventListener('DOMContentLoaded', check);
+      sniff.disconnect();
+      if (conv) conv.disconnect();
+      if (IS_TOP) s2tOn = false;
+      // 還原成原文
+      if (!active) return;
+      const tw = doc.createTreeWalker(doc.documentElement, 5);
+      for (let n = tw.currentNode; n; n = tw.nextNode()) {
+        if (n.nodeType === 3) { const o = origText.get(n); if (o !== undefined && n.nodeValue === mtS2T(o)) n.nodeValue = o; } else {
+          const o = origAttr.get(n);
+          if (o) for (const a of Object.keys(o)) n.setAttribute(a, o[a]);
+        }
+      }
+    };
   }
 
   function mtCleanZh(t) {
@@ -6609,7 +7127,7 @@ button, input, select, output { font: inherit; }
       group: 'video',
       name: '短影片自動下一部',
       site: 'YouTube／IG／FB',
-      desc: 'YouTube Shorts、Instagram 和 Facebook 的 Reels 播完馬上跳到下一部，不會先重播開頭。YouTube Shorts 切到其他分頁也會繼續播。',
+      desc: 'YouTube Shorts、Instagram 和 Facebook 的 Reels 播完馬上跳到下一部，不會先重播開頭；切到其他分頁也會繼續播。',
       defaults: { early: 0 },
       fields: [{ key: 'early', label: '提早幾秒跳', type: 'number', min: 0, max: 3, step: 0.1, unit: '秒' }],
       hint: '0 是播完才跳（預設）；想略過片尾的話可以調大一點。',
@@ -6628,23 +7146,20 @@ button, input, select, output { font: inherit; }
         const offs = [];
         const on = (t, type, fn) => { t.addEventListener(type, fn, true); offs.push(() => t.removeEventListener(type, fn, true)); };
 
-        // YouTube：只在 Shorts 頁面偽裝成「分頁一直在前景」（切到其他分頁也繼續播），其他 YouTube 頁面照常
-        let isRealBackground = () => false;
-        if (site === 'yt') {
-          const proto = PAGE.Document.prototype;
-          const rawVis = Object.getOwnPropertyDescriptor(proto, 'visibilityState');
-          const rawHidden = Object.getOwnPropertyDescriptor(proto, 'hidden');
-          isRealBackground = () => (rawVis ? rawVis.get.call(doc) === 'hidden' : false);
-          try {
-            if (rawVis) Object.defineProperty(doc, 'visibilityState', { configurable: true, get: toPage(function () { return onShorts() ? 'visible' : rawVis.get.call(doc); }) });
-            if (rawHidden) Object.defineProperty(doc, 'hidden', { configurable: true, get: toPage(function () { return onShorts() ? false : rawHidden.get.call(doc); }) });
-          } catch (e) { console.error(TAG, '偽裝 Visibility 失敗', e); }
-          const stopIfShorts = (e) => { if (onShorts()) e.stopImmediatePropagation(); };
-          on(PAGE, 'visibilitychange', stopIfShorts);
-          on(doc, 'visibilitychange', stopIfShorts);
-          on(PAGE, 'blur', stopIfShorts);
-          offs.push(() => { try { delete doc.visibilityState; delete doc.hidden; } catch (_) { /* 還原失敗不影響播放 */ } });
-        }
+        // 只在短影片頁面偽裝成「分頁一直在前景」（切到其他分頁也繼續播），其他頁面照常
+        const proto = PAGE.Document.prototype;
+        const rawVis = Object.getOwnPropertyDescriptor(proto, 'visibilityState');
+        const rawHidden = Object.getOwnPropertyDescriptor(proto, 'hidden');
+        const isRealBackground = () => (rawVis ? rawVis.get.call(doc) === 'hidden' : false);
+        try {
+          if (rawVis) Object.defineProperty(doc, 'visibilityState', { configurable: true, get: toPage(function () { return onShorts() ? 'visible' : rawVis.get.call(doc); }) });
+          if (rawHidden) Object.defineProperty(doc, 'hidden', { configurable: true, get: toPage(function () { return onShorts() ? false : rawHidden.get.call(doc); }) });
+        } catch (e) { console.error(TAG, '偽裝 Visibility 失敗', e); }
+        const stopIfShorts = (e) => { if (onShorts()) e.stopImmediatePropagation(); };
+        on(PAGE, 'visibilitychange', stopIfShorts);
+        on(doc, 'visibilitychange', stopIfShorts);
+        on(PAGE, 'blur', stopIfShorts);
+        offs.push(() => { try { delete doc.visibilityState; delete doc.hidden; } catch (_) { /* 還原失敗不影響播放 */ } });
 
         const timers = new Set();
         const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
@@ -6668,12 +7183,28 @@ button, input, select, output { font: inherit; }
           const re = site === 'ig' ? /下一段|下一個|next/i : /下一張|下一個|next/i;
           return [...doc.querySelectorAll('[role="button"][aria-label], button[aria-label]')].find((b) => re.test(b.getAttribute('aria-label')) && b.getBoundingClientRect().width > 0) || null;
         };
+        /**
+         * 背景分頁裡網站「看不到」捲動（畫面不會更新）：直接捲一格，自己播下一部已經載好的影片。
+         * 回到這個分頁時，網站會照目前的位置接著播
+         */
+        const direct = (v) => {
+          const sc = scroller(v);
+          if (!sc) return false;
+          sc.scrollTop += sc.clientHeight;
+          const nx = [...doc.getElementsByTagName('video')].find((x) => x !== v && isMain(x));
+          if (!nx || !(nx.currentSrc || nx.src) || nx.readyState < 2) return false;
+          if (!v.paused) v.pause();
+          if (nx.ended) nx.currentTime = 0;
+          nx.play().catch(() => {});
+          return true;
+        };
         /** 換到下一部的方法（一個沒用再換下一個）：YouTube 先按「下一部」按鈕；IG、FB 先往下捲一格（不管介面是什麼語言都可以） */
         const ways = (v) => {
           const click = () => { const b = nextButton(); if (!b) return false; b.click(); return true; };
           const scroll = () => { const sc = scroller(v); if (!sc) return false; sc.scrollBy({ top: sc.clientHeight, behavior: 'smooth' }); return true; };
           const key = () => { doc.dispatchEvent(new PAGE.KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true })); return true; };
-          return site === 'yt' ? [click, scroll, key] : [scroll, click, key];
+          if (site === 'yt') return [click, scroll, key];
+          return isRealBackground() ? [() => direct(v), click] : [scroll, click, key];
         };
         let busy = null; // 正在換下一部：{ v }
         /** 換到下一部。hold：先暫停這一部（會自己重播的影片，暫停了就不會先聽到開頭） */
@@ -6685,21 +7216,24 @@ button, input, select, output { font: inherit; }
           busy = { v };
           const list = ways(v);
           let i = 0;
-          const moved = () => PAGE.location.href !== url || v.currentSrc !== src || !v.isConnected;
-          const tryOne = () => { while (i < list.length) if (list[i++]()) return true; return false; };
+          let since = 0;
+          // 換成功：網址換了、影片換了，或另一部影片已經在畫面中間播放
+          const moved = () => PAGE.location.href !== url || v.currentSrc !== src || !v.isConnected
+            || [...doc.getElementsByTagName('video')].some((x) => x !== v && !x.paused && isMain(x));
+          const tryOne = () => { while (i < list.length) if (list[i++]()) { since = Date.now(); return true; } return false; };
+          const giveUp = () => {
+            // 換不了（例如已經是最後一部）：照原本的樣子從頭播
+            busy = null;
+            console.warn(TAG, '換不到下一部，從頭播放');
+            if (v.paused && v.isConnected) { if (v.ended) v.currentTime = 0; v.play().catch(() => {}); }
+          };
+          // 一次只用一種方法：等它 1.5 秒（捲動動畫比較慢），換成功就停，免得一次跳過兩部
           const check = () => {
             if (moved()) { busy = null; return; }
-            if (!tryOne()) {
-              // 換不了（例如已經是最後一部）：照原本的樣子從頭播
-              busy = null;
-              console.warn(TAG, '換不到下一部，從頭播放');
-              if (v.paused && v.isConnected) { if (v.ended) v.currentTime = 0; v.play().catch(() => {}); }
-              return;
-            }
-            later(check, 900);
+            if (Date.now() - since < 1500) { later(check, 200); return; }
+            if (tryOne()) later(check, 200); else giveUp();
           };
-          tryOne();
-          later(check, 900);
+          if (tryOne()) later(check, 200); else giveUp();
         }
         // 快播完時：算好剩下的時間準時處理（timeupdate 大約 0.25 秒才一次，不夠準）
         let endTimer = 0;
@@ -6742,10 +7276,10 @@ button, input, select, output { font: inherit; }
           e.stopImmediatePropagation(); // 不讓網站把這一部從頭再播一次
           goNext(v, false);
         });
-        // YouTube：切到背景時被暫停的話，自動繼續播
+        // 切到背景時被網站暫停的話，自動繼續播
         on(PAGE, 'pause', (e) => {
           const v = e.target;
-          if (site !== 'yt' || !isVideo(v) || !onShorts() || busy) return;
+          if (!isVideo(v) || !onShorts() || busy || !isMain(v)) return;
           if (isRealBackground() && v.currentTime < v.duration - 0.6) v.play().catch(() => {});
         });
         return () => {
@@ -6755,25 +7289,70 @@ button, input, select, output { font: inherit; }
       },
     },
 
-    /* ---------------- Threads 音量記憶 ---------------- */
+    /* ---------------- 影片音量記憶（Threads、X、Instagram、Facebook） ---------------- */
     {
-      id: 'threadsVolume',
+      id: 'videoVolume',
       group: 'video',
-      name: 'Threads 音量記憶',
-      site: 'Threads',
-      desc: '把音量記住並套用到之後每一支影片（Threads 原本每支都是 100%），Threads 自己的音量條也會同步。在 Threads 音量條或這裡調都可以。',
-      defaults: { bar: 'hide' },
+      name: '影片音量記憶',
+      site: 'Threads／X／IG／FB',
+      desc: '每個網站各記住一個音量，之後每一支影片都用這個音量，不會突然 100%。在網站自己的音量條上調、或在這裡調都可以；直接打開 X 的影片網址（video.twimg.com）時用下面設定的音量。',
+      defaults: { direct: 5, bar: 'hide' },
       fields: [
-        { key: 'volume', label: '目前記住的音量', type: 'memory', memKey: 'mem.threadsVolume', def: 0.1 },
-        { key: 'bar', label: '影片上的音量條', type: 'select', options: [['hide', '不顯示'], ['show', '顯示']] },
+        { key: 'threads', label: 'Threads', type: 'memory', memKey: 'mem.threadsVolume', def: 0.1 },
+        { key: 'x', label: 'X', type: 'memory', memKey: 'mem.xVolume', def: 0.01 },
+        { key: 'ig', label: 'Instagram', type: 'memory', memKey: 'mem.igVolume', def: 0.2 },
+        { key: 'fb', label: 'Facebook', type: 'memory', memKey: 'mem.fbVolume', def: 0.2 },
+        { key: 'direct', label: 'X 影片網址', type: 'percent' },
+        { key: 'bar', label: 'Threads 影片上的音量條', type: 'select', options: [['hide', '不顯示'], ['show', '顯示']] },
       ],
       frames: 'all',
       phase: 'start',
-      match: () => /(^|\.)threads\.(com|net)$/.test(HOST),
+      match: () => /(^|\.)threads\.(com|net)$/.test(HOST) || HOST === 'x.com' || HOST === 'twitter.com' || HOST === 'video.twimg.com'
+        || /(^|\.)instagram\.com$/.test(HOST) || /(^|\.)facebook\.com$/.test(HOST),
       start(ctx) {
-        const keeper = startVolumeKeeper('mem.threadsVolume', 0.1, syncThreadsPlayer);
+        if (HOST === 'video.twimg.com') {
+          // 直接打開影片網址：每支影片只設一次，不會蓋掉之後自己調的音量
+          const seen = new WeakSet();
+          const apply = (v) => {
+            if (!v || v.tagName !== 'VIDEO' || seen.has(v)) return;
+            seen.add(v);
+            v.volume = clamp01(Number(ctx.cfg().direct) / 100);
+          };
+          const scan = () => { const list = document.getElementsByTagName('video'); for (let i = 0; i < list.length; i++) apply(list[i]); };
+          const onMedia = (e) => apply(e.target);
+          document.addEventListener('loadstart', onMedia, true);
+          document.addEventListener('loadedmetadata', onMedia, true);
+          const mo = new MutationObserver(scan);
+          mo.observe(document, { childList: true, subtree: true });
+          scan();
+          return () => {
+            mo.disconnect();
+            document.removeEventListener('loadstart', onMedia, true);
+            document.removeEventListener('loadedmetadata', onMedia, true);
+          };
+        }
+        if (HOST === 'x.com' || HOST === 'twitter.com') {
+          const keeper = startVolumeKeeper('mem.xVolume', 0.01);
+          return () => keeper.stop();
+        }
+        if (/instagram\.com$/.test(HOST)) {
+          // 第一次用：沿用 Instagram 自己記的音量
+          if (store.get('mem.igVolume', null) === null) {
+            try {
+              const own = JSON.parse(localStorage.getItem('ig_volume_settings') || 'null');
+              if (own && Number.isFinite(Number(own.volume)) && Number(own.volume) > 0) store.set('mem.igVolume', clamp01(Number(own.volume)));
+            } catch (_) { /* 讀不到就用預設 */ }
+          }
+          const keeper = startVolumeKeeper('mem.igVolume', 0.2, syncMetaPlayer);
+          return () => keeper.stop();
+        }
+        if (/facebook\.com$/.test(HOST)) {
+          const keeper = startVolumeKeeper('mem.fbVolume', 0.2, syncMetaPlayer);
+          return () => keeper.stop();
+        }
+        // Threads：自己的音量條要不要出現由設定決定，切換時立即生效
+        const keeper = startVolumeKeeper('mem.threadsVolume', 0.1, syncMetaPlayer);
         let overlay = null;
-        // 音量條要不要出現由設定決定，切換時立即生效
         const sync = () => {
           if (document.readyState === 'loading') return;
           const want = ctx.cfg().bar === 'show';
@@ -6797,48 +7376,6 @@ button, input, select, output { font: inherit; }
             if (overlay) overlay.destroy();
             keeper.stop();
           },
-        };
-      },
-    },
-
-    /* ---------------- X 影片音量（X 上的影片＋直接打開的影片網址） ---------------- */
-    {
-      id: 'xVolume',
-      group: 'video',
-      name: 'X 影片音量',
-      site: 'X',
-      desc: 'X 上的影片會記住你在播放器上調的音量（第一次 1%）；直接打開 video.twimg.com 的影片網址時，用下面設定的音量。',
-      defaults: { direct: 5 },
-      fields: [
-        { key: 'volume', label: 'X 上的影片', type: 'memory', memKey: 'mem.xVolume', def: 0.01 },
-        { key: 'direct', label: '直接打開網址', type: 'percent' },
-      ],
-      frames: 'all',
-      phase: 'start',
-      match: () => HOST === 'x.com' || HOST === 'twitter.com' || HOST === 'video.twimg.com',
-      start(ctx) {
-        if (HOST !== 'video.twimg.com') {
-          const keeper = startVolumeKeeper('mem.xVolume', 0.01);
-          return () => keeper.stop();
-        }
-        // 直接打開影片網址：每支影片只設一次，不會蓋掉之後自己調的音量
-        const seen = new WeakSet();
-        const apply = (v) => {
-          if (!v || v.tagName !== 'VIDEO' || seen.has(v)) return;
-          seen.add(v);
-          v.volume = clamp01(Number(ctx.cfg().direct) / 100);
-        };
-        const scan = () => { const list = document.getElementsByTagName('video'); for (let i = 0; i < list.length; i++) apply(list[i]); };
-        const onMedia = (e) => apply(e.target);
-        document.addEventListener('loadstart', onMedia, true);
-        document.addEventListener('loadedmetadata', onMedia, true);
-        const mo = new MutationObserver(scan);
-        mo.observe(document, { childList: true, subtree: true });
-        scan();
-        return () => {
-          mo.disconnect();
-          document.removeEventListener('loadstart', onMedia, true);
-          document.removeEventListener('loadedmetadata', onMedia, true);
         };
       },
     },
@@ -7181,6 +7718,141 @@ button, input, select, output { font: inherit; }
       },
     },
 
+    /* ---------------- 簡體轉繁體 ---------------- */
+    {
+      id: 's2t',
+      group: 'translate',
+      name: '簡體轉繁體',
+      site: '簡體網頁',
+      desc: '打開簡體中文的網頁（小說、B 站、知乎等）時，自動把文字轉成繁體，之後載入的內容也會轉。輸入框裡的字、程式碼不會動，日文網頁也不會被誤轉。',
+      defaults: { exclude: [] },
+      fields: [{ key: 'exclude', label: '不轉換的網站', type: 'list', placeholder: '例如 example.com' }],
+      frames: 'all',
+      phase: 'start',
+      match: () => /^https?:$/.test(location.protocol),
+      here: () => s2tOn,
+      start(ctx) {
+        const ex = (ctx.cfg().exclude || []).some((e) => { const d = String(e).trim().toLowerCase(); return d && (HOST === d || HOST.endsWith('.' + d)); });
+        if (ex) return undefined;
+        return startPageS2T();
+      },
+    },
+
+    /* ---------------- 滑過圖片看大圖 ---------------- */
+    {
+      id: 'hoverZoom',
+      group: 'social',
+      name: '滑過圖片看大圖',
+      site: 'X／Threads／IG',
+      desc: '滑鼠停在貼文的圖片上，旁邊會跳出原尺寸的大圖，不用點進去；移開滑鼠、捲動或點一下就收起來。大頭貼、表情符號這類小圖不會跳出來。',
+      defaults: { trigger: 'hover' },
+      fields: [{ key: 'trigger', label: '什麼時候顯示', type: 'select', options: [['hover', '滑過就顯示'], ['shift', '按住 Shift 才顯示']] }],
+      frames: 'top',
+      phase: 'idle',
+      match: () => HOST === 'x.com' || HOST === 'twitter.com' || /(^|\.)threads\.(com|net)$/.test(HOST) || /(^|\.)instagram\.com$/.test(HOST),
+      start(ctx) {
+        return startHoverZoom(ctx);
+      },
+    },
+
+    /* ---------------- 隱藏推薦內容 ---------------- */
+    {
+      id: 'feedClean',
+      group: 'social',
+      name: '隱藏推薦內容',
+      site: 'FB／Threads',
+      desc: '把動態裡的「贊助」廣告、還沒追蹤的粉專和社團的推薦貼文、「你可能認識的朋友」和「為你推薦」的帳號收起來。收起來的地方留一行字，點一下就能打開；也可以改成完全隱藏。',
+      defaults: { fb: 'all', threads: 'all', style: 'line' },
+      fields: [
+        { key: 'fb', label: 'Facebook', type: 'select', options: [['all', '收贊助和推薦'], ['reels', '收贊助、推薦和 Reels'], ['ads', '只收贊助'], ['off', '不收']] },
+        { key: 'threads', label: 'Threads', type: 'select', options: [['all', '收贊助和推薦帳號'], ['ads', '只收贊助'], ['off', '不收']] },
+        { key: 'style', label: '收起來的樣子', type: 'select', options: [['line', '留一行字，點一下打開'], ['hide', '完全隱藏']] },
+      ],
+      frames: 'top',
+      phase: 'start',
+      match: () => /(^|\.)facebook\.com$/.test(HOST) || /(^|\.)threads\.(com|net)$/.test(HOST),
+      here: () => !/(^|\.)facebook\.com$/.test(HOST) || /^\/(home\.php)?$/.test(location.pathname),
+      start(ctx) {
+        return startFeedClean(ctx);
+      },
+    },
+
+    /* ---------------- 解除複製限制 ---------------- */
+    {
+      id: 'copyUnlock',
+      group: 'web',
+      name: '解除複製限制',
+      site: '指定網站',
+      desc: '有些網站不讓你選取文字、按右鍵或複製：在 Tampermonkey 選單按「解除這個網站的複製限制」，這個網站之後都能正常選取、複製、按右鍵（不用重新整理）。',
+      defaults: { sites: [] },
+      fields: [{ key: 'sites', label: '已解除的網站', type: 'list', placeholder: '例如 example.com' }],
+      frames: 'all',
+      phase: 'start',
+      menuExtra: true,
+      match: () => /^https?:$/.test(location.protocol),
+      here: (c) => mtSiteMatch(c.sites) !== '',
+      start(ctx) {
+        const doc = document;
+        let style = null;
+        let on = false;
+        // 網站擋選取、複製、右鍵的程式：在最前面攔下來，不讓它執行（瀏覽器原本的動作照常）
+        const stop = (e) => { e.stopImmediatePropagation(); };
+        const stopRight = (e) => { if (e.button === 2) e.stopImmediatePropagation(); };
+        const stopKeys = (e) => {
+          if (!(e.ctrlKey || e.metaKey) || e.altKey || mtTyping(e)) return;
+          if (/^[acx]$/i.test(e.key)) e.stopImmediatePropagation();
+        };
+        const EVENTS = [['copy', stop], ['cut', stop], ['contextmenu', stop], ['selectstart', stop], ['dragstart', stop],
+          ['mousedown', stopRight], ['mouseup', stopRight], ['pointerdown', stopRight], ['pointerup', stopRight], ['auxclick', stopRight], ['keydown', stopKeys]];
+        const CSS = '*, *::before, *::after { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }';
+        const addStyle = () => {
+          if (style && style.isConnected) return;
+          style = doc.createElement('style');
+          style.id = 'maoboo-copy-unlock';
+          style.textContent = CSS;
+          (doc.head || doc.documentElement).appendChild(style);
+        };
+        const apply = () => {
+          const want = !!mtSiteMatch(ctx.cfg().sites);
+          if (want === on) { if (on) addStyle(); return; }
+          on = want;
+          if (on) {
+            EVENTS.forEach(([t, fn]) => PAGE.addEventListener(t, fn, true));
+            if (doc.documentElement) addStyle(); else doc.addEventListener('DOMContentLoaded', addStyle, { once: true });
+          } else {
+            EVENTS.forEach(([t, fn]) => PAGE.removeEventListener(t, fn, true));
+            if (style) style.remove();
+            style = null;
+          }
+        };
+        apply();
+        // 有些網站會把加上去的樣式拿掉：頁面載入完再補一次
+        const again = () => { if (on) addStyle(); };
+        doc.addEventListener('DOMContentLoaded', again, { once: true });
+        const toggle = () => {
+          const list = (ctx.cfg().sites || []).slice();
+          const hit = mtSiteMatch(list);
+          if (hit) {
+            ctx.save('sites', list.filter((x) => x !== hit));
+            toast(`已恢復 ${HOST} 原本的設定（重新整理後完全恢復）。`);
+          } else {
+            ctx.save('sites', list.concat([HOST.replace(/^www\./, '')]));
+            toast(`已解除 ${HOST} 的複製限制：可以選取、複製、按右鍵了。`);
+          }
+        };
+        return {
+          onConfig: apply,
+          menuItems: () => [{ key: 'cu.site', label: '　' + (on ? '恢復這個網站的複製限制' : '解除這個網站的複製限制'), run: toggle, close: true }],
+          stop() {
+            doc.removeEventListener('DOMContentLoaded', again);
+            doc.removeEventListener('DOMContentLoaded', addStyle);
+            if (on) { EVENTS.forEach(([t, fn]) => PAGE.removeEventListener(t, fn, true)); if (style) style.remove(); }
+            on = false;
+          },
+        };
+      },
+    },
+
     /* ---------------- 網址追蹤參數清除 ---------------- */
     {
       id: 'urlClean',
@@ -7440,7 +8112,8 @@ button, input, select, output { font: inherit; }
     { id: 'video', name: '影片與音量' },
     { id: 'translate', name: '翻譯' },
     { id: 'download', name: '下載' },
-    { id: 'web', name: '網址' },
+    { id: 'social', name: '社群網站' },
+    { id: 'web', name: '網頁' },
   ];
 
   function raccoonMark() {
@@ -7579,7 +8252,7 @@ button, input, select, output { font: inherit; }
     range.addEventListener('input', () => { const val = Number(range.value); out.textContent = val + '%'; write(val, false); });
     range.addEventListener('change', () => write(Number(range.value), true));
     return {
-      el: h('label', { class: 'mb-field' }, h('span', { text: f.label }), range, out),
+      el: h('label', { class: 'mb-field mb-field-range' }, h('span', { text: f.label }), range, out),
       refresh: () => { if (!holding) show(read()); },
     };
   }
@@ -7718,6 +8391,17 @@ button, input, select, output { font: inherit; }
     const cur = store.get('cfg.xVolume', {}) || {};
     if (old && Number.isFinite(Number(old.volume)) && cur.direct === undefined) store.set('cfg.xVolume', Object.assign({}, cur, { direct: Number(old.volume) }));
   })();
+  // 1.5.0：「Threads 音量記憶」和「X 影片音量」合成「影片音量記憶」，原本的開關和設定搬過來（記住的音量不變）
+  (() => {
+    if (store.get('on.videoVolume', null) === null && store.get('on.threadsVolume', true) === false && store.get('on.xVolume', true) === false) store.set('on.videoVolume', false);
+    if (store.get('cfg.videoVolume', null) !== null) return;
+    const t = store.get('cfg.threadsVolume', {}) || {};
+    const x = store.get('cfg.xVolume', {}) || {};
+    const merged = {};
+    if (t.bar) merged.bar = t.bar;
+    if (x.direct !== undefined) merged.direct = x.direct;
+    if (Object.keys(merged).length) store.set('cfg.videoVolume', merged);
+  })();
   installUiGuard();
   MODULES.forEach(syncModule);
   for (const m of MODULES) {
@@ -7730,7 +8414,7 @@ button, input, select, output { font: inherit; }
       if (IS_TOP) { renderMenu(); if (remote && panel) panel.refresh(); }
     });
   }
-  for (const key of ['mem.threadsVolume', 'mem.xVolume']) {
+  for (const key of ['mem.threadsVolume', 'mem.xVolume', 'mem.igVolume', 'mem.fbVolume']) {
     store.watch(key, (val, remote) => {
       const k = keepers.get(key);
       if (k && remote) k.syncRemote(val);
