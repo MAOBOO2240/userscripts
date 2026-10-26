@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.3.0
+// @version      1.4.0
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -27,6 +27,10 @@
 // @connect      generativelanguage.googleapis.com
 // @connect      translate.googleapis.com
 // @connect      cdn.jsdelivr.net
+// @connect      unpkg.com
+// @connect      huggingface.co
+// @connect      hf.co
+// @connect      media.githubusercontent.com
 // @connect      kingofshojo.com
 // @connect      ezmanga.org
 // @connect      pstatic.net
@@ -37,6 +41,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.4.0  漫畫翻譯的免費認字改用 PaddleOCR（PP-OCRv6），英文、日文直排、韓文都認得準很多；
+ *        辨識模型第一次下載後存在瀏覽器裡，之後不用再下載；載入失敗時自動改用原本的 Tesseract
  * 1.3.0  漫畫翻譯預設改成快速模式：瀏覽器認字＋Google 翻譯馬上顯示，Gemini 只收文字幫忙修正（很多張合成一次，很省次數）；
  *        加上進度條：狀態列顯示翻到第幾張、正在做什麼，圖上也標出進度；太久沒有進度會提示，可以按「重試」。Gemini 看圖翻譯改成設定裡的「精準」
  * 1.2.0  漫畫翻譯：深色底、沒有白底的字也會翻；Gemini 同時用多個模型、邊翻邊顯示，快很多；整頁翻譯會先下載後面的圖先翻好（翻頁式也是）；
@@ -1513,6 +1519,63 @@ button, input, select, output { font: inherit; }
   // 免費模式同時開幾個文字辨識程式（看電腦有幾個核心，最多 3 個）
   const MT_TESS_N = Math.max(1, Math.min((() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })() ? 2 : 3,
     Math.floor(((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2) / 2)));
+  // 免費模式的認字：PaddleOCR（PP-OCRv6）模型用 ONNX Runtime 在背景執行緒跑，比 Tesseract 準很多；載入失敗時才改用 Tesseract
+  const MT_NPM = ['https://cdn.jsdelivr.net/npm/', 'https://unpkg.com/'];
+  const MT_PD_HF = 'https://huggingface.co/snowfluke/ppu-paddle-ocr-models/resolve/main/';
+  const MT_PD_GH = 'https://media.githubusercontent.com/media/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models/main/';
+  const MT_PD_RAW = 'https://raw.githubusercontent.com/PT-Perkasa-Pilar-Utama/ppu-paddle-ocr-models/main/';
+  const mtNpm = (p, sha) => MT_NPM.map((b) => [b + p, sha]);
+  const MT_ORT = 'onnxruntime-web@1.30.0/dist/';
+  const MT_PD_TINY = '@arcships/light-ocr-model-ppocrv6-tiny@0.1.0/bundle/';
+  const MT_PD_SMALL = '@arcships/light-ocr-model-ppocrv6-small@0.3.4/bundle/';
+  /** 每個檔案：大小（進度條用）、下載來源和 SHA-256（依序試，下載後核對內容） */
+  const MT_PD = {
+    ort: { size: 73054, src: mtNpm(MT_ORT + 'ort.wasm.bundle.min.mjs', '11e64bd8ffe11bd1a2a2f0d6275fdfbbba7262f0b76b99b53d228a8a22ef3d90') },
+    wasm: { size: 14239897, src: mtNpm(MT_ORT + 'ort-wasm-simd-threaded.wasm', '3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2') },
+    det: {
+      size: 1780590,
+      src: [...mtNpm(MT_PD_TINY + 'det/inference.onnx', '193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8'),
+        [MT_PD_HF + 'detection/PP-OCRv6_tiny_det.onnx', '193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8'],
+        [MT_PD_GH + 'detection/PP-OCRv6_tiny_det.onnx', '193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8']],
+    },
+    // 英文（和其他拉丁字母）：PP-OCRv6 tiny，小又快
+    eng: {
+      size: 4462639,
+      src: [...mtNpm(MT_PD_TINY + 'rec/inference.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6'),
+        [MT_PD_HF + 'recognition/PP-OCRv6_tiny_rec.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6'],
+        [MT_PD_GH + 'recognition/PP-OCRv6_tiny_rec.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6']],
+      dict: {
+        size: 41009,
+        src: [...mtNpm(MT_PD_TINY + 'rec/dictionary.json', '7db82ee59f535f27cedd9f5893e24bf5ed141ef51f5cb076d88053968102c1d1'),
+          [MT_PD_RAW + 'recognition/ppocrv6_tiny_dict.txt', '2f3717bbd530b681b6db3be35cc485e8a41a932b9558b833986bf0894eb21f2d']],
+      },
+    },
+    // 日文：PP-OCRv6 small（tiny 沒有假名）
+    jpn: {
+      size: 21159378,
+      src: [...mtNpm(MT_PD_SMALL + 'rec/inference.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634'),
+        [MT_PD_HF + 'recognition/PP-OCRv6_small_rec.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634'],
+        [MT_PD_GH + 'recognition/PP-OCRv6_small_rec.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634']],
+      dict: {
+        size: 112408,
+        src: [...mtNpm(MT_PD_SMALL + 'rec/dictionary.json', '6e93cc028ff774c8bef0801ad08391f8284f7ef897013a9aeb9cbd515db3276d'),
+          [MT_PD_RAW + 'recognition/ppocrv6_dict.txt', '41557512862dfe31970cf22407742b629725461dd84c0d8771bde9c87c2202c8']],
+      },
+    },
+    // 韓文：PP-OCRv5 韓文模型（v6 沒有韓文）
+    kor: {
+      size: 13443278,
+      src: [[MT_PD_HF + 'recognition/multi/korean/v5/korean_PP-OCRv5_mobile_rec_infer.onnx', 'ee0dfde503d787c91fd0455daae2eb85311b4b5bdcddf85a54d8c1e0adc157de'],
+        [MT_PD_GH + 'recognition/multi/korean/v5/korean_PP-OCRv5_mobile_rec_infer.onnx', 'ee0dfde503d787c91fd0455daae2eb85311b4b5bdcddf85a54d8c1e0adc157de']],
+      dict: {
+        size: 47452,
+        src: [[MT_PD_HF + 'recognition/multi/korean/v5/ppocrv5_korean_dict.txt', 'a3792cbb41215a43e555e16ff4a7f7b18db5dd80cd058637098f0d872f2dd9d6'],
+          [MT_PD_RAW + 'recognition/multi/korean/v5/ppocrv5_korean_dict.txt', 'a3792cbb41215a43e555e16ff4a7f7b18db5dd80cd058637098f0d872f2dd9d6']],
+      },
+    },
+  };
+  // PaddleOCR 同時開幾個（手機一個就好，比較省記憶體）
+  const MT_PD_N = (() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })() ? 1 : Math.min(2, MT_TESS_N);
   const MT_LANG = { eng: 'en', kor: 'ko', jpn: 'ja' };
   const MT_CJK = /[⺀-鿿豈-﫿＀-￯　-〿]/;
   const MT_NO_START = /^[，。、．！？；：」』）》〉】〕｝…—～·,.!?;:)\]}%’”]+$/u; // 不放在行首的標點
@@ -2633,6 +2696,492 @@ button, input, select, output { font: inherit; }
     };
   }
 
+  /* ---------- 免費模式的認字：PaddleOCR（模型下載、快取、背景執行緒） ---------- */
+
+  /** 下載過的模型存在這個網站的 IndexedDB（用內容的 SHA-256 當名字），下次直接用，不用再下載 */
+  let mtIdbP = null;
+  function mtIdb() {
+    if (mtIdbP) return mtIdbP;
+    mtIdbP = new Promise((resolve) => {
+      let req = null;
+      try { req = indexedDB.open('maoboo-ocr', 1); } catch (_) { resolve(null); return; }
+      const t = setTimeout(() => resolve(null), 5000);
+      const done = (db) => { clearTimeout(t); resolve(db); };
+      req.onupgradeneeded = () => { try { req.result.createObjectStore('files'); } catch (_) { /* 已經有了 */ } };
+      req.onsuccess = () => done(req.result);
+      req.onerror = () => done(null);
+      req.onblocked = () => done(null);
+    });
+    return mtIdbP;
+  }
+  function mtIdbDo(mode, fn) {
+    return mtIdb().then((db) => new Promise((resolve) => {
+      if (!db) { resolve(null); return; }
+      try {
+        const r = fn(db.transaction('files', mode).objectStore('files'));
+        r.onsuccess = () => resolve(r.result === undefined ? null : r.result);
+        r.onerror = () => resolve(null);
+      } catch (_) { resolve(null); }
+    }));
+  }
+  const mtIdbGet = (k) => mtIdbDo('readonly', (st) => st.get(k));
+  const mtPdAll = () => ['ort', 'wasm', 'det', 'eng', 'jpn', 'kor'].flatMap((k) => [MT_PD[k], MT_PD[k].dict].filter(Boolean));
+  /** 換了模型版本後，舊的用不到了：刪掉 */
+  async function mtIdbPrune() {
+    const keep = new Set(mtPdAll().flatMap((a) => a.src.map((s) => s[1])));
+    const keys = (await mtIdbDo('readonly', (st) => st.getAllKeys())) || [];
+    for (const k of keys) if (!keep.has(k)) mtIdbDo('readwrite', (st) => st.delete(k));
+  }
+  async function mtSha256(buf) {
+    if (typeof crypto === 'undefined' || !crypto.subtle) return '';
+    const d = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+    let s = '';
+    for (const b of d) s += (b < 16 ? '0' : '') + b.toString(16);
+    return s;
+  }
+  /** 下載一個檔案（先用一般下載，網站不允許時改用油猴下載），邊下載邊回報進度（0～1） */
+  async function mtDownload(url, size, onProg) {
+    const ac = typeof AbortController === 'function' ? new AbortController() : null;
+    let idle = 0;
+    const poke = () => { clearTimeout(idle); if (ac) idle = setTimeout(() => ac.abort(), 30000); }; // 30 秒沒有收到資料就放棄
+    let res = null;
+    try {
+      poke();
+      res = await fetch(url, Object.assign({ mode: 'cors', credentials: 'omit' }, ac ? { signal: ac.signal } : {}));
+    } catch (_) { res = null; } // 網站不允許連到外面（或連不上）：下面改用油猴下載
+    try {
+      if (res && !res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { http: true }); // 檔案不在：換下一個來源
+      if (!res) throw new Error('fetch');
+      if (!res.body || typeof res.body.getReader !== 'function') return await res.arrayBuffer();
+      const rd = res.body.getReader();
+      const parts = [];
+      let got = 0;
+      for (;;) {
+        poke();
+        const { done, value } = await rd.read();
+        if (done) break;
+        parts.push(value);
+        got += value.length;
+        if (onProg) onProg(got / size);
+      }
+      const all = new Uint8Array(got);
+      let o = 0;
+      for (const p of parts) { all.set(p, o); o += p.length; }
+      return all.buffer;
+    } catch (e) {
+      if (e && e.http) throw e;
+      return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url,
+          responseType: 'arraybuffer',
+          timeout: 300000,
+          onprogress: (ev) => { if (onProg && ev && ev.loaded) onProg(ev.loaded / size); },
+          onload: (r) => (r.status >= 200 && r.status < 300 && r.response ? resolve(r.response) : reject(new Error(`HTTP ${r.status}`))),
+          onerror: () => reject(new Error('網路錯誤')),
+          ontimeout: () => reject(new Error('逾時')),
+        });
+      });
+    } finally { clearTimeout(idle); }
+  }
+  const mtPdLoading = new Map(); // 同一個檔案同時只下載一次
+  /** 取得一個模型檔：先找 IndexedDB，沒有再依序試每個來源下載，核對 SHA-256 後存起來 */
+  function mtPdAsset(a, onProg) {
+    const key = a.src[0][1];
+    if (mtPdLoading.has(key)) return mtPdLoading.get(key);
+    const p = (async () => {
+      for (const [url, sha] of a.src) {
+        const hit = await mtIdbGet(sha);
+        if (hit && hit.byteLength) return { buf: hit, url };
+      }
+      let last = null;
+      for (const [url, sha] of a.src) {
+        try {
+          const buf = await mtDownload(url, a.size, onProg);
+          const got = await mtSha256(buf);
+          if (got && got !== sha) throw new Error('下載的檔案內容不對');
+          mtIdbDo('readwrite', (st) => st.put(buf, sha)).then(() => mtIdbPrune());
+          return { buf, url };
+        } catch (e) { last = e; }
+      }
+      throw last || new Error('下載失敗');
+    })();
+    mtPdLoading.set(key, p);
+    p.then(() => mtPdLoading.delete(key), () => mtPdLoading.delete(key));
+    return p;
+  }
+
+  /** ONNX Runtime 的模組版改成一般的程式碼（放進背景執行緒；裡面已經包含 WebAssembly 的載入程式，不用再下載別的） */
+  function mtOrtClassic(src) {
+    const m = /export\s*\{([^}]*)\};?\s*(\/\/# sourceMappingURL=[^\n]*)?\s*$/.exec(src);
+    if (!m) throw new Error('ONNX Runtime 的格式不符');
+    const names = m[1].split(',').map((x) => x.trim()).filter(Boolean).map((x) => {
+      const [a, b] = x.split(/\s+as\s+/);
+      return JSON.stringify(b || a) + ':' + a;
+    });
+    const me = JSON.stringify(MT_NPM[0] + MT_ORT + 'ort.wasm.bundle.min.mjs');
+    return "(function(){'use strict';" + src.slice(0, m.index).replace(/import\.meta\.url/g, me) + ';self.ort={' + names.join(',') + '};})();';
+  }
+
+  /**
+   * 免費模式的認字程式（在背景執行緒跑，不會讓網頁卡住）：PaddleOCR 的找字（DB）＋認字（CTC）模型，用 ONNX Runtime 執行。
+   * 這個函式會被轉成文字放進 Worker，不能用到外面的變數。
+   */
+  function mtPaddleWorker() {
+    /* global ort */
+    const S = { det: null, rec: {}, labels: {} };
+    const post = (m) => self.postMessage(m);
+    const canvas = (w, h) => new OffscreenCanvas(Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+
+    /** 字典對齊模型的類別數：0 是 CTC 的空白，最後一個是空格 */
+    function makeLabels(list, classes) {
+      let L = list.slice();
+      while (L.length && L[L.length - 1] === '') L.pop();
+      if (L.length === classes && L[0] === '') return L;
+      if (L[0] === '') L = L.slice(1);
+      L = [''].concat(L);
+      if (L.length === classes - 1) L.push(' ');
+      while (L.length < classes) L.push('');
+      return L;
+    }
+
+    async function load(key, bytes, dict) {
+      const sess = await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+      if (key === 'det') { S.det = sess; return; }
+      // 用一次很小的輸入問出模型有幾個字，對齊字典
+      const feeds = {};
+      feeds[sess.inputNames[0]] = new ort.Tensor('float32', new Float32Array(3 * 48 * 64), [1, 3, 48, 64]);
+      const out = await sess.run(feeds);
+      const C = out[sess.outputNames[0]].dims[2];
+      const list = Array.isArray(dict) ? dict : String(dict || '').replace(/\r/g, '').split('\n');
+      S.rec[key] = sess;
+      S.labels[key] = makeLabels(list, C);
+    }
+
+    /* ---------- 找字：機率圖 → 一塊一塊的字框 ---------- */
+    async function detect(bmp, o) {
+      const W = bmp.width;
+      const H = bmp.height;
+      // 像素太多就縮小（找字的時間跟像素數成正比）；太小就放大
+      let r = Math.min(1, Math.sqrt((o.maxPixels || 1300000) / (W * H)));
+      if (Math.min(W, H) * r < 64) r = 64 / Math.min(W, H);
+      const w = Math.max(32, Math.round((W * r) / 32) * 32);
+      const h = Math.max(32, Math.round((H * r) / 32) * 32);
+      const c = canvas(w, h);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.fillStyle = '#FFFFFF';
+      g.fillRect(0, 0, w, h);
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(bmp, 0, 0, w, h);
+      const px = g.getImageData(0, 0, w, h).data;
+      const n = w * h;
+      const t = new Float32Array(3 * n);
+      // PaddleOCR 用 BGR 的順序、減平均除標準差
+      for (let i = 0, j = 0; i < n; i++, j += 4) {
+        t[i] = (px[j + 2] / 255 - 0.485) / 0.229;
+        t[n + i] = (px[j + 1] / 255 - 0.456) / 0.224;
+        t[2 * n + i] = (px[j] / 255 - 0.406) / 0.225;
+      }
+      const feeds = {};
+      feeds[S.det.inputNames[0]] = new ort.Tensor('float32', t, [1, 3, h, w]);
+      const out = await S.det.run(feeds);
+      return boxesOf(out[S.det.outputNames[0]].data, w, h, w / W, h / H, W, H, o);
+    }
+
+    function boxesOf(P, w, h, rx, ry, W, H, o) {
+      const thr = o.thresh || 0.2;
+      const boxThr = o.boxThresh || 0.45;
+      const unclip = o.unclip || 1.4;
+      const n = w * h;
+      const lab = new Uint8Array(n);
+      const stack = new Int32Array(n);
+      const boxes = [];
+      for (let p = 0; p < n && boxes.length < 600; p++) {
+        if (lab[p] || P[p] <= thr) continue;
+        let sp = 0;
+        stack[sp++] = p;
+        lab[p] = 1;
+        let x0 = w; let y0 = h; let x1 = 0; let y1 = 0; let sum = 0; let cnt = 0;
+        while (sp) {
+          const q = stack[--sp];
+          const x = q % w;
+          const y = (q - x) / w;
+          sum += P[q];
+          cnt++;
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          if (y > y1) y1 = y;
+          for (let dy = -1; dy <= 1; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= h) continue;
+            for (let dx = -1; dx <= 1; dx++) {
+              const xx = x + dx;
+              if (xx < 0 || xx >= w) continue;
+              const r2 = yy * w + xx;
+              if (!lab[r2] && P[r2] > thr) { lab[r2] = 1; stack[sp++] = r2; }
+            }
+          }
+        }
+        const bw = x1 - x0 + 1;
+        const bh = y1 - y0 + 1;
+        if (Math.min(bw, bh) < 3 || sum / cnt < boxThr) continue;
+        // 模型找到的是縮小過的字心，往外擴回字的大小
+        const d = (bw * bh * unclip) / (2 * (bw + bh));
+        const b = {
+          x0: Math.max(0, (x0 - d) / rx),
+          y0: Math.max(0, (y0 - d) / ry),
+          x1: Math.min(W, (x1 + 1 + d) / rx),
+          y1: Math.min(H, (y1 + 1 + d) / ry),
+          score: sum / cnt,
+        };
+        if (Math.min(b.x1 - b.x0, b.y1 - b.y0) >= 5) boxes.push(b);
+      }
+      return boxes;
+    }
+
+    /* ---------- 認字：每個字框裁下來、高度縮放成 48，CTC 解碼 ---------- */
+    async function recognize(bmp, boxes, key, onPart, o) {
+      const sess = S.rec[key];
+      const labels = S.labels[key];
+      const HH = 48;
+      const items = boxes.map((b, i) => {
+        const cw = Math.max(1, b.x1 - b.x0);
+        const ch = Math.max(1, b.y1 - b.y0);
+        const rot = ch / cw >= 1.5; // 直排：逆時針轉 90 度再認
+        const tw = Math.max(8, Math.min(3200, Math.ceil(HH * (rot ? ch / cw : cw / ch))));
+        return { i, b, cw, ch, rot, tw };
+      });
+      items.sort((a, b) => a.tw - b.tw);
+      const res = new Array(boxes.length);
+      for (let k = 0; k < items.length;) {
+        // 寬度差不多的一起認（補邊比較少）
+        const grp = [];
+        while (k < items.length && grp.length < 8 && (!grp.length || items[k].tw <= grp[0].tw * 2.5)) grp.push(items[k++]);
+        const BW = Math.max(160, grp[grp.length - 1].tw);
+        const N = grp.length;
+        const plane = HH * BW;
+        const t = new Float32Array(N * 3 * plane); // 補邊的地方是 0（灰色）
+        grp.forEach((it, n) => {
+          const c = canvas(it.tw, HH);
+          const g = c.getContext('2d', { willReadFrequently: true });
+          g.imageSmoothingQuality = 'high';
+          if (it.rot) g.setTransform(0, -HH / it.cw, it.tw / it.ch, 0, 0, HH);
+          else g.setTransform(it.tw / it.cw, 0, 0, HH / it.ch, 0, 0);
+          g.drawImage(bmp, it.b.x0, it.b.y0, it.cw, it.ch, 0, 0, it.cw, it.ch);
+          const px = g.getImageData(0, 0, it.tw, HH).data;
+          const base = n * 3 * plane;
+          for (let y = 0; y < HH; y++) {
+            for (let x = 0; x < it.tw; x++) {
+              const j = (y * it.tw + x) * 4;
+              const q = base + y * BW + x;
+              t[q] = px[j + 2] / 127.5 - 1;
+              t[q + plane] = px[j + 1] / 127.5 - 1;
+              t[q + 2 * plane] = px[j] / 127.5 - 1;
+            }
+          }
+        });
+        const feeds = {};
+        feeds[sess.inputNames[0]] = new ort.Tensor('float32', t, [N, 3, HH, BW]);
+        const out = await sess.run(feeds);
+        const Y = out[sess.outputNames[0]];
+        const T = Y.dims[1];
+        const C = Y.dims[2];
+        const D = Y.data;
+        grp.forEach((it, n) => {
+          const tMax = Math.min(T, Math.ceil((it.tw / BW) * T) + 1);
+          const chars = [];
+          const sp = labels.length - 1; // 最後一個是空格
+          let last = 0;
+          let sum = 0;
+          let cnt = 0;
+          let gapSp = 0; // 上一個字之後，空格出現過的最大機率
+          for (let tt = 0; tt < tMax; tt++) {
+            const off = (n * T + tt) * C;
+            let best = 0;
+            let bv = D[off];
+            for (let cc = 1; cc < C; cc++) { const v = D[off + cc]; if (v > bv) { bv = v; best = cc; } }
+            if (best !== sp && D[off + sp] > gapSp) gapSp = D[off + sp];
+            if (best !== 0 && best !== last && labels[best]) {
+              // 模型差一點就認成空格的地方：補回空格（認字模型常常漏掉字中間的空格）
+              if (best !== sp && chars.length && chars[chars.length - 1] !== ' ' && gapSp > (o.spaceProb || 0.05)) chars.push(' ');
+              chars.push(labels[best]);
+              sum += bv;
+              cnt++;
+              gapSp = 0;
+            }
+            last = best;
+          }
+          res[it.i] = { text: chars.join('').replace(/\s+/g, ' ').trim(), conf: cnt ? sum / cnt : 0, vertical: it.rot };
+        });
+        if (onPart) onPart(k / items.length);
+      }
+      return res;
+    }
+
+    self.onmessage = async (e) => {
+      const m = e.data || {};
+      try {
+        if (m.type === 'init') {
+          ort.env.wasm.numThreads = 1;
+          ort.env.wasm.wasmBinary = m.wasm;
+          ort.env.logLevel = 'error';
+          post({ type: 'ok', id: m.id });
+        } else if (m.type === 'model') {
+          await load(m.key, m.bytes, m.dict);
+          post({ type: 'ok', id: m.id });
+        } else if (m.type === 'ocr') {
+          const bmp = await createImageBitmap(m.blob);
+          try {
+            const boxes = m.boxes || await detect(bmp, m.opts || {});
+            post({ type: 'progress', id: m.id, frac: 0.4 });
+            const lines = boxes.length ? await recognize(bmp, boxes, m.rec, (f) => post({ type: 'progress', id: m.id, frac: 0.4 + 0.6 * f }), m.opts || {}) : [];
+            post({ type: 'ok', id: m.id, boxes, lines: boxes.map((b, i) => Object.assign({}, b, lines[i])) });
+          } finally { if (bmp.close) bmp.close(); }
+        }
+      } catch (err) {
+        post({ type: 'error', id: m.id, message: String((err && err.message) || err) });
+      }
+    };
+  }
+
+  /** 英文、韓文、日文的字有沒有對（沒有的多半是圖上的雜訊） */
+  function mtPaddleScript(text, lang) {
+    const s = text.replace(/[\s\d\p{P}\p{S}]/gu, '');
+    if (!s.length) return false;
+    const re = lang === 'kor' ? /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/ : lang === 'jpn' ? /[\u3040-\u30FF\u3400-\u9FFF\u3005\u3006\u30FC]/ : /[A-Za-z]/;
+    let n = 0;
+    for (const ch of s) if (re.test(ch)) n++;
+    if (lang === 'eng' && (n < 2 || !/[aeiouyAEIOUY]/.test(s))) return false;
+    return n / s.length >= 0.7;
+  }
+
+  /** 英文的常見認錯：重音符號（Í → I）、字中間的 0／1（AG0 → AGO）、混進來的中日文、全大寫字裡的小寫 */
+  function mtPaddleEnFix(t) {
+    t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    t = t.replace(/[^\x20-\x7E\u00A0-\u024F\u2010-\u2027]/g, ' ').replace(/\s+/g, ' ').trim();
+    return t.replace(/[A-Za-z0-9']+/g, (w) => {
+      if ((w.match(/[A-Za-z]/g) || []).length < 2) return w;
+      let x = w.replace(/0(?=[A-Za-z])|(?<=[A-Za-z])0/g, 'O').replace(/1(?=[A-Za-z]{2})|(?<=[A-Za-z]{2})1/g, 'I');
+      if (/^[A-Z0-9']*[a-z][A-Z0-9']*$/.test(x) && x.replace(/[^A-Z]/g, '').length >= 2) x = x.toUpperCase(); // YOu → YOU
+      return x;
+    });
+  }
+
+  /** PaddleOCR 認出來的一行一行 → 一個個對話框（同一框的行合併，照閱讀順序接起來） */
+  function mtPaddleGroups(raw, lang) {
+    const cjk = lang === 'jpn';
+    const lines = [];
+    for (const l of raw || []) {
+      let text = String(l.text || '').replace(/\s+/g, ' ').trim();
+      if (lang === 'eng') text = mtPaddleEnFix(text);
+      if (!text) continue;
+      if (l.conf < 0.6 || !mtPaddleScript(text, lang)) continue;
+      const letters = text.replace(/[^\p{L}]/gu, '').length;
+      const w = l.x1 - l.x0;
+      const h = l.y1 - l.y0;
+      // 很短又不太確定的（例如兩個字母）：單獨出現時多半是圖上的雜訊，跟別的行在一起才算
+      const shaky = (lang === 'eng' ? letters <= 2 : letters <= 1) && l.conf < 0.85;
+      lines.push({ x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, w, h, text, shaky, vertical: h >= w * 1.5, square: Math.max(w, h) < Math.min(w, h) * 1.5 });
+    }
+    // 日文旁邊的小字（假名注音）：緊貼著一行粗很多的直排字，拿掉
+    if (cjk) {
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const a = lines[i];
+        if (!a.vertical) continue;
+        const ruby = lines.some((b) => b !== a && b.vertical && b.w >= a.w * 1.6
+          && Math.max(b.x0 - a.x1, a.x0 - b.x1) <= a.w * 0.8
+          && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) >= a.h * 0.5);
+        if (ruby) lines.splice(i, 1);
+      }
+    }
+    const n = lines.length;
+    const parent = lines.map((_, i) => i);
+    const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    const vert = (l) => l.vertical || (cjk && l.square);
+    const horiz = (l) => !l.vertical || l.square;
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const a = lines[i];
+        const b = lines[j];
+        const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0); // 左右重疊多少（負的是間隔）
+        const oy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0); // 上下重疊多少
+        let join = false;
+        if (cjk && vert(a) && vert(b) && (a.vertical || b.vertical)) {
+          // 直排：相鄰的兩行（左右挨著、上下有重疊），或同一行被切成兩段
+          const t = Math.max(a.w, b.w);
+          if (Math.min(a.w, b.w) / t >= 0.55) {
+            if (-ox <= t * 0.8 && oy > 0) join = true;
+            else if (ox >= Math.min(a.w, b.w) * 0.5 && -oy <= t * 0.8) join = true;
+          }
+        } else if (horiz(a) && horiz(b) && !(a.vertical && b.vertical)) {
+          const hm = Math.max(a.h, b.h);
+          if (Math.min(a.h, b.h) / hm >= 0.55) {
+            // 同一行被切成兩段：中間只隔一個空格左右（隔比較遠的多半是旁邊另一個對話框）
+            if (oy >= Math.min(a.h, b.h) * 0.5) join = -ox <= hm * 0.5;
+            else if (-oy <= hm * 0.7) {
+              // 上下兩行：左右要對得上（置中、靠左或大半重疊）
+              const cxa = (a.x0 + a.x1) / 2;
+              const cxb = (b.x0 + b.x1) / 2;
+              join = ox >= Math.min(a.w, b.w) * 0.3 || Math.abs(cxa - cxb) < Math.max(a.w, b.w) * 0.25 || Math.abs(a.x0 - b.x0) < hm * 0.5;
+            }
+          }
+        }
+        if (join) parent[find(i)] = find(j);
+      }
+    }
+    const groups = new Map();
+    lines.forEach((l, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(l); });
+    const out = [];
+    for (const g of groups.values()) {
+      if (g.length === 1 && g[0].shaky) continue;
+      const vertical = cjk && g.filter((l) => l.vertical).length * 2 > g.length;
+      /** 依閱讀順序排：直排由右到左、每行由上到下；橫排由上到下、每行由左到右 */
+      const order = (list, along, across) => {
+        const rows = [];
+        for (const l of list.slice().sort((p, q) => across(p) - across(q))) {
+          const r = rows.find((row) => row.some((m) => along(m, l)));
+          if (r) r.push(l); else rows.push([l]);
+        }
+        return rows;
+      };
+      let parts;
+      if (vertical) {
+        const cols = order(g, (m, l) => Math.min(m.x1, l.x1) - Math.max(m.x0, l.x0) >= Math.min(m.w, l.w) * 0.5, (l) => -(l.x0 + l.x1));
+        parts = cols.map((c) => c.sort((p, q) => p.y0 - q.y0).map((l) => l.text).join(''));
+      } else {
+        const rows = order(g, (m, l) => Math.min(m.y1, l.y1) - Math.max(m.y0, l.y0) >= Math.min(m.h, l.h) * 0.5, (l) => l.y0 + l.y1);
+        parts = rows.map((r) => r.sort((p, q) => p.x0 - q.x0).map((l) => l.text).join(' '));
+      }
+      let text = '';
+      for (const p of parts) {
+        if (!text) text = p;
+        else if (cjk) text += p;
+        else if (/[A-Za-z]-$/.test(text) && /^[a-z]/i.test(p)) text = text.slice(0, -1) + p; // 行尾斷字
+        else text += ' ' + p;
+      }
+      if (cjk) {
+        text = text.replace(/\s+/g, '');
+        if (!/[\u3040-\u30FF]/.test(text)) continue; // 只有漢字、沒有假名的多半是中文，不用翻
+      }
+      if (lang === 'eng') {
+        text = text.replace(/(^|[\s.!?"])[1|](?=[\s-]+[A-Za-z]{2,})/g, '$1I');
+        if (!mtPaddleScript(text, 'eng')) continue;
+        text = mtSentenceCase(text);
+      }
+      const t = g.reduce((m, l) => m + Math.min(l.w, l.h), 0) / g.length;
+      out.push({
+        x0: Math.min(...g.map((l) => l.x0)) - t * 0.1,
+        y0: Math.min(...g.map((l) => l.y0)) - t * 0.1,
+        x1: Math.max(...g.map((l) => l.x1)) + t * 0.1,
+        y1: Math.max(...g.map((l) => l.y1)) + t * 0.1,
+        text,
+        vertical,
+      });
+    }
+    return out;
+  }
+
   /* ---------- 免費模式：瀏覽器辨識文字（Tesseract.js）＋ 免費翻譯 ---------- */
 
   let mtTessPromise = null;
@@ -3667,6 +4216,7 @@ button, input, select, output { font: inherit; }
       loc.workers.slice().forEach(dropWorker);
       if (loc.cancel) loc.cancel.rej(mtErr('cancel'));
       Object.assign(loc, { making: null, failed: '', failedAt: 0, status: '', prog: 0, gen: loc.gen + 1, cancel: null });
+      pdReset();
     }
     /** 拿一個閒著的辨識程式（語言不同就切換）；還沒開滿就再開一個 */
     async function takeWorker(lang, P) {
@@ -3719,11 +4269,177 @@ button, input, select, output { font: inherit; }
     }
     function releaseWorker(wk) { wk.busy = false; wk.prog = 0; wk.page = null; }
     /** 這張圖正在辨識的那一段做了多少（0～1） */
-    const ocrPart = (P) => Math.min(0.99, loc.workers.reduce((n, w) => n + (w.busy && w.page === P ? w.prog : 0), 0));
+    const ocrPart = (P) => Math.min(0.99, loc.workers.concat(pd.workers).reduce((n, w) => n + (w.busy && w.page === P ? w.prog : 0), 0));
+
+    /* ---------- 免費模式的認字：PaddleOCR（背景執行緒，同時開幾個；載入失敗才用 Tesseract） ---------- */
+    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [] };
+    /** 開一個背景執行緒（網站不允許時改用網頁自己的 Worker） */
+    function pdWorker(code) {
+      let w = null;
+      try { w = new Worker(URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))); } catch (_) {
+        w = new PAGE.Worker(PAGE.URL.createObjectURL(new PAGE.Blob([code], { type: 'text/javascript' })));
+      }
+      const wk = { w, busy: false, page: null, prog: 0, waits: new Map(), next: 1, dead: null };
+      wk.die = (err) => {
+        if (wk.dead) return;
+        wk.dead = err;
+        for (const cb of wk.waits.values()) cb.reject(err);
+        wk.waits.clear();
+        try { w.terminate(); } catch (_) { /* 已結束 */ }
+      };
+      w.onmessage = (e) => {
+        const m = e.data || {};
+        const cb = wk.waits.get(m.id);
+        if (!cb) return;
+        if (m.type === 'progress') { if (cb.prog) cb.prog(m.frac); return; }
+        wk.waits.delete(m.id);
+        if (m.type === 'error') cb.reject(new Error(m.message || '文字辨識失敗')); else cb.resolve(m);
+      };
+      w.onerror = (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        wk.die(new Error('文字辨識程式無法執行' + (e && e.message ? `（${e.message}）` : '')));
+      };
+      /** 送出一件工作；太久沒回應就當作壞掉 */
+      wk.call = (msg, prog, ms) => new Promise((resolve, reject) => {
+        if (wk.dead) { reject(wk.dead); return; }
+        const id = wk.next++;
+        const t = setTimeout(() => wk.die(new Error('文字辨識程式沒有回應')), ms || 120000);
+        const end = (fn) => (v) => { clearTimeout(t); fn(v); };
+        wk.waits.set(id, { resolve: end(resolve), reject: end(reject), prog });
+        w.postMessage(Object.assign({ id }, msg));
+      });
+      return wk;
+    }
+    /** 認字程式和這個語言的模型準備好（第一次要下載，之後從 IndexedDB 讀；要下載的檔案一起下載） */
+    function pdReady(lang, P) {
+      if (pd.ok && pd.langOk[lang]) return Promise.resolve();
+      const gen = pd.gen;
+      const a = MT_PD[lang];
+      const need = [];
+      if (!pd.ready) need.push(MT_PD.ort, MT_PD.wasm, MT_PD.det);
+      if (!pd.langP[lang]) need.push(a, a.dict);
+      if (need.length) {
+        Object.assign(loc, { status: '準備文字辨識', prog: 0 });
+        // 進度：幾個檔案合起來算
+        const got = need.map(() => 0);
+        const total = need.reduce((n, x) => n + x.size, 0);
+        const get = (x) => mtPdAsset(x, (f) => {
+          if (gen !== pd.gen) return;
+          got[need.indexOf(x)] = Math.min(1, f) * x.size;
+          Object.assign(loc, { status: '下載文字辨識模型', prog: Math.min(0.99, got.reduce((n, v) => n + v, 0) / total) });
+          bump();
+          setStatus();
+        });
+        const preparing = () => { if (gen === pd.gen) { Object.assign(loc, { status: '準備文字辨識', prog: 0 }); setStatus(); } };
+        if (!pd.ready) {
+          const files = Promise.all([get(MT_PD.ort), get(MT_PD.wasm), get(MT_PD.det)]);
+          pd.ready = (async () => {
+            const [ort, wasm, det] = await files;
+            if (gen !== pd.gen) throw mtErr('cancel');
+            preparing();
+            const code = mtOrtClassic(new TextDecoder().decode(ort.buf)) + '\n;(' + mtPaddleWorker.toString() + ')();\n';
+            const list = [];
+            try {
+              for (let i = 0; i < MT_PD_N; i++) list.push(pdWorker(code));
+              await Promise.all(list.map(async (wk) => {
+                await wk.call({ type: 'init', wasm: wasm.buf }, null, 60000);
+                await wk.call({ type: 'model', key: 'det', bytes: det.buf }, null, 60000);
+              }));
+            } catch (e) { list.forEach((wk) => wk.die(e)); throw e; }
+            if (gen !== pd.gen) { list.forEach((wk) => wk.die(mtErr('cancel'))); throw mtErr('cancel'); }
+            pd.workers = list;
+          })();
+          pd.ready.then(() => { if (gen === pd.gen) pd.ok = true; }, () => { if (gen === pd.gen) pd.ready = null; });
+        }
+        if (!pd.langP[lang]) {
+          const files = Promise.all([get(a), get(a.dict)]);
+          pd.langP[lang] = (async () => {
+            const [m, d] = await files;
+            await pd.ready;
+            if (gen !== pd.gen) throw mtErr('cancel');
+            preparing();
+            const txt = new TextDecoder().decode(d.buf);
+            const dict = /\.json$/.test(d.url) ? JSON.parse(txt).characters : txt;
+            await Promise.all(pd.workers.map((wk) => wk.call({ type: 'model', key: lang, bytes: m.buf, dict }, null, 60000)));
+          })();
+          pd.langP[lang].then(() => { if (gen === pd.gen) pd.langOk[lang] = true; }, () => { if (gen === pd.gen) delete pd.langP[lang]; });
+        }
+      }
+      const p = Promise.all([pd.ready, pd.langP[lang]]);
+      // 下載、準備中：狀態列和圖上顯示進度
+      if (P) step(P, '準備文字辨識');
+      if (!loc.making) {
+        loc.making = p;
+        const clear = () => { if (loc.making === p) { Object.assign(loc, { making: null, status: '', prog: 0 }); setStatus(); } };
+        p.then(clear, clear);
+      }
+      return p;
+    }
+    /** 拿一個閒著的認字程式（都在忙就排隊） */
+    async function pdTake() {
+      for (;;) {
+        pd.workers = pd.workers.filter((w) => !w.dead);
+        if (!pd.workers.length) throw Object.assign(new Error('文字辨識程式停止了'), { setup: true });
+        const wk = pd.workers.find((w) => !w.busy);
+        if (wk) { Object.assign(wk, { busy: true, prog: 0 }); return wk; }
+        await orCancel(new Promise((r) => pd.queue.push(r)));
+      }
+    }
+    function pdRelease(wk) {
+      Object.assign(wk, { busy: false, page: null, prog: 0 });
+      const r = pd.queue.shift();
+      if (r) r();
+    }
+    /** 一段圖：找字＋認字（同一段圖換語言再認時，不用重新找字） */
+    async function pdRun(s, lang, P) {
+      const prev = P && P.step;
+      try {
+        await orCancel(pdReady(lang, P));
+      } catch (e) {
+        if (e && e.kind === 'cancel') throw e;
+        throw Object.assign(e instanceof Error ? e : new Error(String(e)), { setup: true });
+      }
+      if (P && prev && P.step === '準備文字辨識') step(P, prev);
+      const wk = await pdTake();
+      wk.page = P;
+      try {
+        const r = await orCancel(wk.call({ type: 'ocr', blob: s.blob, rec: lang, boxes: s.boxes || null, opts: {} }, (f) => { wk.prog = f; bump(); }));
+        s.boxes = r.boxes;
+        return mtPaddleGroups(r.lines, lang);
+      } finally { pdRelease(wk); }
+    }
+    /** PaddleOCR 不能用（網站擋住、下載不到）：改用 Tesseract；按「重試」時會再試一次 */
+    function pdFail(e) {
+      if (pd.failed) return;
+      pd.failed = String((e && e.message) || e || '');
+      console.warn('[MAOBOO] PaddleOCR 載入失敗，改用 Tesseract', e);
+      pd.workers.forEach((wk) => wk.die(new Error('停止')));
+      pd.workers = [];
+      tell('pd-failed', '新的文字辨識（PaddleOCR）在這個網站載入失敗，先改用舊的辨識方式，準確度會差一些。可以按狀態列的「重試」再試一次。', { title: '漫畫翻譯' });
+    }
+    function pdReset() {
+      pd.gen++;
+      mtPdLoading.clear(); // 卡住的下載不要再等，重新下載
+      pd.workers.forEach((wk) => wk.die(mtErr('cancel')));
+      Object.assign(pd, { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '' });
+      pd.queue.splice(0).forEach((r) => r());
+    }
 
     async function ocrRun(s, lang, plan, P) {
       s.ocr = s.ocr || {};
       if (s.ocr[lang]) return s.ocr[lang]; // 判斷語言時已經辨識過
+      // 先用 PaddleOCR；網站不允許、下載不到時才用 Tesseract
+      if (!pd.failed && s.blob) {
+        try {
+          const groups = await pdRun(s, lang, P);
+          s.ocr[lang] = groups;
+          bump();
+          return groups;
+        } catch (e) {
+          if (e && e.kind === 'cancel') throw e;
+          if (e && e.setup) pdFail(e); else console.warn('[MAOBOO] PaddleOCR 這一段失敗，改用 Tesseract', e);
+        }
+      }
       const scale = plan.W < 800 ? 1.5 : 1;
       if (!s.clean) {
         const bmp = await createImageBitmap(s.blob);
@@ -3785,9 +4501,16 @@ button, input, select, output { font: inherit; }
         const last = (store.get('mt.lang', {}) || {})[HOST];
         const order = [...new Set([last, 'eng', 'kor', 'jpn'].filter((l) => MT_LANG[l]))];
         for (const s of slices) {
-          for (const lang of order) {
+          for (let k = 0; k < order.length; k++) {
+            const lang = order[k];
             let groups = [];
             try { groups = await ocrRun(s, lang, plan, P); } catch (e) { if (lang === 'eng') throw e; continue; }
+            // 找到的字框大多是直的（多半是日文漫畫）：接下來先試日文
+            const bx = s.boxes || [];
+            if (k === 0 && bx.length >= 2 && bx.filter((b) => b.y1 - b.y0 >= (b.x1 - b.x0) * 1.5).length * 2 >= bx.length && order.indexOf('jpn') > 1) {
+              order.splice(order.indexOf('jpn'), 1);
+              order.splice(1, 0, 'jpn');
+            }
             const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
             if (score > bestScore) { best = lang; bestScore = score; }
             if (score >= 16) break; // 這個語言辨識得很順，就不用再試其他語言

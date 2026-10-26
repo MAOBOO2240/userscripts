@@ -24,13 +24,13 @@
 
 - **用法：** 在支援的網站把滑鼠移到漫畫圖片上，右上角會出現「翻譯｜整頁」。按「翻譯」只翻這張；按「整頁」或 Alt+T 會翻譯這一話的每張圖：畫面上的先翻，下面還沒捲到、網站還沒載入的圖也會先下載先翻好；翻頁式的閱讀器會先翻後面幾頁，換頁要重新載入的網站，下一頁會自動接著翻。再按一次 Alt+T 可以暫時看原文。手機上是角落的「譯」按鈕。
 - **翻譯方式（設定面板）：**
-  - **快速（預設）：** 瀏覽器自己認字，再用 Google 翻譯，畫面上很快就有譯文；有 Gemini 金鑰時，再把認出來的文字（不送圖片）交給 Gemini 依前後文修正認錯的字和不順的翻譯。很多張圖合成一次送，一整話只用幾次，很省次數；次數用完也照樣有 Google 的翻譯。
+  - **快速（預設）：** 瀏覽器自己認字（PaddleOCR，英文、日文直排、韓文都認得很準），再用 Google 翻譯，畫面上很快就有譯文；有 Gemini 金鑰時，再把認出來的文字（不送圖片）交給 Gemini 依前後文修正認錯的字和不順的翻譯。很多張圖合成一次送，一整話只用幾次，很省次數；次數用完也照樣有 Google 的翻譯。
   - **精準：** Gemini 直接看圖找字、翻譯，認字最準，但每張圖都會用到次數，免費額度可能翻不完一話。
 - **進度：** 整話翻譯時角落有一條狀態列和進度條，顯示翻到第幾張、正在做什麼（下載辨識資料、認字、Gemini 修正…）；正在翻的圖上也會標出進度。超過 30 秒沒有進度會顯示「好像卡住了」，按「重試」重新開始。狀態列會避開網站自己的按鈕，翻完會收起來，滑鼠移到那個角落附近會再出現（手機上按「譯」叫回來）。
 - **自動翻譯：** 設定面板裡可以改成「打開漫畫就自動翻譯整話」（預設關閉）。
 - **Gemini 金鑰（建議）：** 到 [Google AI Studio](https://aistudio.google.com/apikey) 免費申請，貼到設定面板的「Gemini 金鑰」，按「測試」。金鑰只存在你的瀏覽器裡。
 - **不會收費：** 每個 Gemini 模型每天有免費額度，用完會自動換下一個模型；全部用完就改用免費模式，隔天（台灣時間下午）自動換回 Gemini。只要沒有自己在 Google 開啟付費，就不會被收費。
-- **認字和翻譯：** 瀏覽器裡的文字辨識用 Tesseract.js（第一次要下載約 10 MB 的辨識資料）；翻譯用 Google 翻譯（跟 Chrome 右鍵翻譯同一套；連不上時改用 Chrome 離線翻譯）。
+- **認字和翻譯：** 瀏覽器裡的文字辨識用 PaddleOCR（PP-OCRv6 模型，在背景執行，不會讓網頁卡住）。第一次在一個網站使用時要下載辨識模型（英文約 10 MB；日文、韓文另外多 13～21 MB），之後存在那個網站的瀏覽器資料裡，不用再下載；載入失敗時會自動改用 Tesseract.js。翻譯用 Google 翻譯（跟 Chrome 右鍵翻譯同一套；連不上時改用 Chrome 離線翻譯）。
 - **支援的網站：** 預設有 kingofshojo.com、ezmanga.org、comix.to、telltome.net（G站、包子漫畫）、nhentai.net、Naver／Kakao 等韓國條漫網站，可以在設定面板或選單裡增減。
 - **跨網域權限：** 第一次在新的圖庫網域翻譯時，Tampermonkey 可能會問要不要允許連線，請選「永遠允許此網域」或「永遠允許所有網域」，不要選「允許一次」。
 - 翻過的圖會記住（最多 400 張），重看不會再花額度。
@@ -59,6 +59,11 @@
 - LINE Store 貼圖下載器
 
 ## 更新紀錄
+
+### 1.4.0
+- 漫畫翻譯的免費認字改用 PaddleOCR（PP-OCRv6）：英文、日文直排、韓文都認得準很多，Google 翻譯和 Gemini 修正的結果也跟著變好
+- 辨識模型第一次下載後存在瀏覽器裡，之後打開同一個網站不用再下載；下載時狀態列會顯示進度
+- 新的辨識方式在某個網站載入失敗時，會自動改用原本的 Tesseract，照樣可以翻譯
 
 ### 1.3.0
 - 漫畫翻譯預設改成「快速」：瀏覽器認字＋Google 翻譯馬上顯示，Gemini 只收文字幫忙修正（很多張合成一次，很省次數）
@@ -95,4 +100,4 @@
 ---
 
 GIF 編碼與色彩量化改寫自 [gifenc](https://github.com/mattdesl/gifenc)（MIT License © Matt DesLauriers）。
-免費模式的文字辨識使用 [Tesseract.js](https://github.com/naptha/tesseract.js)（Apache License 2.0），需要時才從 jsDelivr 載入。
+免費模式的文字辨識使用 [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) 的 PP-OCRv6／PP-OCRv5 模型（Apache License 2.0）和 [ONNX Runtime Web](https://github.com/microsoft/onnxruntime)（MIT License），載入失敗時改用 [Tesseract.js](https://github.com/naptha/tesseract.js)（Apache License 2.0）；都是需要時才從 jsDelivr 等公開來源下載。
