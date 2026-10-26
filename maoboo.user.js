@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.1
+// @version      1.5.2
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
 // @supportURL   https://github.com/MAOBOO2240/userscripts/issues
 // @updateURL    https://raw.githubusercontent.com/MAOBOO2240/userscripts/main/maoboo.user.js
 // @downloadURL  https://raw.githubusercontent.com/MAOBOO2240/userscripts/main/maoboo.user.js
-// @icon         https://pic.pngsucai.com/00/02/01/b0695d6af5dec84b.webp
+// @icon         data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHAAAABwBAMAAAA0zul4AAAAElBMVEUzMzP////Z2dlmZmYAAAAAAAASXfmKAAAABnRSTlP/////AP8NmbZAAAABXklEQVR42t2Y0Y3DIBBEn09pYFugBVpwC67SLaQFWqAFWrgPMAZDEukUnTLZLwyyxNOwO7DLyhFGBBwJns7l+OGP8f8/3lqaBMSGaDanzHhGxNXRJ231PYw2YbOvYTTCheualdfTqqpj1u+gOb4gTSjVGLOKETBWdhwQyzhWSrCGUlHHrNo6jKmUfX0VYlxWjFBcMIeHLjvPNd9QKuro8IWs5fME3NRD9Bhdx9Vz9quHklqMqSgY8FVHX5Z7TaOmjss68cdZtISOJJmP4wntT28Uz0crBCOn7+52bfXRYrRm56FmIkNu9nVH+d0RPnar73xbjTFTU5ExXHxw5NxUveMGCcf+gm58MSv64+tctO7mo/rusElv6lE/QLfmPKK0y/11F2RM1d9nlPYl3tFSPo9coTTParr0HN3Q6TkJdfMxYdVFNhL3urLVeVf6IHreMebekZX3SpljL50eIcZfgJVnT1QZFQ0AAAAASUVORK5CYII=
 // @match        *://*/*
 // @run-at       document-start
 // @sandbox      JavaScript
@@ -41,6 +41,7 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.2  圖示換成新的小浣熊：Tampermonkey 裡的腳本圖示和設定面板左上角都換了（圖示直接放在腳本裡，不用連外部網站）
  * 1.5.1  油猴選單只留「漫畫翻譯」（放在最上面）、「短影片自動下一部」和「開啟設定面板」，其他功能的開關和檢查更新都在設定面板裡；
  *        拿掉「滑過圖片看大圖」和「解除複製限制」；隱藏推薦內容預設改成完全隱藏，不再留「已收起」那一行
  * 1.5.0  新功能：簡體轉繁體（簡體網頁自動轉成繁體）、解除複製限制（選單按一下，這個網站就能選取、複製、按右鍵）、
@@ -184,7 +185,7 @@ button, input, select, output { font: inherit; }
   box-shadow: 0 24px 60px rgba(20, 33, 46, .3), 0 0 0 1px rgba(20, 33, 46, .08); animation: mb-in .18s ease-out; outline: none; }
 .mb-tail { flex: none; height: 6px; background: repeating-linear-gradient(90deg, var(--ink) 0 24px, #C9D1DA 24px 48px); }
 .mb-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 14px 12px 14px 18px; border-bottom: 1px solid var(--line); }
-.mb-mark { flex: none; width: 33px; height: 27px; }
+.mb-mark { flex: none; width: 32px; height: 32px; }
 .mb-head-text { min-width: 0; }
 .mb-title { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.3; }
 .mb-sub { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-2); }
@@ -7899,26 +7900,51 @@ button, input, select, output { font: inherit; }
   ];
 
   function raccoonMark() {
-    // 小浣熊像素標誌
+    // 小浣熊像素圖（28×28）：K 黑框、D 深灰、G 灰、L 淺灰、W 眼睛的亮點
     const rows = [
-      '.DD.....DD.',
-      '.DGGGGGGGD.',
-      '.GGGGGGGGG.',
-      'GLLGGGGGLLG',
-      'DDDDLLLDDDD',
-      'DEDDLLLDDED',
-      'GDDLLLLLDDG',
-      '.GLLLNLLLG.',
-      '..GLLLLLG..',
+      '.....KGGK......KGGK.........',
+      '....KGLLGK....KGLLGK........',
+      '....KGLLGGKKKKGGLLGK........',
+      '....KGGGGGGGGGGGGGGK........',
+      '...KLLLLLLGGLLLLLLGGK.......',
+      '...KLLDDDLLLLDDDLLLGGK......',
+      '..KLLDDWKDLLDWKDDLLLGKK.....',
+      '..KLDDDKKDDDDKKDDDLLLKGK....',
+      '.KLDDLLLLKKLLLLLLDDLLLKGK...',
+      '.KLDLKLLLLLLLLLKLLDLLLKGK...',
+      '.KLLLKLLLKKLLLLKLLLLLLKGGK..',
+      '..KLLLKKKLLKKKKLLLLLLKGGGK..',
+      '...KLLLLLLLLLLLLLLLLKGGGGGK.',
+      '...KKKLLLLLLLLLLLLKKGGGGGGK.',
+      '..KGGGKKLLLLLLLKKKGGGGKGGGK.',
+      '.KGGGGKLKKKKKKKLLKGGGGKGGGGK',
+      '.KGGGGKLLLLLLLLLLKGGGGKGGGGK',
+      '.KGGGGKLLLLLLLLLLKDDGGKGGGGK',
+      '.KGGDDKLLLLLLLLLLKDDDKGGGGGK',
+      '..KDDDKLLLLLLLLLLLKKKGGGGGGK',
+      '...KKKLLLLLLLLLLLLLLLGGGGGGK',
+      '...KGGGLLLLLLLLLLLLLGGGGGGGK',
+      '...KGGGGLLLLLLLLLLLGGGGGGGKD',
+      '....KGGGGLLLLLLLLLGGGGGGGGKD',
+      '.....KGGGGGGGGGGGGGGGGGGGKDD',
+      '......KKKKGGGKKKKKKGGGGGKDDD',
+      '.......KDDDDK.DDDDDKDDDDKDD.',
+      '........KKKK....DDDDKKKKDD..',
     ];
-    const colors = { D: '#14212E', G: '#8D98A5', L: '#E8ECF0', E: '#FFFFFF', N: '#14212E' };
-    const svg = h('svg:svg', { class: 'mb-mark', viewBox: '0 0 11 9', 'shape-rendering': 'crispEdges', 'aria-hidden': 'true' });
+    const colors = { K: '#000000', D: '#333333', G: '#666666', L: '#D9D9D9', W: '#FFFFFF' };
+    const svg = h('svg:svg', { class: 'mb-mark', viewBox: '0 0 28 28', 'shape-rendering': 'crispEdges', 'aria-hidden': 'true' });
+    // 每種顏色畫成一條 path：同一列連在一起的同色格子併成一段
+    const d = {};
     rows.forEach((row, y) => {
-      for (let x = 0; x < row.length; x++) {
-        const fill = colors[row[x]];
-        if (fill) svg.append(h('svg:rect', { x, y, width: 1, height: 1, fill }));
+      for (let x = 0; x < row.length;) {
+        const c = row[x];
+        let w = 1;
+        while (row[x + w] === c) w++;
+        if (colors[c]) d[c] = (d[c] || '') + `M${x} ${y}h${w}v1h-${w}z`;
+        x += w;
       }
     });
+    for (const c of Object.keys(d)) svg.append(h('svg:path', { d: d[c], fill: colors[c] }));
     return svg;
   }
 
