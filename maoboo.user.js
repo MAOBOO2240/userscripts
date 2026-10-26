@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.4
+// @version      1.5.5
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.5  新增「手機版漫畫翻譯」（manga-mobile.user.js）：整合包裡的漫畫翻譯單獨拿出來給手機用；手機上的介面：設定面板從下方滑上來、
+ *        開關和按鈕加大、輸入框 16px（iPhone 點了不會放大畫面），「譯」加大，狀態列多「設定」、寬度固定（按鈕不會跟著進度文字移動）；
+ *        沒有手機版排版的網站整頁縮小顯示時，介面放大回正常大小；整合包和手機版同時裝時只有一個在翻譯
  * 1.5.4  隱藏推薦內容：Facebook 一放進廣告、推薦貼文就馬上收起來（在畫面畫出來之前），不會再先閃一下才消失
  * 1.5.3  Facebook 的音量條會顯示記住的音量（之前音量條是 100%、實際聲音是 10%）；設定面板的音量可以直接打數字，
  *        也可以把滑鼠移到拉桿或數字上用滾輪調；預設音量：Threads、Instagram、Facebook 10%，X 1%，X 影片網址 5%
@@ -84,7 +87,19 @@
    * ==================================================================== */
 
   const VERSION = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version) || '0.0.0';
-  const RAW_URL = 'https://raw.githubusercontent.com/MAOBOO2240/userscripts/main/maoboo.user.js';
+  /**
+   * 'full'：整合包（這個檔案）；'manga'：手機版漫畫翻譯（只有漫畫翻譯）。
+   * 手機版是用 tools/build-manga.js 從這個檔案產生的，只換掉腳本資訊和這一行，其他程式碼完全一樣
+   */
+  const EDITION = 'full';
+  const APP = EDITION === 'manga'
+    ? { name: 'MAO BOO 漫畫翻譯', short: '漫畫翻譯', file: 'manga-mobile.user.js' }
+    : { name: 'MAO BOO 油猴整合包', short: '整合包', file: 'maoboo.user.js' };
+  const RAW_URL = `https://raw.githubusercontent.com/MAOBOO2240/userscripts/main/${APP.file}`;
+  /** 整合包和手機版都裝了的時候，網頁上記下是哪一個在翻譯漫畫（每次載入都不一樣，同一支腳本重複載入也分得出來） */
+  const MT_TOKEN = `${EDITION}-${Math.random().toString(36).slice(2, 8)}`;
+  /** 觸控裝置（手機、平板）：沒有「滑鼠移上去」這件事 */
+  const TOUCH = (() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })();
   const REPO_URL = 'https://github.com/MAOBOO2240/userscripts';
   // 需要碰到網頁本身的 JavaScript（history、visibilityState）時用 PAGE
   const PAGE = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
@@ -149,6 +164,25 @@
    * ==================================================================== */
 
   const FONT = '"Segoe UI", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", system-ui, sans-serif';
+
+  /** 手機（或很窄的視窗）：設定面板從下面滑上來、按鈕加大、輸入框的字 16px（iPhone 點了才不會把畫面放大）；p 加在每個選擇器前面 */
+  const NARROW_CSS = (p) => `
+${p}.mb-toasts { bottom: 78px; }
+${p}.mb-backdrop { align-items: flex-end; padding: 0; }
+${p}.mb-panel { width: 100%; max-height: 92vh; max-height: 92dvh; border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+${p}.mb-head { padding: 12px 6px 12px 16px; }
+${p}.mb-close { width: 44px; height: 44px; font-size: 26px; }
+${p}.mb-group { padding: 14px 16px 4px; }
+${p}.mb-row { padding: 14px 16px; }
+${p}.mb-field { max-width: 100%; font-size: 14px; }
+${p}.mb-field > span:first-child { flex: none; white-space: nowrap; }
+${p}.mb-field input[type=number], ${p}.mb-field input[type=text], ${p}.mb-field select { height: 40px; font-size: 16px; }
+${p}.mb-field select { min-width: 0; max-width: 100%; }
+${p}.mb-field input[type=range] { width: auto; flex: 1; min-width: 0; }
+${p}.mb-field-range > span:first-child { min-width: 5em; }
+${p}.mb-mini, ${p}.mb-btn { height: 40px; font-size: 14px; }
+${p}.mb-foot { padding: 10px 16px; }
+`;
 
   const UI_CSS = `
 :host {
@@ -313,6 +347,33 @@ button, input, select, output { font: inherit; }
   box-shadow: 0 6px 18px rgba(0, 0, 0, .3); }
 @media (max-width: 640px) { .mb-toasts { bottom: 78px; } }
 
+/* ---------- 手機：手指好按、字不會太小 ---------- */
+@media (hover: none) and (pointer: coarse) {
+  /* 狀態列固定寬度：進度文字變長變短時，右邊的按鈕不會跟著移動，不會按錯 */
+  .mt-chip { width: min(calc(100% - 32px), 520px); height: 40px; padding: 0 4px 0 14px; border-radius: 20px; font-size: 14px; }
+  .mt-chip-text { flex: 1; max-width: none; }
+  .mt-chip button { height: 32px; padding: 0 12px; border-radius: 16px; }
+  .mt-chip button.mt-x { width: 32px; font-size: 18px; }
+  .mt-bar { bottom: 4px; }
+  .mt-fab { width: 52px; height: 52px; font-size: 20px; }
+  .mb-toast { font-size: 14px; }
+  .mb-toast-actions button { height: 36px; padding: 0 14px; font-size: 14px; }
+  .mb-toast-x { width: 36px; height: 36px; }
+  .mb-switch { width: 52px; height: 30px; }
+  .mb-knob { width: 24px; height: 24px; }
+  .mb-switch input:checked + .mb-knob { transform: translateX(22px); }
+}
+@media (max-width: 600px) {${NARROW_CSS('  ')}}
+${NARROW_CSS(':host([data-narrow]) ')}
+/* 網頁沒有手機版排版、整頁縮小顯示時（--mb-z 是縮小的倍數）：按鈕、狀態列、通知、設定面板放大回正常大小；
+   放大時 vw、vh 也會跟著放大，改用百分比 */
+:host([data-z]) .mt-fab, :host([data-z]) .mt-chip, :host([data-z]) .mb-toasts, :host([data-z]) .mb-backdrop { zoom: var(--mb-z, 1); }
+:host([data-z]) .mt-chip, :host([data-z]) .mb-toasts { max-width: calc(100% - 32px); }
+:host([data-z]) .mb-backdrop { padding: 16px; }
+:host([data-z]) .mb-panel { max-height: 100%; }
+:host([data-z][data-narrow]) .mb-backdrop { padding: 0; }
+:host([data-z][data-narrow]) .mb-panel { max-height: 92%; }
+
 @keyframes mb-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes mb-fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
@@ -340,9 +401,38 @@ button, input, select, output { font: inherit; }
       adoptCss(root, UI_CSS);
       uiRoot = { host, root };
       ourHosts.add(host);
+      const vv = window.visualViewport;
+      if (TOUCH && vv) {
+        let raf = 0;
+        vv.addEventListener('resize', () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; syncUiZoom(); }); });
+      }
+      syncUiZoom();
     }
     parent.appendChild(uiRoot.host);
     return uiRoot;
+  }
+
+  /**
+   * 手機上，網頁沒有手機版排版時整頁會縮小顯示（例如電腦版網頁縮成 0.4 倍），我們的按鈕、字也跟著變很小：
+   * 這時把介面放大同樣的倍數，看起來和一般網頁一樣大。使用者自己用兩指放大縮小時也跟著調整
+   */
+  let uiZ = 1;
+  let uiNarrow = false;
+  function syncUiZoom() {
+    if (!uiRoot || !TOUCH) return;
+    const vv = window.visualViewport;
+    const s = vv ? vv.scale : 1;
+    const z = s > 0 && s < 0.9 ? Math.round(Math.min(3, 1 / s) * 100) / 100 : 1;
+    const narrow = z > 1 && innerWidth / z <= 600;
+    if (z === uiZ && narrow === uiNarrow) return; // 捲動時網址列伸縮也會觸發，沒變就不動
+    // 正在面板裡打字時先不要變：iPhone 點輸入框時可能會自己放大畫面
+    const a = uiRoot.root.activeElement;
+    if (z !== uiZ && a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;
+    uiZ = z;
+    uiNarrow = narrow;
+    const host = uiRoot.host;
+    if (z > 1) { host.setAttribute('data-z', ''); host.style.setProperty('--mb-z', String(z)); } else { host.removeAttribute('data-z'); host.style.removeProperty('--mb-z'); }
+    if (narrow) host.setAttribute('data-narrow', ''); else host.removeAttribute('data-narrow');
   }
 
   function inOurUi(e) {
@@ -2941,7 +3031,7 @@ button, input, select, output { font: inherit; }
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 .t > div { display: block; }
 .t.v { writing-mode: vertical-rl; text-orientation: mixed; }
-.mt-badge { position: absolute; left: 0; top: 0; display: flex; flex-direction: column; gap: 5px; padding: 6px 10px 7px;
+.mt-badge { position: absolute; left: 0; top: 0; transform-origin: 0 0; display: flex; flex-direction: column; gap: 5px; padding: 6px 10px 7px;
   border-radius: 10px; background: rgba(15, 22, 30, .84); color: #FFFFFF; font-family: ${MT_FONT}; font-size: 12px; font-weight: 600;
   line-height: 1.2; white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); pointer-events: none; }
 .mt-badge[hidden] { display: none; }
@@ -3030,10 +3120,11 @@ button, input, select, output { font: inherit; }
       layer.style.width = ncw + 'px';
       layer.style.height = nch + 'px';
       if (!badge.hidden) {
-        // 進度標籤放在圖片「看得到的部分」的左上角，長條圖捲到中間也看得到
+        // 進度標籤放在圖片「看得到的部分」的左上角，長條圖捲到中間也看得到；手機上網頁整頁縮小顯示時跟著介面放大
+        const bz = uiZ;
         const seen = Math.max(0, -content.top) / (sy || 1);
-        const y = (content.top - box.top) / (sy || 1) + Math.max(8, Math.min(seen + 8, nch - 48));
-        badge.style.transform = `translate(${Math.round((content.left - box.left) / k + 8)}px, ${Math.round(y)}px)`;
+        const y = (content.top - box.top) / (sy || 1) + Math.max(8 * bz, Math.min(seen + 8 * bz, nch - 48 * bz));
+        badge.style.transform = `translate(${Math.round((content.left - box.left) / k + 8 * bz)}px, ${Math.round(y)}px)${bz > 1 ? ` scale(${bz})` : ''}`;
       }
       cw = ncw;
       ch = nch;
@@ -4699,7 +4790,7 @@ button, input, select, output { font: inherit; }
     const key = () => String(cfg().apiKey || '').trim();
     const kh = () => mtKeyHash(key());
     const siteOn = () => !!mtSiteMatch(cfg().sites);
-    const isTouch = (() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })();
+    const isTouch = TOUCH;
     let stopped = false;
     const offs = [];
     const listen = (t, type, fn, opts) => { t.addEventListener(type, fn, opts); offs.push(() => t.removeEventListener(type, fn, opts)); };
@@ -6667,19 +6758,22 @@ button, input, select, output { font: inherit; }
     function placeCorner(el, force) {
       if (!el || (!force && Date.now() - placeAt < 1500)) return;
       placeAt = Date.now();
-      const w = el.offsetWidth || 260;
-      const hh = el.offsetHeight || 40;
+      // 介面放大時（網頁整頁縮小顯示），大小和離邊緣的距離都跟著放大
+      const z = uiZ;
+      const w = (el.offsetWidth || 260) * z;
+      const hh = (el.offsetHeight || 40) * z;
+      const m = 16 * z;
       const corners = [['left', 'bottom'], ['right', 'bottom'], ['right', 'top'], ['left', 'top']];
       let pick = corners[0];
       for (const c of corners) {
-        const x = c[0] === 'left' ? 16 : innerWidth - 16 - w;
-        const y = c[1] === 'bottom' ? innerHeight - 16 - hh : 16;
+        const x = c[0] === 'left' ? m : innerWidth - m - w;
+        const y = c[1] === 'bottom' ? innerHeight - m - hh : m;
         if (!siteUiAt(x, y, w, hh)) { pick = c; break; }
       }
       el.style.left = pick[0] === 'left' ? '16px' : 'auto';
       el.style.right = pick[0] === 'right' ? '16px' : 'auto';
-      el.style.top = pick[1] === 'top' ? '16px' : 'auto';
-      el.style.bottom = pick[1] === 'bottom' ? '16px' : 'auto';
+      el.style.top = pick[1] === 'top' ? (TOUCH ? 'calc(16px + env(safe-area-inset-top, 0px))' : '16px') : 'auto';
+      el.style.bottom = pick[1] === 'bottom' ? (TOUCH ? 'calc(16px + env(safe-area-inset-bottom, 0px))' : '16px') : 'auto';
     }
     function counts() {
       const c = { done: 0, busy: 0, total: 0, err: 0, frac: 0, free: false, gem: false, fixWait: 0, fixBusy: 0, fixDone: 0, seam: seamRun };
@@ -6743,7 +6837,8 @@ button, input, select, output { font: inherit; }
         const retry = h('button', { type: 'button', class: 'mt-retry', text: '重試', hidden: true, title: '重新開始卡住或失敗的圖', onclick: () => retryAll() });
         const toggle = h('button', { type: 'button', onclick: () => pageShow(pg.hidden) });
         const close = h('button', { type: 'button', class: 'mt-x', 'aria-label': '關閉漫畫翻譯', title: '關閉漫畫翻譯，恢復原文', text: '×', onclick: () => pageStop() });
-        chipEl = h('div', { class: 'mt-chip', role: 'status' }, bar, textEl, retry, toggle, close);
+        const settings = isTouch ? h('button', { type: 'button', class: 'mt-set', text: '設定', onclick: () => openPanel() }) : null;
+        chipEl = h('div', { class: 'mt-chip', role: 'status' }, bar, textEl, retry, toggle, settings, close);
         ['pointerdown', 'mousedown', 'click'].forEach((t) => chipEl.addEventListener(t, stopEv));
         r.root.append(chipEl);
         chipEl.v = { textEl, toggle, retry, fill };
@@ -6764,7 +6859,8 @@ button, input, select, output { font: inherit; }
         const how = c.gem && !c.free ? 'Gemini' : c.fixDone ? 'Google 翻譯＋Gemini 修正' : c.gem ? 'Gemini＋Google 翻譯' : 'Google 翻譯';
         text = `已翻譯 ${c.done} 張 · ${how}`;
       }
-      chipEl.v.textEl.textContent = `漫畫翻譯　${text}`;
+      // 手機畫面窄：不寫「漫畫翻譯」，留位置給進度
+      chipEl.v.textEl.textContent = isTouch ? text : `漫畫翻譯　${text}`;
       chipEl.title = `漫畫翻譯　${text}`;
       chipEl.v.toggle.textContent = pg.hidden ? '顯示譯文' : '顯示原文';
       chipEl.v.retry.hidden = !(stuck || (c.err && !c.busy));
@@ -6925,7 +7021,7 @@ button, input, select, output { font: inherit; }
       if (hit && String(hit).trim() === '*') return;
       if (hit) {
         ctx.save('sites', list.filter((x) => x !== hit));
-        toast('這個網站不再顯示翻譯按鈕；按 Alt+T 還是可以翻譯整話。');
+        toast(isTouch ? '這個網站不再顯示「譯」；在 Tampermonkey 選單按「翻譯這一話的漫畫」還是可以翻譯。' : '這個網站不再顯示翻譯按鈕；按 Alt+T 還是可以翻譯整話。');
       } else {
         ctx.save('sites', list.concat([HOST.replace(/^www\./, '')]));
         toast(`已在 ${HOST} 顯示翻譯按鈕。`);
@@ -6952,7 +7048,7 @@ button, input, select, output { font: inherit; }
       menuItems() {
         const items = [{
           key: 'mt.page',
-          label: '　' + (!pg.on ? '翻譯這一話的漫畫（Alt+T）' : pg.hidden ? '顯示漫畫譯文（Alt+T）' : '暫時顯示漫畫原文（Alt+T）'),
+          label: '　' + (!pg.on ? '翻譯這一話的漫畫' : pg.hidden ? '顯示漫畫譯文' : '暫時顯示漫畫原文') + (isTouch ? '' : '（Alt+T）'),
           run: () => { warmLocal(); pageToggle(); },
           close: true,
         }];
@@ -7651,7 +7747,9 @@ button, input, select, output { font: inherit; }
       group: 'translate',
       name: '漫畫翻譯',
       site: '漫畫網站',
-      desc: '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕；任何網站都可以按 Alt+T 翻譯整頁。',
+      desc: TOUCH
+        ? '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，點角落的「譯」就會翻譯這一話；其他網站可以在 Tampermonkey 選單按「翻譯這一話的漫畫」，或「在這個網站顯示翻譯按鈕」。'
+        : '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕；任何網站都可以按 Alt+T 翻譯整頁。',
       defaults: { apiKey: '', mode: 'fast', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
       fields: [
         { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k) },
@@ -7668,7 +7766,18 @@ button, input, select, output { font: inherit; }
       phase: 'dom',
       match: () => /^https?:$/.test(location.protocol),
       start(ctx) {
-        return createMangaTranslator(ctx);
+        // 同一台裝置同時裝了整合包和手機版漫畫翻譯：只讓先啟動的那一個翻譯（不會有兩個「譯」、翻兩次）
+        const root = document.documentElement;
+        const other = root.getAttribute('data-maoboo-mt');
+        if (other && other !== MT_TOKEN) return undefined;
+        root.setAttribute('data-maoboo-mt', MT_TOKEN);
+        const mt = createMangaTranslator(ctx);
+        const stop = mt.stop;
+        mt.stop = () => {
+          stop();
+          if (root.getAttribute('data-maoboo-mt') === MT_TOKEN) root.removeAttribute('data-maoboo-mt');
+        };
+        return mt;
       },
     },
 
@@ -7856,7 +7965,7 @@ button, input, select, output { font: inherit; }
         PAGE.location.replace(url.href); // 用 replace 不在歷史紀錄留下手機版網址
       },
     },
-  ];
+  ].filter((m) => EDITION !== 'manga' || m.id === 'mangaTranslate');
 
   /* ======================================================================
    * 模組管理
@@ -8213,12 +8322,12 @@ button, input, select, output { font: inherit; }
     const close = () => { backdrop.remove(); panel = null; };
     const closeBtn = h('button', { type: 'button', class: 'mb-close', 'aria-label': '關閉設定', text: '×', onclick: () => close() });
     const backdrop = h('div', { class: 'mb-backdrop', onmousedown: (e) => { if (e.target === backdrop) close(); } },
-      h('section', { class: 'mb-panel', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'MAO BOO 油猴整合包設定', tabindex: '-1' },
+      h('section', { class: 'mb-panel', role: 'dialog', 'aria-modal': 'true', 'aria-label': `${APP.name}設定`, tabindex: '-1' },
         h('div', { class: 'mb-tail', 'aria-hidden': 'true' }),
         h('header', { class: 'mb-head' },
           raccoonMark(),
           h('div', { class: 'mb-head-text' },
-            h('h2', { class: 'mb-title', text: 'MAO BOO 油猴整合包' }),
+            h('h2', { class: 'mb-title', text: APP.name }),
             h('p', { class: 'mb-sub', text: '設定自動儲存，所有分頁同步' })),
           h('span', { class: 'mb-ver', text: 'v' + VERSION }),
           closeBtn),
@@ -8272,11 +8381,14 @@ button, input, select, output { font: inherit; }
         if (!m) { if (manual) toast('檢查更新失敗：讀不到版本號，請稍後再試。'); return; }
         const latest = m[1];
         if (cmpVer(latest, VERSION) <= 0) { if (manual) toast(`已是最新版本 ${VERSION}`); return; }
+        const note = readNote(text, latest);
+        // 手機版只有漫畫翻譯：整合包其他功能的改版不跳通知（Tampermonkey 自己還是會定期更新；按「檢查更新」也看得到）
+        if (!manual && EDITION === 'manga' && !/漫畫|手機/.test(note)) return;
         const snooze = store.get('upd.snooze', null);
         if (!manual && snooze && snooze.v === latest && snooze.until > now) return;
         const later = () => store.set('upd.snooze', { v: latest, until: Date.now() + 6 * 3600 * 1000 });
-        toast(readNote(text, latest) || '有新功能或修正。', {
-          title: `整合包有新版本 ${latest}（目前 ${VERSION}）`,
+        toast(note || '有新功能或修正。', {
+          title: `${APP.short}有新版本 ${latest}（目前 ${VERSION}）`,
           sticky: true,
           actions: [{ label: '更新', primary: true, run: openUpdate }, { label: '稍後', run: later }],
           onClose: later,
