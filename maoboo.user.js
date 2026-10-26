@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.4.1
+// @version      1.4.2
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,7 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.4.2  X：按住 S 點圖片時不會再跳出分享選單（只擋掉 X 自己的 S 快捷鍵，打字和其他程式不受影響）
  * 1.4.1  設定面板：「X 音量記憶」和「X 直連影片音量」合成一個「X 影片音量」，兩條音量在同一張卡片裡（之前設的音量會保留）
  * 1.4.0  漫畫翻譯的免費認字改用 PaddleOCR（PP-OCRv6），英文、日文直排、韓文都認得準很多；
  *        辨識模型第一次下載後存在瀏覽器裡，之後不用再下載；載入失敗時自動改用原本的 Tesseract
@@ -5863,7 +5864,7 @@ button, input, select, output { font: inherit; }
       group: 'download',
       name: 'X 影片下載按鈕',
       site: 'X',
-      desc: '在有影片或圖片的推文旁加上下載鈕，點了會用 cobalt.tools 開啟下載頁。',
+      desc: '在有影片或圖片的推文旁加上下載鈕，點了會用 cobalt.tools 開啟下載頁。按住 S 點圖片時，也不會再跳出 X 的分享選單。',
       frames: 'all',
       phase: 'idle',
       match: () => HOST === 'x.com' || HOST === 'twitter.com',
@@ -5929,6 +5930,13 @@ button, input, select, output { font: inherit; }
             targetWrapper.parentNode.insertBefore(makeButton(targetBtn, targetWrapper, tweetUrl), targetWrapper);
           }
         }
+        // X 把 S 當成「分享」的快捷鍵：按住 S 點圖片（例如用別的工具存圖）時會跳出分享選單。
+        // 只標記成「已處理」讓 X 不理它，其他程式照樣收得到這個按鍵；打字、Ctrl＋S 等組合鍵不受影響
+        const noShareKey = (e) => {
+          if ((e.key !== 's' && e.key !== 'S') || e.ctrlKey || e.metaKey || e.altKey || mtTyping(e)) return;
+          e.preventDefault();
+        };
+        PAGE.addEventListener('keydown', noShareKey, true);
         // 頁面變動很頻繁，合併成最多每 0.2 秒處理一次
         let timer = 0;
         let lastRun = 0;
@@ -5948,6 +5956,7 @@ button, input, select, output { font: inherit; }
           mo.disconnect();
           clearTimeout(timer);
           extra.forEach(clearTimeout);
+          PAGE.removeEventListener('keydown', noShareKey, true);
           document.querySelectorAll('.mao-boo-dl-container').forEach((el) => el.remove());
         };
       },
