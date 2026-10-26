@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.2
+// @version      1.5.3
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.3  Facebook 的音量條會顯示記住的音量（之前音量條是 100%、實際聲音是 10%）；設定面板的音量可以直接打數字，
+ *        也可以把滑鼠移到拉桿或數字上用滾輪調；預設音量：Threads、Instagram、Facebook 10%，X 1%，X 影片網址 5%
  * 1.5.2  圖示換成新的小浣熊：Tampermonkey 裡的腳本圖示和設定面板左上角都換了（圖示直接放在腳本裡，不用連外部網站）
  * 1.5.1  油猴選單只留「漫畫翻譯」（放在最上面）、「短影片自動下一部」和「開啟設定面板」，其他功能的開關和檢查更新都在設定面板裡；
  *        拿掉「滑過圖片看大圖」和「解除複製限制」；隱藏推薦內容預設改成完全隱藏，不再留「已收起」那一行
@@ -230,7 +232,8 @@ button, input, select, output { font: inherit; }
 .mb-field input[type=number] { width: 76px; font-variant-numeric: tabular-nums; }
 .mb-field input[type=text] { flex: 1; min-width: 0; }
 .mb-field input[type=range] { width: 168px; margin: 0; accent-color: var(--accent); }
-.mb-field output { min-width: 40px; color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+.mb-field input.mb-pct { width: 60px; padding: 0 4px 0 8px; font-weight: 650; text-align: right; }
+.mb-pct-unit { margin-left: -4px; color: var(--ink); font-weight: 650; }
 .mb-field input:focus-visible, .mb-field select:focus-visible, .mb-btn:focus-visible, .mb-close:focus-visible,
 .mb-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mb-hint { margin: 6px 0 0; font-size: 12px; color: var(--ink-2); }
@@ -720,7 +723,7 @@ button, input, select, output { font: inherit; }
       get: () => vol,
       set,
       onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); },
-      syncRemote(v) { if (!stopped) { vol = clamp01(v); emit(); } },
+      syncRemote(v) { if (!stopped) { vol = clamp01(v); applyAll(); emit(); } }, // 在別的分頁改的音量：這一頁的影片也馬上換
       stop() {
         if (stopped) return;
         stopped = true;
@@ -767,6 +770,58 @@ button, input, select, output { font: inherit; }
     }
     return null;
   }
+  /**
+   * Facebook 的網頁元素上沒有 React 的資料，從 React 的根節點把整棵樹走一遍（1～2 萬個節點，幾毫秒）：
+   * 找出每支影片的播放器控制器，和 Facebook 自己記的音量 { volume, setVolume }——音量條顯示的是它，
+   * 換片、取消靜音時也會套用它，所以要一起改，音量條才會跟實際的音量一樣。結果留 1 秒，不會一直重找
+   */
+  let fbPlayers = { t: -1e9, ctrls: new Map(), vols: [], done: new Map() };
+  function scanFbPlayers(force) {
+    if (!force && performance.now() - fbPlayers.t < 1000) return fbPlayers;
+    const ctrls = new Map();
+    const vols = new Set();
+    for (const el of document.body ? document.body.children : []) {
+      const k = Object.keys(el).find((x) => x.startsWith('__reactContainer$'));
+      let f = k ? el[k] : null;
+      if (f && f.stateNode && f.stateNode.current) f = f.stateNode.current;
+      const stack = f ? [f] : [];
+      for (let n = 0; stack.length && n < 300000; n++) {
+        const x = stack.pop();
+        let ctrl = null;
+        let vol = null;
+        for (let d = x.dependencies && x.dependencies.firstContext; d; d = d.next) {
+          const val = d.memoizedValue;
+          if (!val || typeof val !== 'object') continue;
+          if (isPlayerCtrl(val)) {
+            ctrl = val;
+            if (typeof val.internal_getVideoElement === 'function') {
+              try { const v = val.internal_getVideoElement(); if (v) ctrls.set(v, val); } catch (_) { /* 換片中 */ }
+            }
+          } else if (typeof val.setVolume === 'function' && typeof val.volume === 'number') vol = val;
+        }
+        // 只動播放器的音量條用的那一份（跟播放器控制器一起用的），不碰網站其他的音量（例如通話鈴聲）
+        if (ctrl && vol) vols.add(vol);
+        if (x.sibling) stack.push(x.sibling);
+        if (x.child) stack.push(x.child);
+      }
+    }
+    fbPlayers = { t: performance.now(), ctrls, vols: [...vols], done: new Map() };
+    return fbPlayers;
+  }
+  function syncFbPlayer(video, vol) {
+    const off = (st) => !st || typeof st.volume !== 'number' || Math.abs(st.volume - vol) > 0.004;
+    let s = scanFbPlayers();
+    let c = s.ctrls.get(video);
+    // 播放器的音量跟記住的不一樣（網站自己改回去了），或還沒找到 Facebook 的音量資料：馬上重新找
+    if ((c ? off(c.getCurrentState()) : !s.vols.length) && performance.now() - s.t > 50) { s = scanFbPlayers(true); c = s.ctrls.get(video); }
+    for (const x of s.vols) {
+      // 同一次找到的資料還沒更新（網站重畫之前）：同一個值不重複設
+      if (Math.abs(x.volume - vol) <= 0.004 || s.done.get(x.setVolume) === vol) continue;
+      s.done.set(x.setVolume, vol);
+      x.setVolume(vol); // 不會改變靜音狀態
+    }
+    if (c && off(c.getCurrentState())) c.setVolume(vol);
+  }
   function syncMetaPlayer(video, vol) {
     let hit = metaCtrlCache.get(video);
     if (!hit || (!hit.c && performance.now() - hit.t > 2000)) {
@@ -777,6 +832,12 @@ button, input, select, output { font: inherit; }
     if (!c) return;
     const st = c.getCurrentState();
     if (!st || typeof st.volume !== 'number' || Math.abs(st.volume - vol) > 0.004) c.setVolume(vol); // 不會改變靜音狀態
+  }
+
+  /** 滾輪調音量的下一格：10% 以下一次 1%，以上一次 5%（對齊 5 的倍數） */
+  function volStep(cur, up) {
+    const next = up ? (cur < 10 ? cur + 1 : Math.floor(cur / 5) * 5 + 5) : (cur <= 10 ? cur - 1 : Math.ceil(cur / 5) * 5 - 5);
+    return Math.max(0, Math.min(100, next));
   }
 
   /** 滑鼠移到影片上時，在左下角顯示音量條（可拖、可用滾輪微調） */
@@ -901,12 +962,7 @@ button, input, select, output { font: inherit; }
     box.addEventListener('wheel', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const cur = Math.round(keeper.get() * 100);
-      const up = (e.deltaY || e.deltaX) < 0;
-      let next;
-      if (up) next = cur < 10 ? cur + 1 : Math.floor(cur / 5) * 5 + 5;
-      else next = cur <= 10 ? cur - 1 : Math.ceil(cur / 5) * 5 - 5;
-      keeper.set(Math.max(0, Math.min(100, next)) / 100);
+      keeper.set(volStep(Math.round(keeper.get() * 100), (e.deltaY || e.deltaX) < 0) / 100);
     }, { passive: false });
 
     PAGE.addEventListener('pointermove', onMove, { capture: true, passive: true });
@@ -7178,8 +7234,8 @@ button, input, select, output { font: inherit; }
       fields: [
         { key: 'threads', label: 'Threads', type: 'memory', memKey: 'mem.threadsVolume', def: 0.1 },
         { key: 'x', label: 'X', type: 'memory', memKey: 'mem.xVolume', def: 0.01 },
-        { key: 'ig', label: 'Instagram', type: 'memory', memKey: 'mem.igVolume', def: 0.2 },
-        { key: 'fb', label: 'Facebook', type: 'memory', memKey: 'mem.fbVolume', def: 0.2 },
+        { key: 'ig', label: 'Instagram', type: 'memory', memKey: 'mem.igVolume', def: 0.1 },
+        { key: 'fb', label: 'Facebook', type: 'memory', memKey: 'mem.fbVolume', def: 0.1 },
         { key: 'direct', label: 'X 影片網址', type: 'percent' },
         { key: 'bar', label: 'Threads 影片上的音量條', type: 'select', options: [['hide', '不顯示'], ['show', '顯示']] },
       ],
@@ -7214,18 +7270,11 @@ button, input, select, output { font: inherit; }
           return () => keeper.stop();
         }
         if (/instagram\.com$/.test(HOST)) {
-          // 第一次用：沿用 Instagram 自己記的音量
-          if (store.get('mem.igVolume', null) === null) {
-            try {
-              const own = JSON.parse(localStorage.getItem('ig_volume_settings') || 'null');
-              if (own && Number.isFinite(Number(own.volume)) && Number(own.volume) > 0) store.set('mem.igVolume', clamp01(Number(own.volume)));
-            } catch (_) { /* 讀不到就用預設 */ }
-          }
-          const keeper = startVolumeKeeper('mem.igVolume', 0.2, syncMetaPlayer);
+          const keeper = startVolumeKeeper('mem.igVolume', 0.1, syncMetaPlayer);
           return () => keeper.stop();
         }
         if (/facebook\.com$/.test(HOST)) {
-          const keeper = startVolumeKeeper('mem.fbVolume', 0.2, syncMetaPlayer);
+          const keeper = startVolumeKeeper('mem.fbVolume', 0.1, syncFbPlayer);
           return () => keeper.stop();
         }
         // Threads：自己的音量條要不要出現由設定決定，切換時立即生效
@@ -8042,25 +8091,47 @@ button, input, select, output { font: inherit; }
         refresh: () => { if (!input.matches(':focus')) show(); },
       };
     }
-    // 音量：'percent' 存在設定裡，'memory' 是記住的音量
+    // 音量：'percent' 存在設定裡，'memory' 是記住的音量。數字可以直接改；滑鼠在拉桿或數字上滾動也可以調
     const read = () => (f.type === 'memory' ? Math.round(clamp01(store.get(f.memKey, f.def)) * 100) : Number(cfgVal()) || 0);
     const range = h('input', { type: 'range', min: 0, max: 100, step: 1, 'aria-label': `${m.name}：${f.label}` });
-    const out = h('output', {});
+    const num = h('input', { type: 'number', class: 'mb-pct', min: 0, max: 100, step: 1, inputmode: 'numeric', 'aria-label': `${m.name}：${f.label}（%）` });
     let holding = false;
-    const show = (val) => { range.value = val; out.textContent = val + '%'; };
+    const show = (val) => { range.value = val; if (!num.matches(':focus')) num.value = val; };
     const write = (val, now) => {
       if (f.type === 'memory') {
         const k = keepers.get(f.memKey);
         if (k) k.set(val / 100, { now }); else store.set(f.memKey, val / 100);
       } else if (now) saveCfg(m, f.key, val);
     };
+    const setTo = (val) => {
+      val = Math.min(100, Math.max(0, Math.round(val)));
+      range.value = val;
+      num.value = val;
+      write(val, true);
+    };
     show(read());
     range.addEventListener('pointerdown', () => { holding = true; });
     range.addEventListener('pointerup', () => { holding = false; });
-    range.addEventListener('input', () => { const val = Number(range.value); out.textContent = val + '%'; write(val, false); });
+    range.addEventListener('input', () => { const val = Number(range.value); num.value = val; write(val, false); });
     range.addEventListener('change', () => write(Number(range.value), true));
+    const commit = () => { const val = Number(num.value); setTo(num.value !== '' && Number.isFinite(val) ? val : read()); };
+    num.addEventListener('change', commit);
+    num.addEventListener('keydown', (e) => { if (e.key === 'Enter') { commit(); num.blur(); } });
+    // 滾輪：往上大聲、往下小聲（10% 以下一次 1%，以上一次 5%）；觸控板的小幅捲動先累積，不會一下跳很多
+    let acc = 0;
+    const onWheel = (e) => {
+      if (!e.deltaY) return;
+      e.preventDefault();
+      acc += e.deltaMode ? e.deltaY * 50 : e.deltaY;
+      if (Math.abs(acc) < 50) return;
+      const up = acc < 0;
+      acc = 0;
+      setTo(volStep(Number(range.value), up));
+    };
+    range.addEventListener('wheel', onWheel, { passive: false });
+    num.addEventListener('wheel', onWheel, { passive: false });
     return {
-      el: h('label', { class: 'mb-field mb-field-range' }, h('span', { text: f.label }), range, out),
+      el: h('label', { class: 'mb-field mb-field-range' }, h('span', { text: f.label }), range, num, h('span', { class: 'mb-pct-unit', text: '%' })),
       refresh: () => { if (!holding) show(read()); },
     };
   }
