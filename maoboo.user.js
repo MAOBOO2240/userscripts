@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.4.3
+// @version      1.4.4
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.4.4  漫畫翻譯：狀聲詞「不翻」判斷加強：DUN、TILT、NOD 這類效果字、動作字（NODS、GRABBED、THUMP THUMP 也算）不翻也不蓋白底，
+ *        白底上的大狀聲詞被當成對話框時也會跳過；一行字剛好被切在兩張圖的接縫上時，把接縫附近拼起來重新認字，
+ *        整句翻成一段、跨兩張圖畫成一個框（不會再露出半行原文、翻出怪字）；外面有一圈光線的對話框也認得出來，白底不會超出框外
  * 1.4.3  漫畫翻譯：會找出對話框，同一個框裡的字合成一段翻、用同一個字級，白底照對話框的形狀蓋滿，原文不會漏出來；
  *        又高又窄的對話框改成直排（由上到下）；譯文的字不會比原文大太多；淺色的框用原本的底色；
  *        長條漫畫被網站切成好幾張圖時，剛好被切在兩張圖中間的一句話會接起來翻（譯文放一邊、另一邊只蓋白底）
@@ -1933,7 +1936,8 @@ button, input, select, output { font: inherit; }
       'For every line, work out what the original text most likely says from the surrounding lines and the story, then translate it into natural, fluent Traditional Chinese as used in Taiwan (繁體中文，台灣用語) that fits the speaker and the tone.',
       'Each line is one text block, usually a whole speech bubble. Translate every line on its own: never move words from one line to another, and never leave a line empty just because its sentence continues in another line.',
       'Use full-width punctuation and Taiwanese wording. Keep names and terms consistent with the recent translations. Write Traditional Chinese characters only, never Simplified Chinese.',
-      sfx ? 'Translate sound effects too, as natural Chinese onomatopoeia.' : 'Return an empty zh for lines that are only a sound effect (like BAM, THUD, ドン, 쾅).',
+      sfx ? 'Translate sound effects too, as natural Chinese onomatopoeia.'
+        : 'Return an empty zh for lines that are only a sound effect, or an action word lettered as a sound effect (like BAM, THUD, DUN, TILT, NOD, GRAB, STARE, GASP, ドン, 쾅), even when it is a real English word. Lines marked [outside bubbles] are not inside any speech bubble; a very short one of those is usually a sound effect.',
       'Return an empty zh for lines that are not story text (OCR noise, watermarks, website names, scanlator or translator credits, page numbers) or that cannot be made sense of.',
       'Answer with JSON only: {"items":[{"id":1,"zh":"..."}]}, exactly one item per input line, using the same id.',
     ].join('\n');
@@ -2558,7 +2562,7 @@ button, input, select, output { font: inherit; }
      */
     function arrange() {
       const rs = blocks.map((b) => ({ x0: b.x0 * cw, y0: b.y0 * ch, x1: b.x1 * cw, y1: b.y1 * ch, zh: b.zh, vertical: !!b.vertical,
-        bub: !!b.bub, bg: b.bg || '', shape: b.bub ? b.shape || '' : '', rows: b.bub ? b.rows || null : null, lh: b.lh > 0 ? b.lh * cw : 0, blank: !!b.blank }));
+        bub: !!b.bub, bg: b.bg || '', shape: b.bub ? b.shape || '' : '', rows: b.bub ? b.rows || null : null, lh: b.lh > 0 ? b.lh * cw : 0, blank: !!b.blank, seam: !!b.seam }));
       const ov = (a, c) => [Math.min(a.x1, c.x1) - Math.max(a.x0, c.x0), Math.min(a.y1, c.y1) - Math.max(a.y0, c.y0)];
       const area = (a) => (a.x1 - a.x0) * (a.y1 - a.y0);
       /** 方框 o 有多少在對話框 B 的形狀裡（抽樣） */
@@ -2576,7 +2580,7 @@ button, input, select, output { font: inherit; }
             const a = rs[i];
             const c = rs[j];
             const [ix, iy] = ov(a, c);
-            if (ix <= 0 || iy <= 0 || (a.bub && c.bub)) continue;
+            if (ix <= 0 || iy <= 0 || (a.bub && c.bub) || a.seam || c.seam) continue; // 接縫上的框兩張圖要一模一樣：不合併
             if (a.bub || c.bub) {
               const [B, o] = a.bub ? [a, c] : [c, a];
               if (inFrac(o, B) < 0.5) continue;
@@ -2596,21 +2600,22 @@ button, input, select, output { font: inherit; }
           const a = rs[i];
           const c = rs[j];
           const [ix, iy] = ov(a, c);
-          if (ix <= 0 || iy <= 0 || (a.bub && c.bub)) continue;
+          const lock = (r) => r.bub || r.seam; // 對話框、接縫上的框不動
+          if (ix <= 0 || iy <= 0 || (lock(a) && lock(c))) continue;
           if ((a.bub && inFrac(c, a) < 0.03) || (c.bub && inFrac(a, c) < 0.03)) continue; // 只碰到對話框方框的角落（橢圓外面）
           // 對話框不動，另一個框退開；都不是對話框就從中間分開
-          const moveA = !a.bub;
-          const moveC = !c.bub;
+          const moveA = !lock(a);
+          const moveC = !lock(c);
           if (iy <= ix) {
             const [top, bot] = a.y0 + a.y1 <= c.y0 + c.y1 ? [a, c] : [c, a];
-            const mid = moveA && moveC ? (bot.y0 + top.y1) / 2 : top.bub ? top.y1 : bot.y0;
-            if (!top.bub) top.y1 = mid;
-            if (!bot.bub) bot.y0 = mid;
+            const mid = moveA && moveC ? (bot.y0 + top.y1) / 2 : lock(top) ? top.y1 : bot.y0;
+            if (!lock(top)) top.y1 = mid;
+            if (!lock(bot)) bot.y0 = mid;
           } else {
             const [lf, rt] = a.x0 + a.x1 <= c.x0 + c.x1 ? [a, c] : [c, a];
-            const mid = moveA && moveC ? (rt.x0 + lf.x1) / 2 : lf.bub ? lf.x1 : rt.x0;
-            if (!lf.bub) lf.x1 = mid;
-            if (!rt.bub) rt.x0 = mid;
+            const mid = moveA && moveC ? (rt.x0 + lf.x1) / 2 : lock(lf) ? lf.x1 : rt.x0;
+            if (!lock(lf)) lf.x1 = mid;
+            if (!lock(rt)) rt.x0 = mid;
           }
         }
       }
@@ -2680,8 +2685,8 @@ button, input, select, output { font: inherit; }
       if (blank) {
         [x0, y0, x1, y1] = r.bub ? [Math.max(0, r.x0), Math.max(0, r.y0), Math.min(cw, r.x1), Math.min(ch, r.y1)] : clamp(r.x0 - pad, r.y0 - pad, r.x1 + pad, r.y1 + pad);
       } else if (r.bub) {
-        // 對話框：範圍就是對話框裡面，直接用
-        [x0, y0, x1, y1] = [Math.max(0, r.x0), Math.max(0, r.y0), Math.min(cw, r.x1), Math.min(ch, r.y1)];
+        // 對話框：範圍就是對話框裡面，直接用（接縫上的框會超出這張圖的上緣或下緣，超出的部分畫在另一張圖上）
+        [x0, y0, x1, y1] = [Math.max(0, r.x0), r.seam ? r.y0 : Math.max(0, r.y0), Math.min(cw, r.x1), r.seam ? r.y1 : Math.min(ch, r.y1)];
         if (r.shape === 'ellipse') {
           // 橢圓形：白底蓋滿整個對話框，譯文排在裡面的方框（試幾種寬高，挑字最大的）
           for (const t of [0.707, 0.6, 0.8, 0.5, 0.88]) {
@@ -2703,6 +2708,10 @@ button, input, select, output { font: inherit; }
           }
           if (!lay) lay = fit(x1 - x0, y1 - y0);
         } else lay = fit(x1 - x0, y1 - y0);
+      } else if (r.seam) {
+        // 接縫上的字（不在對話框裡）：兩張圖要畫得一模一樣，不放大、不避開別的框
+        [x0, y0, x1, y1] = [Math.max(0, r.x0 - pad), r.y0 - pad, Math.min(cw, r.x1 + pad), r.y1 + pad];
+        lay = fit(x1 - x0, y1 - y0);
       } else {
         [x0, y0, x1, y1] = clamp(r.x0 - pad, r.y0 - pad, r.x1 + pad, r.y1 + pad);
         lay = fit(x1 - x0, y1 - y0);
@@ -3188,8 +3197,8 @@ button, input, select, output { font: inherit; }
         const isIn = (x, y) => x >= 0 && y >= 0 && x < bw && y < bh && m[y * bw + x] !== 2;
         let text = 0;
         for (const i of list) { const b = boxes[i]; text += ((b.x1 - b.x0) * (b.y1 - b.y0)) / (f * f); }
-        // 對話框大多是圓的、方的：範圍裡大半是對話框；也不會比裡面的字大太多（大片空白的背景不算）
-        if (inside < bw * bh * (cut ? 0.65 : 0.5) || inside > text * (cut ? 10 : 25)) continue;
+        // 對話框大多是圓的、方的：範圍裡大半是對話框；也不會比裡面的字大太多（大片空白的背景不算；大喊的大框裡常常只有幾個字）
+        if (inside < bw * bh * (cut ? 0.65 : 0.5) || inside > text * (cut ? 15 : 60)) continue;
         // 兩個對話框連在一起時（外框中間有缺口）分開：字和字之間隔著外框的，是不同的對話框
         const ctr = list.map((i) => { const b = boxes[i]; return [(b.x0 + b.x1) / 2 / f - X0, (b.y0 + b.y1) / 2 / f - Y0]; });
         const par = list.map((_, k) => k);
@@ -3441,9 +3450,17 @@ button, input, select, output { font: inherit; }
           const bmp = await createImageBitmap(m.blob);
           try {
             const boxes = m.boxes || await detect(bmp, m.opts || {});
-            const bubs = m.boxes && m.bubbles ? m.bubbles : bubbles(bmp, boxes);
             post({ type: 'progress', id: m.id, frac: 0.4 });
             const lines = boxes.length ? await recognize(bmp, boxes, m.rec, (f) => post({ type: 'progress', id: m.id, frac: 0.4 + 0.6 * f }), m.opts || {}) : [];
+            // 對話框：只用認得出字的字框來找（放射狀的光線、花紋被當成字框時，常認成 TTT、lll 這種字，不算）
+            const real = (t) => {
+              const c = String(t || '').replace(/[\s\p{P}\p{S}]/gu, '');
+              if (!c || /^(.)\1+$/u.test(c)) return false;
+              // 英文：至少兩個字母、有母音（沒有母音的只認 HMM、SHH、TSK 這種常見的）
+              return m.rec !== 'eng' || (c.replace(/[^A-Za-z]/g, '').length >= 2 && (/[aeiouy]/i.test(c) || /^(h+m+|m+h+m+|s+h+|t+s+k+|p+f+t*|p+s+t+|g+r+|b+r+)$/i.test(c)));
+            };
+            boxes.forEach((b) => { b.bub = -1; });
+            const bubs = bubbles(bmp, boxes.filter((b, i) => lines[i] && lines[i].conf >= 0.5 && real(lines[i].text)));
             post({ type: 'ok', id: m.id, boxes, bubbles: bubs, lines: boxes.map((b, i) => Object.assign({}, b, lines[i])) });
           } finally { if (bmp.close) bmp.close(); }
         }
@@ -3910,6 +3927,50 @@ button, input, select, output { font: inherit; }
     return out;
   }
 
+  /* ---------- 狀聲詞：設定「不翻」時，認字後就先跳過（原圖保持原樣，不蓋白底） ---------- */
+  // 常見的狀聲詞，和翻譯組當成效果字的動作字（比對時連續重複的字母只算一個：BOOOM → bom）
+  const mtSfxNorm = (w) => w.replace(/'/g, '').replace(/(.)\1+/g, '$1'); // DUNNN → dun
+  const MT_SFX_WORDS = new Set(('bam bang boom thud thump thunk dun dum dudun badump bump wham whack thwack smack slap pow punch kick '
+    + 'crash clang clank clink click clack creak crack snap pop poof puff plop drip drop splash splish swish swoosh whoosh woosh fwoosh whish whip '
+    + 'zip zoom vroom rumble growl roar hiss buzz beep ring ding dong knock tap tok tick tock thwip shing ching sling slash stab '
+    + 'tilt nod shake grab grip clench clutch stare glare glance gaze peek blink flinch twitch jolt shudder shiver tremble quiver startle '
+    + 'gasp sigh huff pant gulp sniff sob sniffle wince grin smirk blush sweat flutter flap swing sway spin stomp shuffle rustle '
+    + 'squeeze tug pull push pat rub stroke hug flick fling toss grasp drag dash rush fwip pff tsk tch ba dump doki thump '
+    + 'shock stun flash glow sparkle twinkle glint gleam shine throb pulse pound pierce slice rip shatter smash squish squeak squeal splat thwap '
+    + 'boing ting ping clap clatter rattle scratch scrape screech skid slam slurp munch chomp crunch nom sip chew lick smooch poke pinch tickle '
+    + 'nudge bonk bop wobble jiggle bounce hop leap flop slump stumble tiptoe twirl whirl step peer squint frown pout sulk smile laugh giggle '
+    + 'chuckle snicker snort cough sneeze yawn hiccup wheeze groan moan whimper wail scream shriek snarl purr meow woof bark chirp tweet crackle '
+    + 'sizzle fizz gurgle trickle swirl lash zap zing whiz thrum hum brr grr grumble mumble mutter shf fsh sha').split(' ').map(mtSfxNorm));
+  /** 常見的狀聲詞、動作字（也認 NODS、NODDING、GRABBED 這種變化） */
+  const mtSfxWord = (w) => MT_SFX_WORDS.has(w) || [w.replace(/e?s$/, ''), w.replace(/s$/, ''), w.replace(/ing$/, ''), w.replace(/ing$/, 'e'), w.replace(/e?d$/, ''), w.replace(/d$/, '')]
+    .some((x) => x.length >= 2 && x !== w && MT_SFX_WORDS.has(x));
+  /**
+   * 這一段字是不是狀聲詞：只有一兩個字（重複的不算，THUMP THUMP 是一個字），而且字比對話大很多、是常見的狀聲詞，或是拉長音（AAAH、ZZZ）。
+   * 對話框裡的字幾乎都是台詞：只有字比台詞大很多、又是常見狀聲詞的才算（白底上的大狀聲詞常被當成對話框）。
+   * 日文、韓文：不在對話框裡、很短又很大；日文全是片假名的短字（ドン、ゴゴゴ）
+   */
+  function mtIsSfx(g, all, lang, W) {
+    if (!g) return false;
+    const t = String(g.text || '').trim();
+    const refs = (all || []).filter((o) => o !== g && o.bub && o.lh > 0).map((o) => o.lh).sort((a, b) => a - b);
+    const ref = refs.length ? refs[refs.length >> 1] : 0;
+    const big = g.lh > 0 && (ref ? g.lh >= ref * 1.8 && g.lh >= W * 0.04 : g.lh >= W * 0.07);
+    if (lang !== 'jpn' && lang !== 'kor') {
+      const raw = t.toLowerCase().match(/[a-z']+/g) || [];
+      const words = [...new Set(raw.map(mtSfxNorm))].filter(Boolean);
+      if (!words.length || words.length > 2 || words.join('').length > 16) return false;
+      const known = words.every(mtSfxWord);
+      if (g.bub) return big && known;
+      return big || known || raw.some((w) => /(.)\1\1/.test(w)); // AAAH、HMMM、ZZZ
+    }
+    const core = t.replace(/[\s\p{P}\p{S}]/gu, '');
+    const n = [...core].length;
+    if (!n || n > 6) return false;
+    const kata = lang === 'jpn' && n <= 4 && /^[\u30A0-\u30FF]+$/.test(core);
+    if (g.bub) return big && kata;
+    return big || kata;
+  }
+
   /** 漫畫常用全大寫英文，翻譯前改成一般大小寫比較準 */
   function mtSentenceCase(t) {
     const letters = t.replace(/[^A-Za-z]/g, '');
@@ -4135,7 +4196,7 @@ button, input, select, output { font: inherit; }
     function resetPage(P) {
       P.gen++;
       if (P.fixHold) { unlater(P.fixHold); P.fixHold = 0; }
-      Object.assign(P, { state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', step: '', fix: '', shown: true, langP: null, queued: false });
+      Object.assign(P, { state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', step: '', fix: '', shown: true, langP: null, queued: false, cutT: false, cutB: false, seamExt: null });
       render(P);
       setStatus();
     }
@@ -4217,25 +4278,213 @@ button, input, select, output { font: inherit; }
       }
       return changed;
     }
+    /**
+     * 圖的最上面（top）或最下面被切到的字、對話框往圖裡面延伸多遠（整張圖高度的比例）：
+     * 接縫拼起來重新認字時，只要拼這一段（越小越快）
+     */
+    function seamExtent(P, s, plan, top) {
+      const sh = s.y1 - s.y0;
+      let e = 0;
+      for (const b of s.bubbles || []) {
+        if (top ? b.et : b.eb) e = Math.max(e, top ? (b.by1 || b.y1) : sh - (b.by0 || b.y0));
+      }
+      for (const b of s.boxes || []) {
+        const lh = b.y1 - b.y0;
+        if (top ? b.y0 <= 3 : b.y1 >= sh - 3) e = Math.max(e, top ? b.y1 + lh * 2 : sh - b.y0 + lh * 2);
+      }
+      // 已經合成一段的字（整段旁白、整個對話框）碰到或很靠近邊緣的：整段都要
+      for (const b of P.blocks) {
+        const near = Math.max(6, (b.lh || 0.03) * plan.W * 2);
+        if (top ? b.y0 * plan.H < near : b.y1 * plan.H > plan.H - near) e = Math.max(e, top ? b.y1 * plan.H : plan.H - b.y0 * plan.H);
+      }
+      return Math.min(1, e / plan.H);
+    }
+    /** 接縫拼圖時，一張圖要拿幾列（寬 W、高 H 的圖；e 是上面算的比例，不知道時用 1） */
+    const seamRows = (W, H, e) => Math.max(1, Math.round(Math.min(H, W * 1.1, Math.max(W * 0.3, e * H + W * 0.06))));
+    // 翻譯時留下來的圖片上下緣（被切到的那一邊）：接縫重新認字時不用再下載一次整張圖
+    const strips = new Map(); // P.key|T 或 |B → { blob, h, W, gen }
+    function stripPut(P, side, v) {
+      const k = P.key + '|' + side;
+      strips.delete(k);
+      strips.set(k, v);
+      while (strips.size > 40) strips.delete(strips.keys().next().value);
+    }
+    function stripTake(P, side) {
+      const k = P.key + '|' + side;
+      const v = strips.get(k);
+      strips.delete(k);
+      return v && v.gen === P.gen ? v : null;
+    }
+    /** 翻譯完一張圖：被切到的上緣、下緣從切片裡拼出來留著（切片本來就是不失真的 PNG） */
+    async function keepStrips(P, slices, plan, gen) {
+      for (const top of [true, false]) {
+        if (!(top ? P.cutT : P.cutB)) continue;
+        const rows = seamRows(plan.W, plan.H, P.seamExt[top ? 0 : 1]);
+        const y0 = top ? 0 : plan.H - rows;
+        const y1 = top ? rows : plan.H;
+        const parts = slices.filter((s) => s.blob && s.y1 > y0 && s.y0 < y1).sort((a, b) => a.y0 - b.y0);
+        let at = y0;
+        for (const s of parts) { if (s.y0 > at) break; at = Math.max(at, s.y1); }
+        if (at < y1) continue; // 中間有缺：之後重新下載整張圖
+        const c = mtCanvas(plan.W, rows);
+        const g = c.getContext('2d');
+        g.fillStyle = '#FFFFFF';
+        g.fillRect(0, 0, plan.W, rows);
+        for (const s of parts) {
+          const bm = await createImageBitmap(s.blob);
+          try { g.drawImage(bm, 0, s.y0 - y0); } finally { if (typeof bm.close === 'function') bm.close(); }
+        }
+        stripPut(P, top ? 'T' : 'B', { blob: await mtToBlob(c, 'image/png'), h: rows, W: plan.W, gen });
+      }
+    }
+    let seamRun = 0; // 正在重新認接縫的字（狀態列顯示用）
+    /** 兩張圖在網頁上是不是緊緊貼在一起（中間沒有空隙）：接縫上的譯文才能跨兩張圖接著畫 */
+    function touching(U, L) {
+      for (const a of U.els) {
+        if (!a.isConnected) continue;
+        const ra = a.getBoundingClientRect();
+        for (const b of L.els) {
+          if (!b.isConnected) continue;
+          const rb = b.getBoundingClientRect();
+          if (ra.width && rb.width && Math.abs(ra.width - rb.width) <= 1.5 && Math.abs(rb.top - ra.bottom) <= 3) return true;
+        }
+      }
+      return false;
+    }
+    /**
+     * 上下兩張圖接縫附近拼成一張再認一次：被切成上下兩半的字是完整的，對話框也是完整的。
+     * 接縫上的字換成一段完整的譯文，兩張圖各畫一份（位置對齊接縫），看起來就像一個框
+     */
+    function seamOcr(U, L) {
+      // 同一對圖（同一次翻譯）只做一次；正在做的話等它做完
+      const ver = U.key + '>' + L.key + ':' + U.gen + ':' + L.gen;
+      if (U.seamVer !== ver) { U.seamVer = ver; U.seamP = seamTry(U, L); }
+      return U.seamP;
+    }
+    async function seamTry(U, L) {
+      if (pd.failed || !(U.cutB || L.cutT) || !touching(U, L)) return false;
+      // 之前（快取裡）已經處理過這個接縫：重新連上兩份譯文
+      const prim = U.blocks.filter((b) => b.seam && !b.mirror);
+      const mir = L.blocks.filter((b) => b.seam && b.mirror);
+      if (prim.length && mir.length) {
+        for (const b of prim) { const m = mir.find((x) => x.src === b.src); if (m) { b.twin = m; b.twinP = L; } }
+        return true;
+      }
+      const code = MT_OCR_OF[(U.blocks.concat(L.blocks).find((b) => b.lang) || {}).lang] || U.lang || L.lang;
+      if (!code || !MT_LANG[code]) return false;
+      seamRun++;
+      setStatus();
+      try { return await seamRead(U, L, code); } finally { seamRun--; setStatus(); }
+    }
+    async function seamRead(U, L, code) {
+      const gu = U.gen;
+      const gl = L.gen;
+      const imgOf = (P) => [...P.els].find((i) => i.isConnected && i.complete && i.naturalWidth && mtAbs(i.currentSrc) === P.url) || null;
+      const ext = (P, i) => (P.seamExt ? P.seamExt[i] : 1);
+      const su = stripTake(U, 'B');
+      const sl = stripTake(L, 'T');
+      let bu = null;
+      let bl = null;
+      let blob = null;
+      let W = 0;
+      let A = 0;
+      let HU = 0;
+      let HL = 0;
+      try {
+        // 翻譯時留下來的上下緣（沒有的話重新下載整張圖）；寬度以上面那張圖為準（最寬 1000）
+        bu = su ? await createImageBitmap(su.blob) : await mtCaptureUrl(U.url, imgOf(U), U.noRef || pg.noRefDirs.has(mtDirOf(U.url)));
+        bl = sl ? await createImageBitmap(sl.blob) : await mtCaptureUrl(L.url, imgOf(L), L.noRef || pg.noRefDirs.has(mtDirOf(L.url)));
+        const uw = U.w0 || bu.width;
+        const lw = L.w0 || bl.width;
+        W = su ? su.W : Math.min(bu.width, 1000);
+        HU = (U.h0 || bu.height) * (W / uw);
+        HL = (L.h0 || bl.height) * (W / lw);
+        A = su ? su.h : seamRows(W, HU, ext(U, 1));
+        const B = sl ? Math.max(1, Math.round(sl.h * (W / sl.W))) : seamRows(W, HL, ext(L, 0));
+        const c = mtCanvas(W, A + B);
+        const g = c.getContext('2d');
+        g.fillStyle = '#FFFFFF';
+        g.fillRect(0, 0, W, A + B);
+        g.imageSmoothingQuality = 'high';
+        if (su) g.drawImage(bu, 0, 0, bu.width, bu.height, 0, 0, W, A);
+        else { const ku = W / bu.width; g.drawImage(bu, 0, (HU - A) / ku, bu.width, A / ku, 0, 0, W, A); }
+        if (sl) g.drawImage(bl, 0, 0, bl.width, bl.height, 0, A, W, B);
+        else { const kl = W / bl.width; g.drawImage(bl, 0, 0, bl.width, B / kl, 0, A, W, B); }
+        blob = await mtToBlob(c, 'image/png');
+      } finally {
+        for (const b of [bu, bl]) if (b && typeof b.close === 'function') b.close();
+      }
+      if (U.gen !== gu || L.gen !== gl) return false;
+      await orCancel(pdReady(code, null));
+      const wk = await pdTake();
+      let r = null;
+      try { r = await orCancel(wk.call({ type: 'ocr', blob, rec: code, boxes: null, opts: {} })); } finally { pdRelease(wk); }
+      if (U.gen !== gu || L.gen !== gl) return false;
+      let groups = mtPaddleGroups(r.lines, code, r.bubbles || []);
+      if (cfg().sfx !== 'translate') groups = groups.filter((x) => !mtIsSfx(x, groups, code, W));
+      // 接縫上的字：範圍跨過接縫、或貼著接縫的（對話框的話看整個框）
+      const seam = groups.filter((x) => x.y0 < A + 3 && x.y1 > A - 3);
+      if (!seam.length) return false;
+      const zh = await mtFreeTranslate(seam.map((x) => x.text), code);
+      if (U.gen !== gu || L.gen !== gl) return false;
+      const inU = (x) => ({ x0: x.x0 / W, x1: x.x1 / W, y0: (HU - A + x.y0) / HU, y1: (HU - A + x.y1) / HU });
+      const inL = (x) => ({ x0: x.x0 / W, x1: x.x1 / W, y0: (x.y0 - A) / HL, y1: (x.y1 - A) / HL });
+      // 原本被切開的那些字框（中心在新的範圍裡，或大半在裡面）拿掉
+      const covered = (b, q) => {
+        const cx = (b.x0 + b.x1) / 2;
+        const cy = (b.y0 + b.y1) / 2;
+        if (cx > q.x0 && cx < q.x1 && cy > q.y0 && cy < q.y1) return true;
+        const ix = Math.min(b.x1, q.x1) - Math.max(b.x0, q.x0);
+        const iy = Math.min(b.y1, q.y1) - Math.max(b.y0, q.y0);
+        return ix > 0 && iy > 0 && ix * iy >= (b.x1 - b.x0) * (b.y1 - b.y0) * 0.5;
+      };
+      let n = 0;
+      seam.forEach((x, i) => {
+        const z = mtCleanZh(zh[i]);
+        if (!z || z === x.text) return;
+        const qu = inU(x);
+        const ql = inL(x);
+        U.blocks = U.blocks.filter((b) => !covered(b, qu));
+        L.blocks = L.blocks.filter((b) => !covered(b, ql));
+        const base = { zh: z, src: x.text, lang: MT_LANG[code], vertical: !!x.vertical, bub: !!x.bub, bg: x.bg || '', shape: x.shape || '',
+          rows: x.rows || null, lh: x.lh > 0 ? x.lh / W : 0, seam: true, edge: false };
+        const pu = Object.assign({}, base, qu);
+        const pl = Object.assign({}, base, ql, { mirror: true, fixed: true });
+        pu.twin = pl;
+        pu.twinP = L;
+        U.blocks.push(pu);
+        L.blocks.push(pl);
+        n++;
+      });
+      if (!n) return false;
+      for (const P of [U, L]) { render(P); if (P.w0) cachePut(P, 'free', P.w0, P.h0, false, !fixLines(P).length); }
+      return true;
+    }
     /** 這張圖翻好了：跟上下相鄰、也翻好的圖接起被切開的字；等著接的那張圖可以送修正了 */
     async function stitchAround(P) {
       const fixOn = () => mode() === 'fast' && mtEngineState(cfg()).kind === 'gemini';
       for (const [U, L] of [[stacked(P, -1), P], [P, stacked(P, 1)]]) {
         if (!U || !L) continue;
         let changed = false;
-        try { changed = await stitch(U, L); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯（接起來的句子）', e); }
-        const other = U === P ? L : U;
-        if (other.fixHold) {
-          unlater(other.fixHold);
-          other.fixHold = 0;
-          if (fixOn()) fixEnqueue(other);
-        } else if (changed && other.fix && fixOn()) fixEnqueue(other); // 已經修正過：再送接起來的那一句
+        if (U.state === 'done' && L.state === 'done') {
+          try { changed = await seamOcr(U, L); } catch (e) { if (!e || e.kind !== 'cancel') console.warn('[MAOBOO] 漫畫翻譯（接縫）', e); }
+          if (!changed) { try { changed = await stitch(U, L); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯（接起來的句子）', e); } }
+        }
+        for (const Q of [U, L]) {
+          if (Q === P) continue;
+          if (Q.fixHold) {
+            unlater(Q.fixHold);
+            Q.fixHold = 0;
+            if (fixOn()) fixEnqueue(Q);
+          } else if (changed && Q.fix && fixOn()) fixEnqueue(Q); // 已經修正過：再送接起來的那一句
+        }
+        if (changed && U !== P && !U.fixHold && fixOn()) fixEnqueue(U);
       }
     }
     /** 快速模式送 Gemini 修正：圖的上下緣有被切開的字、相鄰的圖還在翻時，先等它翻好接成一句（最多等 15 秒） */
     function fixWhenReady(P) {
-      const waits = (d, flag) => P.blocks.some((b) => b[flag] && !b.xs) && (stacked(P, d) || {}).state === 'busy';
-      if (!waits(-1, 'ct') && !waits(1, 'cb')) { fixEnqueue(P); return; }
+      const waits = (d, flag, cut) => (cut || P.blocks.some((b) => b[flag] && !b.xs)) && (stacked(P, d) || {}).state === 'busy';
+      if (!waits(-1, 'ct', P.cutT) && !waits(1, 'cb', P.cutB)) { fixEnqueue(P); return; }
       if (P.fixHold) return;
       P.fix = 'wait';
       setStatus();
@@ -4323,32 +4572,34 @@ button, input, select, output { font: inherit; }
     }
 
     /* ---------- 快取：翻過的圖不再花額度 ---------- */
-    // v3：免費模式會找對話框（舊版免費模式的譯文框是一行一行的，重新翻一次；Gemini 看圖翻的沿用）
-    const cacheKeyOf = (P, ver = 'v3') => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
+    // v4：免費模式的狀聲詞判斷、接縫重新認字改過了（舊版免費模式翻的重新翻一次；Gemini 看圖翻的沿用）
+    const cacheKeyOf = (P, ver = 'v4') => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
     function cacheGet(P) {
       let v = store.get(cacheKeyOf(P), null);
-      if (!v) {
-        const old = store.get(cacheKeyOf(P, 'v2'), null);
-        if (old && old.v === 2 && old.m && old.m !== 'free') v = old;
+      for (const ver of ['v3', 'v2']) {
+        if (v) break;
+        const old = store.get(cacheKeyOf(P, ver), null);
+        if (old && (old.v === 3 || old.v === 2) && old.m && old.m !== 'free') v = old;
       }
-      if (!v || (v.v !== 3 && v.v !== 2) || !Array.isArray(v.b)) return null;
+      if (!v || (v.v !== 4 && v.v !== 3 && v.v !== 2) || !Array.isArray(v.b)) return null;
       // 同一個網址換成了別張圖（長寬比不同）就不能用
       for (const img of P.els) {
         if (img.complete && img.naturalWidth && v.w && v.h && Math.abs(img.naturalWidth / img.naturalHeight - v.w / v.h) > 0.02) return null;
       }
       return {
-        m: v.m || '', t: v.t || 0, blk: !!v.blk, fx: !!v.fx, w: v.w || 0, h: v.h || 0,
+        m: v.m || '', t: v.t || 0, blk: !!v.blk, fx: !!v.fx, w: v.w || 0, h: v.h || 0, ct: !!v.ct, cb: !!v.cb,
+        ex: Array.isArray(v.ex) && v.ex.length === 2 ? v.ex.map((x) => Math.min(1, Math.max(0, Number(x) || 0))) : null,
         blocks: v.b.map((a) => ({ x0: a[0], y0: a[1], x1: a[2], y1: a[3], zh: String(a[4] || ''), vertical: !!a[5], lang: a[6] || '', src: a[7] || '',
           bub: !!a[8], lh: Number(a[9]) || 0, bg: typeof a[10] === 'string' ? a[10] : '', shape: typeof a[11] === 'string' ? a[11] : '', rows: Array.isArray(a[12]) ? a[12] : null,
-          ct: !!(a[13] & 1), cb: !!(a[13] & 2), blank: !!(a[13] & 4), xs: !!(a[13] & 8), fixed: !!(a[13] & 16), msrc: typeof a[14] === 'string' ? a[14] : '', edge: false })),
+          ct: !!(a[13] & 1), cb: !!(a[13] & 2), blank: !!(a[13] & 4), xs: !!(a[13] & 8), fixed: !!(a[13] & 16), seam: !!(a[13] & 32), mirror: !!(a[13] & 64), msrc: typeof a[14] === 'string' ? a[14] : '', edge: false })),
       };
     }
     function cachePut(P, model, w, h, blk, fx) {
       const k = cacheKeyOf(P);
       const r4 = (n) => Math.round(n * 10000) / 10000;
-      store.set(k, { v: 3, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0,
+      store.set(k, { v: 4, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, ex: P.seamExt ? P.seamExt.map(r4) : 0,
         b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang, b.src || '', b.bub ? 1 : 0, r4(b.lh || 0), b.bg || '', b.shape || '', b.rows || 0,
-          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0), b.msrc || '']) });
+          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0), b.msrc || '']) });
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       idx = idx.filter((x) => x !== k);
@@ -4946,7 +5197,7 @@ button, input, select, output { font: inherit; }
       const wk = await pdTake();
       wk.page = P;
       try {
-        const r = await orCancel(wk.call({ type: 'ocr', blob: s.blob, rec: lang, boxes: s.boxes || null, bubbles: s.bubbles || null, opts: {} }, (f) => { wk.prog = f; bump(); }));
+        const r = await orCancel(wk.call({ type: 'ocr', blob: s.blob, rec: lang, boxes: s.boxes || null, opts: {} }, (f) => { wk.prog = f; bump(); }));
         s.boxes = r.boxes;
         s.bubbles = r.bubbles || [];
         return mtPaddleGroups(r.lines, lang, s.bubbles);
@@ -5082,7 +5333,9 @@ button, input, select, output { font: inherit; }
       return ocrQ(P, async () => {
         if (!alive()) throw mtErr('cancel');
         step(P, `辨識文字 ${Math.min(P.done + 1, P.total)}/${P.total} 段`);
-        const groups = await ocrRun(s, lang, plan, P);
+        let groups = await ocrRun(s, lang, plan, P);
+        // 狀聲詞設定「不翻」：狀聲詞直接跳過（原圖保持原樣）
+        if (cfg().sfx !== 'translate') groups = groups.filter((g) => !mtIsSfx(g, groups, lang, plan.W));
         if (!groups.length) return [];
         const zh = await mtFreeTranslate(groups.map((g) => g.text), lang);
         const sh = s.y1 - s.y0;
@@ -5216,11 +5469,12 @@ button, input, select, output { font: inherit; }
       }
       const LN = { en: 'English', ja: 'Japanese', ko: 'Korean' };
       const langs = [...new Set(lines.map((l) => LN[l.b.lang]).filter(Boolean))];
+      const sfxOn = cfg().sfx === 'translate';
       const text = [
         contextText(),
         langs.length ? `Original language: ${langs.join(', ')}` : '',
         'Lines:',
-        ...lines.map((l, i) => `${i + 1}. ${l.src.replace(/\s+/g, ' ')}`),
+        ...lines.map((l, i) => `${i + 1}. ${!sfxOn && !l.b.bub ? '[outside bubbles] ' : ''}${l.src.replace(/\s+/g, ' ')}`),
       ].filter(Boolean).join('\n');
       const applied = new Set();
       const touched = new Set();
@@ -5245,9 +5499,16 @@ button, input, select, output { font: inherit; }
           left.set(l.j, left.get(l.j) - 1);
           if (l.j.gen !== l.j.P.gen || l.b.blank || (l.b.msrc || l.b.src) !== l.src) continue; // 送出後這一行又被接上別張圖的字：等下一次修正
           const zh = mtCleanZh(it.zh);
-          if (zh) l.b.zh = zh;
-          // 不是對話（雜訊、浮水印）：拿掉；對話框裡的一定是對話，留著原本的翻譯
-          else if (!l.b.bub) l.j.P.blocks = l.j.P.blocks.filter((b) => b !== l.b);
+          if (zh) {
+            l.b.zh = zh;
+            // 接縫上的字：另一張圖上的那一份也換成修正後的譯文
+            const tw = l.b.twin;
+            if (tw && l.b.twinP && l.b.twinP.blocks.includes(tw)) {
+              tw.zh = zh;
+              touched.add(l.b.twinP);
+              if (l.b.twinP.w0) cachePut(l.b.twinP, 'free', l.b.twinP.w0, l.b.twinP.h0, false, !fixLines(l.b.twinP).length);
+            }
+          } else if (!l.b.bub && !l.b.seam) l.j.P.blocks = l.j.P.blocks.filter((b) => b !== l.b); // 不是對話（雜訊、浮水印）：拿掉；對話框裡的一定是對話，留著原本的翻譯
           l.b.fixed = true;
           touched.add(l.j.P);
           if (left.get(l.j) <= 0) finish(l.j);
@@ -5301,7 +5562,7 @@ button, input, select, output { font: inherit; }
     async function translateP(P) {
       if (stopped || P.state === 'busy') return;
       const gen = ++P.gen;
-      Object.assign(P, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '', step: '排隊中', fix: '', engines: new Set(), started: Date.now(), langP: null, queued: true });
+      Object.assign(P, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '', step: '排隊中', fix: '', engines: new Set(), started: Date.now(), langP: null, queued: true, cutT: false, cutB: false, seamExt: null });
       render(P);
       bump();
       setStatus();
@@ -5314,7 +5575,7 @@ button, input, select, output { font: inherit; }
         if (hit && (fast || hit.m !== 'free' || hit.blk || st0.kind !== 'gemini')) {
           if (hit.m) P.engines.add(hit.m);
           if (hit.fx) P.engines.add('fix');
-          Object.assign(P, { blocks: hit.blocks, state: 'done', done: 1, total: 1, step: '', w0: hit.w, h0: hit.h, fix: hit.fx ? 'done' : '' });
+          Object.assign(P, { blocks: hit.blocks, state: 'done', done: 1, total: 1, step: '', w0: hit.w, h0: hit.h, fix: hit.fx ? 'done' : '', cutT: hit.ct, cutB: hit.cb, seamExt: hit.ex });
           render(P);
           const fixIt = fast && hit.m === 'free' && !hit.fx && st0.kind === 'gemini'; // 上次還沒修正完
           stitchAround(P).finally(() => { if (fixIt && P.gen === gen) fixWhenReady(P); });
@@ -5379,8 +5640,9 @@ button, input, select, output { font: inherit; }
             lastErr = e;
             allGemini = false;
           }
-          // 這一段處理完：放掉圖片資料，整話先翻時才不會佔太多記憶體
-          s.blob = null;
+          // 這一段處理完：放掉圖片資料，整話先翻時才不會佔太多記憶體（最上面、最下面的先留著，接縫重新認字可能會用到）
+          const keepTo = Math.min(plan.H, plan.W * 1.1);
+          if (useImage || (s.y0 >= keepTo && s.y1 <= plan.H - keepTo)) s.blob = null;
           s.b64 = null;
           s.clean = null;
           s.cleanInv = null;
@@ -5391,6 +5653,15 @@ button, input, select, output { font: inherit; }
         }));
         if (!alive()) return;
         if (failed === slices.length) throw lastErr || new Error('翻譯失敗');
+        // 圖的最上面、最下面有字（或對話框）被切到：跟上下相鄰的圖拼起來再認一次
+        const s0 = slices[0];
+        const sN = slices[slices.length - 1];
+        P.cutT = !!((s0.boxes || []).some((b) => b.y0 <= 3) || (s0.bubbles || []).some((b) => b.et));
+        P.cutB = !!((sN.boxes || []).some((b) => b.y1 >= sN.y1 - sN.y0 - 3) || (sN.bubbles || []).some((b) => b.eb));
+        P.seamExt = [seamExtent(P, s0, plan, true), seamExtent(P, sN, plan, false)];
+        try { await keepStrips(P, slices, plan, gen); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯（留下接縫）', e); }
+        for (const s of slices) s.blob = null;
+        if (!alive()) return;
         P.state = 'done';
         P.step = '';
         P.error = failed ? mtErrText(lastErr) : '';
@@ -5815,7 +6086,7 @@ button, input, select, output { font: inherit; }
       el.style.bottom = pick[1] === 'bottom' ? '16px' : 'auto';
     }
     function counts() {
-      const c = { done: 0, busy: 0, total: 0, err: 0, frac: 0, free: false, gem: false, fixWait: 0, fixBusy: 0, fixDone: 0 };
+      const c = { done: 0, busy: 0, total: 0, err: 0, frac: 0, free: false, gem: false, fixWait: 0, fixBusy: 0, fixDone: 0, seam: seamRun };
       for (const P of pages.values()) {
         if (!P.queued || P.state === 'skip' || P.state === 'idle') continue;
         c.total++;
@@ -5850,6 +6121,7 @@ button, input, select, output { font: inherit; }
         if (gq.waitUntil > Date.now() && /Gemini/.test(cur.step || '')) t += `（等 Gemini ${secs(gq.waitUntil)} 秒）`;
         return t;
       }
+      if (c.seam) return '接起切在兩張圖中間的字';
       if (c.fixBusy || c.fixWait) {
         if (fq.waitUntil > Date.now() && !c.fixBusy) return `等 Gemini 修正（${secs(fq.waitUntil)} 秒）`;
         return `Gemini 修正中 ${c.fixDone}/${c.fixDone + c.fixBusy + c.fixWait} 張`;
@@ -5885,7 +6157,7 @@ button, input, select, output { font: inherit; }
       // 有圖在翻、但超過 30 秒完全沒有進展（也不是在等 Gemini 的每分鐘次數）：好像卡住了
       const waiting = Math.max(gq.waitUntil, fq.waitUntil) > now;
       const stuck = c.busy > 0 && !waiting && now - lastProgress > 30000;
-      const fixing = c.fixBusy + c.fixWait;
+      const fixing = c.fixBusy + c.fixWait + c.seam;
       const act = activity(c);
       let text;
       if (pg.hidden) text = '顯示原文中';
@@ -5926,7 +6198,7 @@ button, input, select, output { font: inherit; }
         let hover = false;
         try { hover = chipEl.matches(':hover'); } catch (_) { /* 舊瀏覽器 */ }
         const c = counts();
-        if (hover || pg.hidden || c.busy || c.fixBusy || c.fixWait || c.err) { hideChipLater(1500); return; }
+        if (hover || pg.hidden || c.busy || c.fixBusy || c.fixWait || c.seam || c.err) { hideChipLater(1500); return; }
         chipEl.classList.remove('is-on');
         fabSync();
       }, ms);
