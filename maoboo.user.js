@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.4.5
-// @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
+// @version      1.4.6
+// @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
 // @supportURL   https://github.com/MAOBOO2240/userscripts/issues
@@ -41,6 +41,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.4.6  「YouTube Shorts 自動下一部」改成「短影片自動下一部」：Instagram、Facebook 的 Reels 也會自動跳下一部；
+ *        改成播完才跳：播到最後一格就換下一部，不會先聽到同一部重播的開頭（想提早跳可以調「提早幾秒跳」）
  * 1.4.5  漫畫翻譯：兩個連在一起、中間沒有外框的對話框（8 字形）分開翻，各自橫排，框裡沒認出來的字（像 Y—?）也一起蓋白底；
  *        結巴的字（H-HOW、I-I'M）翻成「你、你…」，不會再出現「H-你…」，話說到一半的破折號改成「——」；
  *        MM-HMM、HMM、SHH 這種沒有母音的語氣詞不會再被當成雜訊丟掉（之前會露出半行原文）
@@ -6601,136 +6603,154 @@ button, input, select, output { font: inherit; }
       },
     },
 
-    /* ---------------- YouTube Shorts 自動下一部 ---------------- */
+    /* ---------------- 短影片自動下一部（YouTube Shorts、Instagram Reels、Facebook Reels） ---------------- */
     {
       id: 'ytShorts',
       group: 'video',
-      name: 'YouTube Shorts 自動下一部',
-      site: 'YouTube',
-      desc: '短影片快播完時自動跳到下一部，切到其他分頁也會繼續播。只在 Shorts 頁面作用。',
-      defaults: { remain: 0.3 },
-      fields: [{ key: 'remain', label: '剩幾秒時跳', type: 'number', min: 0.1, max: 3, step: 0.1, unit: '秒' }],
-      hint: '電腦比較慢、常常沒跳到下一部時，可以把秒數調大一點。',
+      name: '短影片自動下一部',
+      site: 'YouTube／IG／FB',
+      desc: 'YouTube Shorts、Instagram 和 Facebook 的 Reels 播完馬上跳到下一部，不會先重播開頭。YouTube Shorts 切到其他分頁也會繼續播。',
+      defaults: { early: 0 },
+      fields: [{ key: 'early', label: '提早幾秒跳', type: 'number', min: 0, max: 3, step: 0.1, unit: '秒' }],
+      hint: '0 是播完才跳（預設）；想略過片尾的話可以調大一點。',
       frames: 'all',
       phase: 'start',
-      match: () => HOST === 'www.youtube.com' && location.protocol === 'https:',
+      match: () => location.protocol === 'https:' && (HOST === 'www.youtube.com' || /(^|\.)instagram\.com$/.test(HOST) || /(^|\.)facebook\.com$/.test(HOST)),
       start(ctx) {
         const doc = PAGE.document;
-        const isShortsPage = () => PAGE.location.href.includes('/shorts/');
-        const proto = PAGE.Document.prototype;
-        const rawVis = Object.getOwnPropertyDescriptor(proto, 'visibilityState');
-        const rawHidden = Object.getOwnPropertyDescriptor(proto, 'hidden');
-        const isRealBackground = () => (rawVis ? rawVis.get.call(doc) === 'hidden' : false);
+        const site = HOST === 'www.youtube.com' ? 'yt' : /instagram\.com$/.test(HOST) ? 'ig' : 'fb';
+        const TAG = '[短影片自動下一部]';
+        /** 在短影片頁面：YouTube /shorts/、Instagram /reels/、Facebook /reel/ */
+        const onShorts = () => {
+          const p = PAGE.location.pathname;
+          return site === 'yt' ? p.startsWith('/shorts/') : site === 'ig' ? p.startsWith('/reels/') : /^\/reels?\//.test(p);
+        };
+        const offs = [];
+        const on = (t, type, fn) => { t.addEventListener(type, fn, true); offs.push(() => t.removeEventListener(type, fn, true)); };
 
-        // 第一重：只在 Shorts 頁面偽裝成「分頁一直在前景」，其他 YouTube 頁面照常
-        try {
-          if (rawVis) Object.defineProperty(doc, 'visibilityState', { configurable: true, get: toPage(function () { return isShortsPage() ? 'visible' : rawVis.get.call(doc); }) });
-          if (rawHidden) Object.defineProperty(doc, 'hidden', { configurable: true, get: toPage(function () { return isShortsPage() ? false : rawHidden.get.call(doc); }) });
-        } catch (e) { console.error('[YT Shorts Auto] 偽裝 Visibility 失敗', e); }
-        const stopIfShorts = (e) => { if (isShortsPage()) e.stopImmediatePropagation(); };
-        PAGE.addEventListener('visibilitychange', stopIfShorts, true);
-        doc.addEventListener('visibilitychange', stopIfShorts, true);
-        PAGE.addEventListener('blur', stopIfShorts, true);
-
-        // 第二重：三軌跳轉
-        let lastTriggeredSrc = '';
-        let isTransitioning = false;
-        const timers = new Set();
-        const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); };
-        const KE = PAGE.KeyboardEvent;
-        function triggerNextVideo(video) {
-          if (isTransitioning) return;
-          isTransitioning = true;
-          lastTriggeredSrc = video.currentSrc || video.src;
-          console.log('[YT Shorts Auto] 偵測到觸發點，啟動三軌跳轉機制...');
-          // 軌道一：模擬鍵盤向下鍵
-          const keyDownEvent = new KE('keydown', { key: 'ArrowDown', keyCode: 40, code: 'ArrowDown', which: 40, bubbles: true, cancelable: true });
-          doc.dispatchEvent(keyDownEvent);
-          PAGE.dispatchEvent(keyDownEvent);
-          video.dispatchEvent(keyDownEvent);
-          // 軌道二：把下一部影片的區塊捲上來
-          const activeRenderer = doc.querySelector('ytd-reel-video-renderer[is-active]') || doc.querySelector('ytd-reel-video-renderer');
-          let nextRenderer = null;
-          if (activeRenderer) {
-            nextRenderer = activeRenderer.nextElementSibling;
-            if (nextRenderer && nextRenderer.tagName === 'YTD-REEL-VIDEO-RENDERER') {
-              console.log('[YT Shorts Auto] 執行物理滾動導航...');
-              nextRenderer.scrollIntoView({ behavior: 'auto', block: 'start' });
-            }
-          }
-          // 軌道三：點「下一部」按鈕
-          later(() => {
-            const selectors = [
-              'ytd-reel-video-renderer[is-active] #navigation-button-down button',
-              '#navigation-button-down button',
-              'button[aria-label="下一部影片"]',
-              'button[aria-label="Next video"]',
-              '#navigation-button-down tp-yt-paper-button',
-              '[id*="navigation-button-down"] button',
-            ];
-            for (const selector of selectors) {
-              const btn = doc.querySelector(selector);
-              if (btn) { console.log(`[YT Shorts Auto] 成功偵測到按鈕選取器: ${selector}，執行點擊`); btn.click(); break; }
-            }
-          }, 50);
-          // 補刀：1.2 秒後還在同一部就再試一次
-          later(() => {
-            const currentSrc = video.currentSrc || video.src;
-            if (currentSrc === lastTriggeredSrc && !video.paused) {
-              console.warn('[YT Shorts Auto] 雙重驗證卡死！啟動強制補刀...');
-              if (nextRenderer) nextRenderer.scrollIntoView({ behavior: 'auto', block: 'start' });
-              doc.dispatchEvent(new KE('keydown', { key: 'ArrowDown', keyCode: 40, bubbles: true }));
-            }
-            isTransitioning = false;
-          }, 1200);
+        // YouTube：只在 Shorts 頁面偽裝成「分頁一直在前景」（切到其他分頁也繼續播），其他 YouTube 頁面照常
+        let isRealBackground = () => false;
+        if (site === 'yt') {
+          const proto = PAGE.Document.prototype;
+          const rawVis = Object.getOwnPropertyDescriptor(proto, 'visibilityState');
+          const rawHidden = Object.getOwnPropertyDescriptor(proto, 'hidden');
+          isRealBackground = () => (rawVis ? rawVis.get.call(doc) === 'hidden' : false);
+          try {
+            if (rawVis) Object.defineProperty(doc, 'visibilityState', { configurable: true, get: toPage(function () { return onShorts() ? 'visible' : rawVis.get.call(doc); }) });
+            if (rawHidden) Object.defineProperty(doc, 'hidden', { configurable: true, get: toPage(function () { return onShorts() ? false : rawHidden.get.call(doc); }) });
+          } catch (e) { console.error(TAG, '偽裝 Visibility 失敗', e); }
+          const stopIfShorts = (e) => { if (onShorts()) e.stopImmediatePropagation(); };
+          on(PAGE, 'visibilitychange', stopIfShorts);
+          on(doc, 'visibilitychange', stopIfShorts);
+          on(PAGE, 'blur', stopIfShorts);
+          offs.push(() => { try { delete doc.visibilityState; delete doc.hidden; } catch (_) { /* 還原失敗不影響播放 */ } });
         }
 
-        // 第三重：事件監聽
-        const onTime = (e) => {
-          if (!isShortsPage()) return;
-          const video = e.target;
-          if (!video || video.tagName !== 'VIDEO') return;
-          const currentSrc = video.currentSrc || video.src;
-          if (currentSrc !== lastTriggeredSrc && video.currentTime < 1) isTransitioning = false;
-          const remain = Math.max(0.05, Number(ctx.cfg().remain) || 0.3);
-          if (video.duration && video.duration - video.currentTime <= remain && currentSrc !== lastTriggeredSrc && !isTransitioning) {
-            console.log('[YT Shorts Auto] 進度達到倒數觸發點。');
-            triggerNextVideo(video);
-          }
+        const timers = new Set();
+        const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
+        const early = () => Math.min(3, Math.max(0, Number(ctx.cfg().early) || 0));
+        /** 正在看的那一部：畫面正中間、夠大的影片 */
+        const isMain = (v) => {
+          const r = v.getBoundingClientRect();
+          const vh = PAGE.innerHeight || 800;
+          return r.height >= vh * 0.35 && r.top < vh * 0.5 && r.bottom > vh * 0.5;
         };
-        const onEnded = (e) => {
-          if (!isShortsPage()) return;
-          const video = e.target;
-          if (!video || video.tagName !== 'VIDEO') return;
-          const currentSrc = video.currentSrc || video.src;
-          if (currentSrc !== lastTriggeredSrc && !isTransitioning) {
-            console.log('[YT Shorts Auto] 偵測到 ended 事件，強制保底換片！');
-            triggerNextVideo(video);
+        /** 往下捲動一部的捲動區（短影片一部一格、會自動對齊） */
+        const scroller = (v) => {
+          for (let p = v.parentElement; p && p !== doc.documentElement; p = p.parentElement) {
+            const cs = PAGE.getComputedStyle(p);
+            if (/(auto|scroll)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 10) return p;
           }
+          return null;
         };
-        const onPause = (e) => {
-          if (!isShortsPage()) return;
-          const video = e.target;
-          if (!video || video.tagName !== 'VIDEO') return;
-          if (isRealBackground() && !isTransitioning && video.currentTime < video.duration - 0.6) {
-            console.log('[YT Shorts Auto] 背景被動暫停，自動回復播放...');
-            video.play().catch(() => {});
-          }
+        const nextButton = () => {
+          if (site === 'yt') return doc.querySelector('#navigation-button-down button') || doc.querySelector('button[aria-label="下一部影片"], button[aria-label="Next video"]');
+          const re = site === 'ig' ? /下一段|下一個|next/i : /下一張|下一個|next/i;
+          return [...doc.querySelectorAll('[role="button"][aria-label], button[aria-label]')].find((b) => re.test(b.getAttribute('aria-label')) && b.getBoundingClientRect().width > 0) || null;
         };
-        doc.addEventListener('timeupdate', onTime, true);
-        doc.addEventListener('ended', onEnded, true);
-        doc.addEventListener('pause', onPause, true);
-        console.log('[YT Shorts Auto] 全站監聽版已全面載入（Shorts 安全鎖已啟用）。');
-
+        /** 換到下一部的方法（一個沒用再換下一個）：YouTube 先按「下一部」按鈕；IG、FB 先往下捲一格（不管介面是什麼語言都可以） */
+        const ways = (v) => {
+          const click = () => { const b = nextButton(); if (!b) return false; b.click(); return true; };
+          const scroll = () => { const sc = scroller(v); if (!sc) return false; sc.scrollBy({ top: sc.clientHeight, behavior: 'smooth' }); return true; };
+          const key = () => { doc.dispatchEvent(new PAGE.KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true })); return true; };
+          return site === 'yt' ? [click, scroll, key] : [scroll, click, key];
+        };
+        let busy = null; // 正在換下一部：{ v }
+        /** 換到下一部。hold：先暫停這一部（會自己重播的影片，暫停了就不會先聽到開頭） */
+        function goNext(v, hold) {
+          if (busy) return;
+          if (hold && !v.paused) v.pause();
+          const url = PAGE.location.href;
+          const src = v.currentSrc;
+          busy = { v };
+          const list = ways(v);
+          let i = 0;
+          const moved = () => PAGE.location.href !== url || v.currentSrc !== src || !v.isConnected;
+          const tryOne = () => { while (i < list.length) if (list[i++]()) return true; return false; };
+          const check = () => {
+            if (moved()) { busy = null; return; }
+            if (!tryOne()) {
+              // 換不了（例如已經是最後一部）：照原本的樣子從頭播
+              busy = null;
+              console.warn(TAG, '換不到下一部，從頭播放');
+              if (v.paused && v.isConnected) { if (v.ended) v.currentTime = 0; v.play().catch(() => {}); }
+              return;
+            }
+            later(check, 900);
+          };
+          tryOne();
+          later(check, 900);
+        }
+        // 快播完時：算好剩下的時間準時處理（timeupdate 大約 0.25 秒才一次，不夠準）
+        let endTimer = 0;
+        const arm = (v) => {
+          clearTimeout(endTimer);
+          const d = v.duration;
+          if (!d || !Number.isFinite(d) || v.paused) return;
+          // 會自己重播的影片（YouTube）在最後一刻先暫停；IG、FB 的影片會停在最後，等播完再換
+          const lead = Math.max(early(), v.loop ? 0.06 : 0);
+          if (!lead) return;
+          const left = (d - v.currentTime) / (v.playbackRate || 1);
+          if (left - lead > 0.7) return;
+          endTimer = later(() => {
+            if (v.paused || busy || !onShorts() || !isMain(v)) return;
+            const now = (v.duration - v.currentTime) / (v.playbackRate || 1);
+            if (now - lead > 0.03) { arm(v); return; } // 中間卡了一下：重新算
+            goNext(v, v.loop);
+          }, Math.max(0, (left - lead) * 1000));
+        };
+        const last = new WeakMap(); // 影片 → 上一次的播放時間和網址（看有沒有繞回開頭；YouTube 換下一部時是同一個影片換網址）
+        const wrapped = (v, prev) => v.loop && !!prev && prev.src === v.currentSrc && v.duration > 1 && prev.t > v.duration - 0.8 && v.currentTime < 0.5;
+        const isVideo = (v) => v && v.tagName === 'VIDEO';
+        on(PAGE, 'timeupdate', (e) => {
+          const v = e.target;
+          if (!isVideo(v) || !onShorts()) return;
+          const prev = last.get(v);
+          last.set(v, { t: v.currentTime, src: v.currentSrc });
+          if (busy || !isMain(v)) return;
+          if (wrapped(v, prev)) { goNext(v, true); return; } // 已經繞回開頭：馬上暫停、換下一部
+          arm(v);
+        });
+        on(PAGE, 'seeking', (e) => {
+          const v = e.target;
+          if (!isVideo(v) || !onShorts() || busy || !isMain(v)) return;
+          if (wrapped(v, last.get(v))) goNext(v, true);
+        });
+        on(PAGE, 'ended', (e) => {
+          const v = e.target;
+          if (!isVideo(v) || !onShorts() || !(isMain(v) || (busy && busy.v === v))) return;
+          e.stopImmediatePropagation(); // 不讓網站把這一部從頭再播一次
+          goNext(v, false);
+        });
+        // YouTube：切到背景時被暫停的話，自動繼續播
+        on(PAGE, 'pause', (e) => {
+          const v = e.target;
+          if (site !== 'yt' || !isVideo(v) || !onShorts() || busy) return;
+          if (isRealBackground() && v.currentTime < v.duration - 0.6) v.play().catch(() => {});
+        });
         return () => {
-          PAGE.removeEventListener('visibilitychange', stopIfShorts, true);
-          doc.removeEventListener('visibilitychange', stopIfShorts, true);
-          PAGE.removeEventListener('blur', stopIfShorts, true);
-          doc.removeEventListener('timeupdate', onTime, true);
-          doc.removeEventListener('ended', onEnded, true);
-          doc.removeEventListener('pause', onPause, true);
+          offs.forEach((f) => f());
           timers.forEach(clearTimeout);
-          try { delete doc.visibilityState; delete doc.hidden; } catch (_) { /* 還原失敗不影響播放 */ }
         };
       },
     },
