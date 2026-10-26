@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.1.0
+// @version      1.2.0
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -32,10 +32,13 @@
 // @connect      pstatic.net
 // @connect      kakaocdn.net
 // @connect      webtoons.com
+// @connect      nhentai.net
 // @connect      *
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.2.0  漫畫翻譯：深色底、沒有白底的字也會翻；Gemini 同時用多個模型、邊翻邊顯示，快很多；整頁翻譯會先下載後面的圖先翻好（翻頁式也是）；
+ *        狀態列縮小並避開網站按鈕；字壓在格線上不會再被切開翻錯，譯文不會互相蓋住；混進簡體字會自動轉繁體
  * 1.1.0  新增漫畫翻譯：英文、日文、韓文漫畫翻成繁體中文並用白底蓋住原文；滑到圖片上按「翻譯」，或按 Alt+T 翻譯整頁
  * 1.0.2  Threads 自己的音量條會跟記住的音量同步，拉的時候不會突然變大聲；在 Threads 音量條上調的音量也會記住
  * 1.0.1  Threads 影片上的音量條改成預設不顯示，音量在設定面板調（面板裡可以再打開）
@@ -249,28 +252,30 @@ button, input, select, output { font: inherit; }
 .mt-hover button[hidden] { display: none; }
 .mt-hover button.is-busy { cursor: progress; }
 .mt-hover button:focus-visible { outline: 2px solid #9DBAFF; outline-offset: -2px; border-radius: 16px; }
-.mt-chip { position: fixed; right: 16px; bottom: 16px; display: flex; align-items: center; gap: 6px; max-width: calc(100vw - 32px);
-  padding: 5px 5px 5px 14px; border-radius: 20px; background: var(--ink); color: #FFFFFF; font-family: var(--font);
-  font-size: 13px; line-height: 1.3; box-shadow: 0 10px 28px rgba(20, 33, 46, .32); animation: mb-in .18s ease-out; }
-.mt-chip-text { display: flex; flex-direction: column; min-width: 0; margin-right: 4px; }
-.mt-chip-text strong { font-weight: 700; }
-.mt-chip-text span { overflow: hidden; color: #C9D2DC; font-size: 12px; white-space: nowrap; text-overflow: ellipsis;
+.mt-chip { position: fixed; left: 16px; bottom: 16px; display: flex; align-items: center; gap: 4px; max-width: calc(100vw - 32px);
+  height: 32px; padding: 0 3px 0 12px; box-sizing: border-box; border-radius: 16px; background: rgba(15, 22, 30, .86);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); color: #FFFFFF; font-family: var(--font); font-size: 12.5px;
+  font-weight: 600; line-height: 1; box-shadow: 0 6px 18px rgba(0, 0, 0, .28); opacity: 0; pointer-events: none;
+  transform: translateY(6px); transition: opacity .18s, transform .18s; }
+.mt-chip.is-on { opacity: 1; pointer-events: auto; transform: none; }
+.mt-chip-text { overflow: hidden; min-width: 0; margin-right: 4px; white-space: nowrap; text-overflow: ellipsis;
   font-variant-numeric: tabular-nums; }
-.mt-chip button { flex: none; height: 30px; padding: 0 11px; border: 1px solid rgba(255, 255, 255, .3); border-radius: 15px;
-  background: transparent; color: #FFFFFF; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
-.mt-chip button:hover { background: rgba(255, 255, 255, .12); }
-.mt-chip button.mt-x { width: 30px; padding: 0; border-color: transparent; color: #AEB9C5; font-size: 18px; line-height: 1; }
+.mt-chip button { flex: none; height: 26px; padding: 0 10px; border: 0; border-radius: 13px; background: rgba(255, 255, 255, .14);
+  color: #FFFFFF; font: inherit; cursor: pointer; }
+.mt-chip button:hover { background: rgba(255, 255, 255, .24); }
+.mt-chip button.mt-x { width: 26px; padding: 0; background: transparent; color: #AEB9C5; font-size: 16px; }
+.mt-chip button.mt-x:hover { background: rgba(255, 255, 255, .14); color: #FFFFFF; }
 .mt-chip button:focus-visible, .mt-fab:focus-visible { outline: 2px solid #9DBAFF; outline-offset: 2px; }
-.mt-fab { position: fixed; right: 16px; bottom: 16px; width: 48px; height: 48px; border: 0; border-radius: 50%;
-  background: var(--ink); color: #FFFFFF; font-family: var(--font); font-size: 17px; font-weight: 700; cursor: pointer;
-  box-shadow: 0 8px 22px rgba(20, 33, 46, .35); }
+.mt-fab { position: fixed; right: 16px; bottom: 16px; width: 44px; height: 44px; border: 0; border-radius: 50%;
+  background: rgba(15, 22, 30, .82); color: #FFFFFF; font-family: var(--font); font-size: 16px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .3); }
 @media (max-width: 640px) { .mb-toasts { bottom: 78px; } }
 
 @keyframes mb-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes mb-fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .mb-toast, .mb-backdrop, .mb-panel, .mt-chip { animation: none !important; }
-  .mb-vol, .mb-toast.is-leaving, .mb-knob, .mb-switch input, .mt-hover { transition: none !important; }
+  .mb-toast, .mb-backdrop, .mb-panel { animation: none !important; }
+  .mb-vol, .mb-toast.is-leaving, .mb-knob, .mb-switch input, .mt-hover, .mt-chip { transition: none !important; }
 }
 `;
 
@@ -1485,7 +1490,7 @@ button, input, select, output { font: inherit; }
    * ==================================================================== */
 
   const MT_SITES = ['kingofshojo.com', 'ezmanga.org', 'comix.to', 'telltome.net', 'g-mh.org', 'baozimh.org', 'bzmh.org', 'baozimh.com',
-    'comic.naver.com', 'webtoon.kakao.com', 'page.kakao.com', 'webtoons.com', 'lezhin.com', 'toptoon.com', 'bomtoon.com'];
+    'comic.naver.com', 'webtoon.kakao.com', 'page.kakao.com', 'webtoons.com', 'lezhin.com', 'toptoon.com', 'bomtoon.com', 'nhentai.net'];
   const MT_FONT = '"Microsoft JhengHei", "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", "Source Han Sans TC", "Heiti TC", sans-serif';
   const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
   // 拿不到模型清單時用這份；順序就是優先順序
@@ -1567,17 +1572,19 @@ button, input, select, output { font: inherit; }
     cur[model] = { until, why };
     store.set('mt.block', { k: kh, m: cur });
   }
-  /** 選出現在可以用的模型；每分鐘次數用完時等一下，不降級 */
+  /** 目前可以用的模型：沒被擋的第一個；全部只是每分鐘次數用完 → 等一下；全部今天用完 → 沒有 */
   function mtPick(kh) {
     const blocks = mtBlocks(kh);
     const now = Date.now();
     let soonest = Infinity;
+    let rate = null;
     for (const m of mtChain(kh)) {
       const b = blocks[m];
       if (!b || b.until <= now) return { model: m };
-      if (b.why === 'rate') return { wait: b.until - now, model: m };
+      if (b.why === 'rate') { if (!rate || b.until < rate.until) rate = { model: m, until: b.until }; continue; }
       soonest = Math.min(soonest, b.until);
     }
+    if (rate) return { wait: rate.until - now, model: rate.model };
     return { none: true, until: soonest };
   }
   function mtEngineState(c) {
@@ -1594,7 +1601,7 @@ button, input, select, output { font: inherit; }
     if (s.kind === 'nokey') return '還沒填金鑰，目前用免費模式（瀏覽器辨識文字＋Google 翻譯，品質較普通）。Gemini 金鑰可以免費申請；免費額度用完只會改回免費模式，不會收費。';
     if (s.kind === 'badkey') return '金鑰無效或沒有權限，目前用免費模式。請重新貼上金鑰再按「測試」。';
     if (s.kind === 'quota') return `Gemini 今天的免費額度都用完了，目前用免費模式；${mtWhen(s.until)} 後自動換回 Gemini。`;
-    return `目前使用 ${modelLabel(s.model)}。每個模型每天都有免費額度，用完會自動換下一個，全部用完就改用免費模式，不會收費。`;
+    return `使用 Gemini（同時用你帳號裡所有免費的模型，例如 ${modelLabel(s.model)}）。每個模型每天都有免費額度，用完會自動換下一個，全部用完就改用免費模式，不會收費。`;
   }
 
   /* ---------- Gemini 連線 ---------- */
@@ -1610,6 +1617,60 @@ button, input, select, output { font: inherit; }
         onload: (res) => resolve({ status: res.status, text: res.responseText || '' }),
         onerror: () => resolve({ status: 0, text: '' }),
         ontimeout: () => resolve({ status: -1, text: '' }),
+      });
+    });
+  }
+
+  /**
+   * 送出請求；有 onRaw 時用串流（Gemini 邊產生邊回傳），每收到一段就把目前收到的全部文字交給 onRaw。
+   * 不支援串流的管理器會在最後一次給完整回應。
+   */
+  function mtPost(url, key, body, timeout, onRaw) {
+    return new Promise((resolve) => {
+      let raw = '';
+      let status = 0;
+      let streamed = false;
+      let finished = false;
+      let cut = false;
+      const finish = (st) => {
+        if (finished) return;
+        finished = true;
+        resolve({ status: st, text: raw, cut });
+      };
+      const feed = () => { if (onRaw) { try { onRaw(raw); } catch (e) { console.warn('[MAOBOO] 串流處理', e); } } };
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url,
+        timeout,
+        headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+        data: JSON.stringify(body),
+        responseType: onRaw ? 'stream' : undefined,
+        onloadstart: onRaw ? async (r) => {
+          const stream = r && r.response;
+          if (!stream || typeof stream.getReader !== 'function') return;
+          streamed = true;
+          if (r.status) status = r.status;
+          const reader = stream.getReader();
+          const dec = new TextDecoder();
+          try {
+            for (;;) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              raw += typeof value === 'string' ? value : dec.decode(value, { stream: true });
+              feed();
+            }
+          } catch (_) { cut = true; } // 連線中斷：用已收到的部分
+          finish(status || 200);
+        } : undefined,
+        onload: (r) => {
+          if (r && r.status) status = r.status;
+          if (streamed) return;
+          raw = (r && (r.responseText || (typeof r.response === 'string' ? r.response : ''))) || '';
+          feed();
+          finish(status);
+        },
+        onerror: () => finish(0),
+        ontimeout: () => finish(-1),
       });
     });
   }
@@ -1701,11 +1762,10 @@ button, input, select, output { font: inherit; }
             image: { type: 'integer', description: 'Image number N from the "Image N" label' },
             box_2d: { type: 'array', items: { type: 'integer' }, minItems: 4, maxItems: 4, description: '[ymin, xmin, ymax, xmax] normalized to 0-1000, tightly around the text' },
             lang: { type: 'string', enum: ['en', 'ja', 'ko', 'zh', 'other'] },
-            text: { type: 'string', description: 'Original text exactly as written' },
             vertical: { type: 'boolean' },
             zh: { type: 'string', description: 'Traditional Chinese (Taiwan) translation' },
           },
-          required: ['image', 'box_2d', 'lang', 'text', 'zh'],
+          required: ['image', 'box_2d', 'lang', 'zh'],
         },
       },
     },
@@ -1716,24 +1776,115 @@ button, input, select, output { font: inherit; }
     return [
       'You are an expert comic translator and letterer. Translate comics (manga, manhwa/webtoons, manhua) into Traditional Chinese as used in Taiwan (繁體中文，台灣用語).',
       'You receive one or more images, each preceded by a label "Image N". They are consecutive parts of the same comic in reading order; a tall webtoon strip may be split across several images.',
-      'In every image, find each piece of story text: speech bubbles, thought bubbles, narration boxes, captions, signs and notes.',
-      sfx ? 'Also include sound effects and onomatopoeia, translated into natural Chinese onomatopoeia.' : 'Do not include sound effects or onomatopoeia that are drawn as part of the artwork.',
+      'Find EVERY piece of text a reader needs, wherever it is and whatever is behind it:',
+      '- speech and thought bubbles of any shape or color, including dark, colored, gradient, jagged or transparent ones;',
+      '- narration and caption boxes of any color, and narration or thoughts written directly on the artwork without any box;',
+      '- white or colored text with outlines or shadows over the artwork;',
+      '- system or status windows, phone and computer screens, letters, notes, books, signs and labels;',
+      '- small translations of sound effects that scanlators added next to the artwork.',
+      'Never skip text just because its background is not white.',
+      sfx ? 'Also include large decorative sound effects drawn into the artwork, translated into natural Chinese onomatopoeia.'
+        : 'Leave out only large decorative sound effects that are drawn into the artwork itself.',
       'Ignore watermarks, website names, URLs, scanlator or translator credits, page numbers and logos. Skip text that is already Chinese.',
-      'Return one item per text block; all lines inside one bubble or box form one block.',
+      'Return one item per text block; all lines inside one bubble or box form one block. Output the items in reading order, image by image.',
       '- image: the image number N.',
-      '- box_2d: [ymin, xmin, ymax, xmax] of the block\'s text in that image, normalized to 0-1000. Enclose all of the block\'s characters tightly; do not include the bubble outline or empty space around the text.',
+      '- box_2d: [ymin, xmin, ymax, xmax] of the block\'s text in that image, normalized to 0-1000. Enclose all of the block\'s characters tightly, including punctuation; do not include the bubble outline or empty space around the text.',
       '- lang: the language of the original text (en, ja, ko, zh or other).',
-      '- text: the original text exactly as written.',
       '- vertical: true if the original text is written vertically.',
       '- zh: a natural, fluent Traditional Chinese translation that fits the scene, the speaker and the tone. Keep names and terms consistent. Use Taiwanese wording and full-width punctuation. No notes or explanations.',
+      'Write every translation in Traditional Chinese characters (正體字) only; never use Simplified Chinese characters.',
       'If a block is cut off at the top or bottom edge of an image, still include its visible part.',
       'If an image has no text, return no items for it.',
     ].join('\n');
   }
 
+  /** 從還沒傳完的 JSON 文字裡，取出已經完整的每一個項目（串流時邊收邊顯示） */
+  function mtItemScanner() {
+    let pos = 0;
+    const stack = [];
+    let inStr = false;
+    let esc = false;
+    let start = -1;
+    let startDepth = 0;
+    return (text) => {
+      const out = [];
+      for (; pos < text.length; pos++) {
+        const ch = text[pos];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === '\\') esc = true;
+          else if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === '{' || ch === '[') {
+          if (ch === '{' && start < 0 && stack[stack.length - 1] === '[') { start = pos; startDepth = stack.length; }
+          stack.push(ch);
+        } else if (ch === '}' || ch === ']') {
+          stack.pop();
+          if (ch === '}' && start >= 0 && stack.length === startDepth) {
+            try { out.push(JSON.parse(text.slice(start, pos + 1))); } catch (_) { /* 不完整，略過 */ }
+            start = -1;
+          }
+        }
+      }
+      return out;
+    };
+  }
+
   /* ---------- 圖片擷取與切片 ---------- */
 
-  const mtImgUrl = (img) => img.currentSrc || img.src || '';
+  const MT_LAZY_ATTRS = ['data-src', 'data-original', 'data-lazy-src', 'data-lazy', 'data-url', 'data-img', 'data-image', 'data-echo', 'data-cfsrc', 'data-pagespeed-lazy-src'];
+  const mtAbs = (u) => { try { return new URL(u, location.href).href; } catch (_) { return ''; } };
+  const mtPlaceholder = (u) => !u || /^(about|javascript):/i.test(u) || (/^data:/i.test(u) && u.length < 1000);
+  function mtSrcsetBest(ss) {
+    let best = '';
+    let bw = -1;
+    for (const part of String(ss).split(/,\s+/)) {
+      const [u, d] = part.trim().split(/\s+/);
+      if (!u) continue;
+      const n = parseFloat(d) || 1;
+      if (n > bw) { bw = n; best = u; }
+    }
+    return best;
+  }
+  /** 圖片真正的網址：已載入就用目前顯示的；延遲載入的圖從 data-src 這類屬性找，才能先下載先翻譯 */
+  function mtRealUrl(img) {
+    const cur = img.currentSrc || '';
+    if (img.complete && img.naturalWidth >= 50 && cur && !mtPlaceholder(cur)) return mtAbs(cur);
+    for (const a of MT_LAZY_ATTRS) {
+      const v = (img.getAttribute(a) || '').trim();
+      if (v && !mtPlaceholder(v)) return mtAbs(v);
+    }
+    const ss = img.getAttribute('data-srcset') || img.getAttribute('data-lazy-srcset') || img.getAttribute('srcset');
+    if (ss) {
+      const u = mtSrcsetBest(ss);
+      if (u && !mtPlaceholder(u)) return mtAbs(u);
+    }
+    const src = (img.getAttribute('src') || '').trim();
+    return src && !mtPlaceholder(src) ? mtAbs(src) : '';
+  }
+  /** 同一張圖的代號：去掉網址裡每次都會變的簽章、時間參數，換網域的圖庫也認得出是同一張 */
+  function mtUrlKey(url) {
+    let u;
+    try { u = new URL(url); } catch (_) { return String(url); }
+    if (u.protocol === 'data:') return 'd:' + strHash(url);
+    if (u.protocol === 'blob:') return url;
+    const keep = [];
+    u.searchParams.forEach((v, k) => {
+      if (v.length > 24 || /^(token|sig|signature|expires?|exp|st|e|t|ts|v|ver|hash|h|key|policy|auth|_|x-amz-.*|key-pair-id)$/i.test(k)) return;
+      keep.push(k + '=' + v);
+    });
+    keep.sort();
+    return u.pathname + (keep.length ? '?' + keep.join('&') : '');
+  }
+  /** 圖片所在的資料夾（含網域；i1、i2 這種分流編號視為同一個），用來認出同一話的其他圖 */
+  const mtDirOf = (url) => {
+    try {
+      const u = new URL(url);
+      return u.hostname.replace(/^([a-z]+)\d+\./i, '$1.') + u.pathname.replace(/[^/]*$/, '');
+    } catch (_) { return ''; }
+  };
   const mtCanvas = (w, h) => {
     if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(w, h);
     const c = document.createElement('canvas');
@@ -1781,30 +1932,35 @@ button, input, select, output { font: inherit; }
     });
   }
 
-  /** 取得圖片像素：同網域直接讀；跨網域先用一般下載（可用快取），被擋再用油猴下載 */
-  async function mtCapture(img) {
-    const src = mtImgUrl(img);
-    if (!src) throw new Error('找不到圖片網址');
-    let url;
-    try { url = new URL(src, location.href); } catch (_) { throw new Error('圖片網址無法辨識'); }
-    const inline = url.protocol === 'data:' || url.protocol === 'blob:';
-    const same = inline || url.origin === location.origin;
-    if ((same || img.crossOrigin) && img.complete && img.naturalWidth) {
+  /**
+   * 取得圖片像素：畫面上已載入、同網域的直接讀；其他先用一般下載（可用瀏覽器快取），
+   * 圖庫不允許跨站讀取時改用油猴下載。還沒顯示的圖（延遲載入、下一頁）也能先下載。
+   */
+  async function mtCaptureUrl(url, img, noRef) {
+    if (!url) throw new Error('找不到圖片網址');
+    let u;
+    try { u = new URL(url); } catch (_) { throw new Error('圖片網址無法辨識'); }
+    const inline = u.protocol === 'data:' || u.protocol === 'blob:';
+    const same = inline || u.origin === location.origin;
+    if (img && (same || img.crossOrigin) && img.complete && img.naturalWidth && mtAbs(img.currentSrc) === url) {
       try { return await createImageBitmap(img); } catch (_) { /* 改用下載 */ }
     }
     let blob = null;
     try {
-      const opts = inline ? {} : { mode: 'cors', credentials: same ? 'include' : 'omit', cache: 'force-cache' };
-      const res = await fetch(url.href, opts);
+      const res = await fetch(url, inline ? {} : { mode: 'cors', credentials: same ? 'include' : 'omit', cache: 'force-cache' });
       if (res.ok) blob = await res.blob();
-    } catch (_) { /* 網站不允許跨站讀取，改用油猴下載 */ }
-    if ((!blob || !blob.size) && !inline) blob = await mtGmBlob(url.href, img.referrerPolicy === 'no-referrer' ? '' : location.href);
+    } catch (_) { /* 圖庫不允許跨站讀取，改用油猴下載 */ }
+    if ((!blob || !blob.size) && !inline) blob = await mtGmBlob(url, noRef ? '' : location.href);
     if (!blob) throw new Error('讀不到圖片');
     try { return await createImageBitmap(blob); } catch (_) { throw new Error('圖片格式無法讀取'); }
   }
 
-  /** 每一列是不是同一個顏色（漫畫格子之間的空白），用來決定切在哪裡 */
-  function mtUniformRows(bmp) {
+  /**
+   * 每一列的狀態，用來決定切在哪裡：
+   * uni = 整列同一個顏色（格子之間的空白）；busy = 和這一列主要顏色差很多的點有幾個
+   * （只有幾條細格線穿過的空白，busy 很小；有字、有圖的列，busy 很大）
+   */
+  function mtRowStats(bmp) {
     const A = Math.max(1, Math.min(160, bmp.width));
     const Ha = Math.max(1, Math.round(bmp.height * A / bmp.width));
     const c = mtCanvas(A, Ha);
@@ -1812,22 +1968,38 @@ button, input, select, output { font: inherit; }
     g.imageSmoothingQuality = 'high';
     g.drawImage(bmp, 0, 0, A, Ha);
     const d = g.getImageData(0, 0, A, Ha).data;
-    const ys = new Uint8Array(Ha);
+    const uni = new Uint8Array(Ha);
+    const busy = new Uint16Array(Ha);
+    const lum = new Uint8Array(A);
+    const hist = new Uint16Array(32);
     for (let y = 0; y < Ha; y++) {
       let i = y * A * 4;
       let r0 = 255; let r1 = 0; let g0 = 255; let g1 = 0; let b0 = 255; let b1 = 0;
+      hist.fill(0);
       for (let x = 0; x < A; x++, i += 4) {
         const r = d[i]; const gg = d[i + 1]; const b = d[i + 2];
         if (r < r0) r0 = r; if (r > r1) r1 = r;
         if (gg < g0) g0 = gg; if (gg > g1) g1 = gg;
         if (b < b0) b0 = b; if (b > b1) b1 = b;
+        const l = (r * 299 + gg * 587 + b * 114) / 1000;
+        lum[x] = l;
+        hist[l >> 3]++;
       }
-      ys[y] = r1 - r0 <= 14 && g1 - g0 <= 14 && b1 - b0 <= 14 ? 1 : 0;
+      uni[y] = r1 - r0 <= 14 && g1 - g0 <= 14 && b1 - b0 <= 14 ? 1 : 0;
+      let mode = 0;
+      for (let k = 1; k < 32; k++) if (hist[k] > hist[mode]) mode = k;
+      const mc = mode * 8 + 4;
+      let n = 0;
+      for (let x = 0; x < A; x++) if (Math.abs(lum[x] - mc) > 26) n++;
+      busy[y] = n;
     }
-    return { ys, Ha };
+    return { uni, busy, A, Ha };
   }
 
-  /** 長條漫畫切成約 1.7 倍寬的片段，盡量切在格子間的空白，避免切到對話框 */
+  /**
+   * 長條漫畫切成約 1.7 倍寬的片段。切在格子間的空白；有格線穿過的空白也可以；
+   * 都找不到時切在字最少的地方，並和下一片重疊一大段，讓每段文字都能在其中一片裡完整看到。
+   */
   function mtPlanSlices(bmp) {
     const W0 = bmp.width;
     const H0 = bmp.height;
@@ -1838,18 +2010,17 @@ button, input, select, output { font: inherit; }
     const cuts = [];
     let pos = 0;
     if (H > maxH) {
-      const rows = mtUniformRows(bmp);
+      const rows = mtRowStats(bmp);
       const toA = (y) => Math.max(0, Math.min(rows.Ha - 1, Math.round(y / H * rows.Ha)));
       const fromA = (ya) => ya / rows.Ha * H;
       const minRun = Math.max(14, W * 0.025);
-      while (H - pos > maxH) {
-        const target = pos + W * 1.7;
-        const a0 = toA(pos + W * 1.2);
-        const a1 = toA(pos + W * 2.1);
+      const quiet = Math.max(2, Math.round(rows.A * 0.05));
+      /** 目標附近最好的一段連續空白列 */
+      const findRun = (a0, a1, ok, target) => {
         let best = null;
         let start = -1;
         for (let ya = a0; ya <= a1 + 1; ya++) {
-          const u = ya <= a1 && rows.ys[ya] === 1;
+          const u = ya <= a1 && ok(ya);
           if (u && start < 0) start = ya;
           if (!u && start >= 0) {
             const len = fromA(ya - start);
@@ -1859,23 +2030,43 @@ button, input, select, output { font: inherit; }
             start = -1;
           }
         }
+        return best;
+      };
+      while (H - pos > maxH) {
+        const target = pos + W * 1.7;
+        const a0 = toA(pos + W * 1.2);
+        const a1 = toA(pos + W * 2.1);
+        const best = findRun(a0, a1, (ya) => rows.uni[ya] === 1, target)
+          || findRun(a0, a1, (ya) => rows.busy[ya] <= quiet, target);
         if (best) {
           const c = Math.round(best.center);
           cuts.push([pos, c]);
           pos = c;
-        } else {
-          // 找不到空白：重疊一段，被切到的字會在下一片完整出現，之後再去掉重複
-          const c = Math.round(target);
-          cuts.push([pos, c]);
-          pos = c - Math.round(W * 0.2);
+          continue;
         }
+        // 找不到空白：切在附近幾列加起來最空的地方（避開字）；下一片從上面一段距離、同樣最空的地方開始，
+        // 被切到的那段字在下一片裡就是完整的，之後再去掉切到一半的那份
+        const quietest = (y0, y1, aim) => {
+          let pick = toA(aim);
+          let low = Infinity;
+          for (let ya = toA(y0); ya <= toA(y1); ya++) {
+            let v = 0;
+            for (let j = -2; j <= 2; j++) v += rows.busy[Math.max(0, Math.min(rows.Ha - 1, ya + j))];
+            v += Math.abs(fromA(ya) - aim) / W * 6; // 差不多空時，選靠近目標的
+            if (v < low) { low = v; pick = ya; }
+          }
+          return Math.round(fromA(pick));
+        };
+        const c = quietest(pos + W * 1.4, pos + W * 2, target);
+        cuts.push([pos, c]);
+        pos = Math.max(pos + 1, quietest(c - W * 0.55, c - W * 0.2, c - W * 0.35));
       }
     }
     cuts.push([pos, H]);
     return { W0, H0, W, H, k, cuts };
   }
 
-  async function mtSliceImage(bmp, plan, i) {
+  async function mtSliceImage(bmp, plan, i, lossless) {
     const [y0, y1] = plan.cuts[i];
     const hh = Math.max(1, y1 - y0);
     const c = mtCanvas(plan.W, hh);
@@ -1884,8 +2075,9 @@ button, input, select, output { font: inherit; }
     g.fillRect(0, 0, plan.W, hh);
     g.imageSmoothingQuality = 'high';
     g.drawImage(bmp, 0, y0 / plan.k, plan.W0, hh / plan.k, 0, 0, plan.W, hh);
-    const blob = await mtToBlob(c, 'image/jpeg', 0.85);
-    return { i, y0, y1, canvas: c, blob };
+    // 只留壓縮過的圖：整話先下載時不會吃掉太多記憶體。免費模式要辨識文字，用不失真的 PNG
+    const blob = await mtToBlob(c, lossless ? 'image/png' : 'image/jpeg', 0.82);
+    return { i, y0, y1, blob };
   }
 
   /* ---------- 譯文排版：找出最大、放得進方框的字級，並平均每行長度 ---------- */
@@ -1895,10 +2087,80 @@ button, input, select, output { font: inherit; }
     if (!mtCtx) mtCtx = mtCanvas(4, 4).getContext('2d');
     return mtCtx;
   }
+  /* ---------- 簡體字轉繁體（翻譯偶爾混進簡體字時） ---------- */
+  // 前 1001 個是只有簡體才用的字（看到才轉換），後面是簡體、繁體都有的字（確定是簡體文字時才一起轉）
+  const MT_S2T_N = 1001;
+  const MT_S2T_S = '国为这个来会时学说们发对长过业经门动进区开产军还现机体与当两实么关从内没将员东头间无见战点场数样问并级应资务气汉总电声设义统处马儿领队计别权话报给变书华议称决张'
+    + '导术结师达题条规县风运组听济论强黄选记却职号类传带农边联质阳难历专认车举线团备争众连调转该尔让较际亲单红约亚则属积图装许参观鱼办复远构随势热网语铁断爱纪况证编满'
+    + '觉双乐标织项飞节龙响药轻击请离显罗营视护创兴虽费试宝识维宫环乡责严桥仅杀围态杨负层须续状银终钱赛独细冲获习医尽脸弹楼艺陆协镇检写苏验紧劳户优财养陈卫伤绝阶刘刚亿'
+    + '闻审压监敌兰温园树词岛预继执谁惊画辑剑谈礼乱讲临挥欧简担岁荆贵辖帮块额错剧欢够孙阵销坚练脚读测吴宁换异顾顺鲜败货矿归买险评吗遗笔输渐顶训录毕献爷纳钟脑饭扩齐赶诉'
+    + '诗础届静盘卖湾减灵杂泽侧庆妈馆补旧轮妇载怀软枪墙恶顿稳诸绿荣针宽库罢谢页拥圣戏奖币圆烧讨烟误疗闭脱寻岗丽横驻纸夺灯坏丝径购阴择宪鲁庙舰课奥虚隐粮络摇潜庄厅赵访韦'
+    + '吨扬纵纷贸汇灭仪缓盖迹释润岭虑钢码坛锛损税综伦韩竞乌铺脉纯谋剂谓频壮骑鸡绍铜摆签缩废订绩盐萨贴触莲抢闹纺讯誉梦峡残闪贼倾贫诺麦泪辈镜贡缘贝骂饮奋跃赞启阁劲晋沟锋'
+    + '胆凭闯汤迁叹储贯彻凤赏辽询毁净弃亩伟览龄绕浓绪蓝荡阅鸿惯鸟辞穷键递隶厉闲袭灾涨湿郑译邓肠诏册锅阔趋锦颜悬诚晓蒋摄罚辆腾绘扑颁违贷饰滚迟辅烦盗凉冈驾肃抚炼纲忧扫暂'
+    + '渔宾寿猪邻劝践顷赋莱拟贤愤轰陕犹辉颇浅丧惨驱牵详纤档岂绣吓赖卢颗邮凯帅锁帐胶壳脏弯挡筹肿债贾谱夹尘钻丛贺扰锡炉纹亏鉴齿兽碍辩拨恒励鸣偿拦胁纽烂尝艰乔轴喷轨畅雾丢'
+    + '窝洁飘肤砖赢挤狮诊篮唤侠枢栏纠链恋惧笼弥叙剥骗猎俩缝携滩祸驰狱纬踪浑绳颈遥忆阀逻恼贪疯侦鹰驶斩鹤赐闷轿辐伪抛侨饱吕玛碱冯仓钦庞祯舱坝艳聪瑶谦卧猫衔苍浆铸惩迈锐颤'
+    + '滨饿缠怜撑肾胀谨鹅镑兑贞诞禀饼狭杩赔绵诱顽摊账鸭挣芦睁纱冻轩蛮晕郧鹏栖叠舆斋萧皱蚀钉阐逊铭硕赌饶沪雇掷厌渊氢溃颠铅禅韵婴悦肴凑兹烛歼钧渗窑谐厦谊壶赚谭勋饲裤畴耻'
+    + '牺贩竖晒伞鳞龟泼屡瞒厮钩谅霉阙坟宠鳍讼虾涛巩洒枣滞哑焕娱捞婶娇厨嘱禄赠铃虏饥缔蕴鸦锻骤捣茎厢匀灏驼缚垄旷绸缴贱躯颂帜绑仑镖钠刹妆驴铝闸滥酱啸骚窃凿垫钙哟锥懒盏庐'
+    + '谕屿酿诈锌沦卤凛蕲蚕搅哗呜搁骇鹃阎浏诵萝颊灿琼骄凄钊驳谏缅锤觅拢胪诀坠贿钓沧耸垒谜缁贬窜葱颖诡腻彦痒赣粤贮绮讽衬烫昼闽钾敛垱寝毙荫涡桩锣缮揽铲尴恳秃搂挠呐驿诧绒'
+    + '鞑谎讳泻苇谣蚁潇粪诛栋谴衮堕鲟浇绞窦鲍钞讶琐滤锰绅窍鸽捡驯骡澜洼鳌镶挟邹俭缆聂芜着后里于种万几党据广价准极划确余占采斗胜范适云愿筑叶厂丰挂虫尸杰涌腊涂咸荐郁夸仆'
+    + '丑朴柜佣蜡帘淀游';
+  const MT_S2T_T = '國為這個來會時學說們發對長過業經門動進區開產軍還現機體與當兩實麼關從內沒將員東頭間無見戰點場數樣問並級應資務氣漢總電聲設義統處馬兒領隊計別權話報給變書華議稱決張'
+    + '導術結師達題條規縣風運組聽濟論強黃選記卻職號類傳帶農邊聯質陽難歷專認車舉線團備爭眾連調轉該爾讓較際親單紅約亞則屬積圖裝許參觀魚辦復遠構隨勢熱網語鐵斷愛紀況證編滿'
+    + '覺雙樂標織項飛節龍響藥輕擊請離顯羅營視護創興雖費試寶識維宮環鄉責嚴橋僅殺圍態楊負層須續狀銀終錢賽獨細衝獲習醫盡臉彈樓藝陸協鎮檢寫蘇驗緊勞戶優財養陳衛傷絕階劉剛億'
+    + '聞審壓監敵蘭溫園樹詞島預繼執誰驚畫輯劍談禮亂講臨揮歐簡擔歲荊貴轄幫塊額錯劇歡夠孫陣銷堅練腳讀測吳寧換異顧順鮮敗貨礦歸買險評嗎遺筆輸漸頂訓錄畢獻爺納鐘腦飯擴齊趕訴'
+    + '詩礎屆靜盤賣灣減靈雜澤側慶媽館補舊輪婦載懷軟槍牆惡頓穩諸綠榮針寬庫罷謝頁擁聖戲獎幣圓燒討煙誤療閉脫尋崗麗橫駐紙奪燈壞絲徑購陰擇憲魯廟艦課奧虛隱糧絡搖潛莊廳趙訪韋'
+    + '噸揚縱紛貿匯滅儀緩蓋跡釋潤嶺慮鋼碼壇錛損稅綜倫韓競烏鋪脈純謀劑謂頻壯騎雞紹銅擺簽縮廢訂績鹽薩貼觸蓮搶鬧紡訊譽夢峽殘閃賊傾貧諾麥淚輩鏡貢緣貝罵飲奮躍讚啟閣勁晉溝鋒'
+    + '膽憑闖湯遷嘆儲貫徹鳳賞遼詢毀淨棄畝偉覽齡繞濃緒藍蕩閱鴻慣鳥辭窮鍵遞隸厲閒襲災漲溼鄭譯鄧腸詔冊鍋闊趨錦顏懸誠曉蔣攝罰輛騰繪撲頒違貸飾滾遲輔煩盜涼岡駕肅撫煉綱憂掃暫'
+    + '漁賓壽豬鄰勸踐頃賦萊擬賢憤轟陝猶輝頗淺喪慘驅牽詳纖檔豈繡嚇賴盧顆郵凱帥鎖帳膠殼髒彎擋籌腫債賈譜夾塵鑽叢賀擾錫爐紋虧鑑齒獸礙辯撥恆勵鳴償攔脅紐爛嘗艱喬軸噴軌暢霧丟'
+    + '窩潔飄膚磚贏擠獅診籃喚俠樞欄糾鏈戀懼籠彌敘剝騙獵倆縫攜灘禍馳獄緯蹤渾繩頸遙憶閥邏惱貪瘋偵鷹駛斬鶴賜悶轎輻偽拋僑飽呂瑪鹼馮倉欽龐禎艙壩豔聰瑤謙臥貓銜蒼漿鑄懲邁銳顫'
+    + '濱餓纏憐撐腎脹謹鵝鎊兌貞誕稟餅狹榪賠綿誘頑攤賬鴨掙蘆睜紗凍軒蠻暈鄖鵬棲疊輿齋蕭皺蝕釘闡遜銘碩賭饒滬僱擲厭淵氫潰顛鉛禪韻嬰悅餚湊茲燭殲鈞滲窯諧廈誼壺賺譚勳飼褲疇恥'
+    + '犧販豎曬傘鱗龜潑屢瞞廝鉤諒黴闕墳寵鰭訟蝦濤鞏灑棗滯啞煥娛撈嬸嬌廚囑祿贈鈴虜飢締蘊鴉鍛驟搗莖廂勻灝駝縛壟曠綢繳賤軀頌幟綁侖鏢鈉剎妝驢鋁閘濫醬嘯騷竊鑿墊鈣喲錐懶盞廬'
+    + '諭嶼釀詐鋅淪滷凜蘄蠶攪譁嗚擱駭鵑閻瀏誦蘿頰燦瓊驕悽釗駁諫緬錘覓攏臚訣墜賄釣滄聳壘謎緇貶竄蔥穎詭膩彥癢贛粵貯綺諷襯燙晝閩鉀斂壋寢斃蔭渦樁鑼繕攬鏟尷懇禿摟撓吶驛詫絨'
+    + '韃謊諱瀉葦謠蟻瀟糞誅棟譴袞墮鱘澆絞竇鮑鈔訝瑣濾錳紳竅鴿撿馴騾瀾窪鰲鑲挾鄒儉纜聶蕪著後裡於種萬幾黨據廣價準極劃確餘佔採鬥勝範適雲願築葉廠豐掛蟲屍傑湧臘塗鹹薦鬱誇僕'
+    + '醜樸櫃傭蠟簾澱遊';
+  const MT_S2T_P = '头发 頭髮,理发 理髮,白发 白髮,金发 金髮,黑发 黑髮,银发 銀髮,长发 長髮,短发 短髮,秀发 秀髮,发型 髮型,发丝 髮絲,日历 日曆,农历 農曆,复杂 複雜,重复 重複,复制 複製,复习 複習,复印 複印,回复 回覆,答复 答覆,反复 反覆,胡须 鬍鬚,胡子 鬍子,冲洗 沖洗,冲澡 沖澡,冲泡 沖泡,收获 收穫,尽管 儘管,尽量 儘量,尽快 儘快,苏醒 甦醒,钟情 鍾情,钟爱 鍾愛,恶心 噁心,抽烟 抽菸,香烟 香菸,词汇 詞彙,标签 標籤,抽签 抽籤,书签 書籤,赞成 贊成,赞同 贊同,赞助 贊助,心脏 心臟,内脏 內臟,肝脏 肝臟,干什么 幹什麼,干嘛 幹嘛,干吗 幹嘛,干掉 幹掉,干活 幹活,能干 能幹,干得 幹得,干净 乾淨,干杯 乾杯,干脆 乾脆,干燥 乾燥,饼干 餅乾,皇后 皇后,王后 王后,太后 太后,公里 公里,千里 千里,万里 萬里,里程 里程,邻里 鄰里,故里 故里,英里 英里,不准 不准,批准 批准,准许 准許,占卜 占卜,风采 風采,神采 神采,文采 文采,北斗 北斗,漏斗 漏斗,斗篷 斗篷,小丑 小丑,佣金 佣金,拜托 拜託,委托 委託,托付 託付,家伙 傢伙,伙伴 夥伴,同伙 同夥,游泳 游泳,上游 上游,下游 下游,划船 划船,一只 一隻,两只 兩隻,几只 幾隻,这只 這隻,那只 那隻,每只 每隻,面条 麵條,拉面 拉麵,泡面 泡麵,关系 關係,没关系 沒關係,联系 聯繫,特征 特徵,象征 象徵,征求 徵求,凶手 兇手,凶狠 兇狠,凶残 兇殘';
+  let mtS2TData = null;
+  function mtS2T(t) {
+    if (!mtS2TData) {
+      const chars = new Map();
+      const uniq = new Set();
+      for (let i = 0; i < MT_S2T_S.length; i++) {
+        chars.set(MT_S2T_S[i], MT_S2T_T[i]);
+        if (i < MT_S2T_N) uniq.add(MT_S2T_S[i]);
+      }
+      const phrases = new Map();
+      let maxP = 0;
+      for (const pair of MT_S2T_P.split(',')) {
+        const [a, b] = pair.split(' ');
+        phrases.set(a, b);
+        maxP = Math.max(maxP, a.length);
+      }
+      mtS2TData = { chars, uniq, phrases, maxP };
+    }
+    const { chars, uniq, phrases, maxP } = mtS2TData;
+    let simp = false;
+    for (const ch of t) if (uniq.has(ch)) { simp = true; break; }
+    if (!simp) return t; // 已經是繁體：不動（「皇后」「公里」這類詞才不會被改錯）
+    let out = '';
+    for (let i = 0; i < t.length;) {
+      let hit = '';
+      let len = 0;
+      for (let L = Math.min(maxP, t.length - i); L >= 2 && !hit; L--) {
+        const v = phrases.get(t.substr(i, L));
+        if (v !== undefined) { hit = v; len = L; }
+      }
+      if (hit) { out += hit; i += len; continue; }
+      const ch = t[i];
+      out += chars.get(ch) || ch;
+      i++;
+    }
+    return out;
+  }
+
   function mtCleanZh(t) {
-    return String(t || '').replace(/\r/g, '').replace(/\s*\n\s*/g, ' ').replace(/\s+/g, ' ')
+    return mtS2T(String(t || '').replace(/\r/g, '').replace(/\s*\n\s*/g, ' ').replace(/\s+/g, ' ')
       .replace(/([⺀-鿿＀-￯　-〿])\s+(?=[⺀-鿿＀-￯　-〿])/g, '$1')
-      .trim();
+      .trim());
   }
 
   /**
@@ -2128,36 +2390,106 @@ button, input, select, output { font: inherit; }
       return true;
     }
 
-    function boxEl(b) {
+    /**
+     * 譯文框的位置（圖片內容座標）。同一段字被拆成好幾塊、框互相重疊時合併成一個框；
+     * 只有邊緣碰到的，從重疊處的中間分開。譯文框不會蓋住別的譯文。
+     */
+    function arrange() {
+      const rs = blocks.map((b) => ({ x0: b.x0 * cw, y0: b.y0 * ch, x1: b.x1 * cw, y1: b.y1 * ch, zh: b.zh, vertical: !!b.vertical }));
+      const ov = (a, c) => [Math.min(a.x1, c.x1) - Math.max(a.x0, c.x0), Math.min(a.y1, c.y1) - Math.max(a.y0, c.y0)];
+      const area = (a) => (a.x1 - a.x0) * (a.y1 - a.y0);
+      for (let again = true; again;) {
+        again = false;
+        for (let i = 0; i < rs.length && !again; i++) {
+          for (let j = i + 1; j < rs.length; j++) {
+            const [ix, iy] = ov(rs[i], rs[j]);
+            if (ix <= 0 || iy <= 0 || ix * iy < Math.min(area(rs[i]), area(rs[j])) * 0.12) continue;
+            rs[i] = mergeRect(rs[i], rs[j]);
+            rs.splice(j, 1);
+            again = true;
+            break;
+          }
+        }
+      }
+      for (let i = 0; i < rs.length; i++) {
+        for (let j = i + 1; j < rs.length; j++) {
+          const a = rs[i];
+          const c = rs[j];
+          const [ix, iy] = ov(a, c);
+          if (ix <= 0 || iy <= 0) continue;
+          if (iy <= ix) {
+            const [top, bot] = a.y0 + a.y1 <= c.y0 + c.y1 ? [a, c] : [c, a];
+            const mid = (bot.y0 + top.y1) / 2;
+            top.y1 = mid;
+            bot.y0 = mid;
+          } else {
+            const [lf, rt] = a.x0 + a.x1 <= c.x0 + c.x1 ? [a, c] : [c, a];
+            const mid = (rt.x0 + lf.x1) / 2;
+            lf.x1 = mid;
+            rt.x0 = mid;
+          }
+        }
+      }
+      return rs;
+    }
+    /** 合併兩塊譯文：依閱讀順序接起來（直排由右到左，橫排由上到下、同一排由左到右） */
+    function mergeRect(a, c) {
+      const vertical = a.vertical && c.vertical;
+      let first = a;
+      let second = c;
+      if (vertical) {
+        const ox = Math.min(a.x1, c.x1) - Math.max(a.x0, c.x0);
+        if (ox > Math.min(a.x1 - a.x0, c.x1 - c.x0) * 0.5 ? c.y0 < a.y0 : c.x1 > a.x1) [first, second] = [c, a];
+      } else {
+        const oy = Math.min(a.y1, c.y1) - Math.max(a.y0, c.y0);
+        if (oy > Math.min(a.y1 - a.y0, c.y1 - c.y0) * 0.5 ? c.x0 < a.x0 : c.y0 < a.y0) [first, second] = [c, a];
+      }
+      let zh;
+      if (second.zh.includes(first.zh)) zh = second.zh;
+      else if (first.zh.includes(second.zh)) zh = first.zh;
+      else zh = first.zh + (/[A-Za-z0-9]$/.test(first.zh) && /^[A-Za-z0-9]/.test(second.zh) ? ' ' : '') + second.zh;
+      return { x0: Math.min(a.x0, c.x0), y0: Math.min(a.y0, c.y0), x1: Math.max(a.x1, c.x1), y1: Math.max(a.y1, c.y1), zh, vertical };
+    }
+
+    function boxEl(r, all, placed) {
       const pad = Math.max(3, cw * 0.012);
-      let x0 = Math.max(0, b.x0 * cw - pad);
-      let x1 = Math.min(cw, b.x1 * cw + pad);
-      let y0 = Math.max(0, b.y0 * ch - pad);
-      let y1 = Math.min(ch, b.y1 * ch + pad);
+      /** 方框可以往外放大，但不能蓋到別的原文，也不能和已經放好的譯文框重疊 */
+      const clamp = (x0, y0, x1, y1) => {
+        for (const o of all.concat(placed)) {
+          if (o === r || Math.min(x1, o.x1) <= Math.max(x0, o.x0) || Math.min(y1, o.y1) <= Math.max(y0, o.y0)) continue;
+          const gaps = [o.x0 - r.x1, r.x0 - o.x1, o.y0 - r.y1, r.y0 - o.y1];
+          const side = gaps.indexOf(Math.max(...gaps));
+          if (side === 0) x1 = Math.max(r.x1, Math.min(x1, o.x0));
+          else if (side === 1) x0 = Math.min(r.x0, Math.max(x0, o.x1));
+          else if (side === 2) y1 = Math.max(r.y1, Math.min(y1, o.y0));
+          else y0 = Math.min(r.y0, Math.max(y0, o.y1));
+        }
+        return [Math.max(0, x0), Math.max(0, y0), Math.min(cw, x1), Math.min(ch, y1)];
+      };
+      let [x0, y0, x1, y1] = clamp(r.x0 - pad, r.y0 - pad, r.x1 + pad, r.y1 + pad);
       const maxFont = Math.max(13, cw * 0.055);
       const fit = (w, hh) => {
         const inset = Math.max(2, Math.min(10, Math.min(w, hh) * 0.07));
-        let lay = mtLayout(b.zh, w - inset * 2, hh - inset * 2, { maxFont });
+        let lay = mtLayout(r.zh, w - inset * 2, hh - inset * 2, { maxFont });
         // 原文直排（日文漫畫）時，台灣的中文版也是直排：只要字不會小太多就用直排
-        if (b.vertical && hh > w) {
-          const v = mtLayout(b.zh, w - inset * 2, hh - inset * 2, { maxFont, vertical: true });
+        if (r.vertical && hh > w) {
+          const v = mtLayout(r.zh, w - inset * 2, hh - inset * 2, { maxFont, vertical: true });
           if (v && (!lay || (!v.overflow && (lay.overflow || v.s >= lay.s * 0.75)))) lay = v;
         }
         return lay;
       };
       let lay = fit(x1 - x0, y1 - y0);
-      if (lay && (lay.overflow || lay.s < 10)) {
-        // 譯文比原文長：在圖片範圍內把方框放大一點
-        const gx = (x1 - x0) * 0.25;
-        const gy = (y1 - y0) * 0.15;
-        const ex0 = Math.max(0, x0 - gx);
-        const ex1 = Math.min(cw, x1 + gx);
-        const ey0 = Math.max(0, y0 - gy);
-        const ey1 = Math.min(ch, y1 + gy);
-        const big = fit(ex1 - ex0, ey1 - ey0);
-        if (big && (!big.overflow || lay.overflow) && big.s > lay.s) { lay = big; x0 = ex0; x1 = ex1; y0 = ey0; y1 = ey1; }
+      // 譯文比原文長、字會太小：在不蓋到其他譯文的範圍內，把方框一步步放大
+      for (const [fx, fy] of [[0.25, 0.15], [0.5, 0.35], [0.9, 0.6]]) {
+        if (!lay || (!lay.overflow && lay.s >= 10)) break;
+        const gx = (r.x1 - r.x0 + pad * 2) * fx;
+        const gy = (r.y1 - r.y0 + pad * 2) * fy;
+        const e = clamp(r.x0 - pad - gx, r.y0 - pad - gy, r.x1 + pad + gx, r.y1 + pad + gy);
+        const big = fit(e[2] - e[0], e[3] - e[1]);
+        if (big && (!big.overflow || lay.overflow) && big.s > lay.s) { lay = big; [x0, y0, x1, y1] = e; }
       }
       if (!lay) return null;
+      placed.push({ x0, y0, x1, y1 });
       const w = x1 - x0;
       const hh = y1 - y0;
       return h('div', {
@@ -2171,9 +2503,12 @@ button, input, select, output { font: inherit; }
       laidW = cw;
       laidH = ch;
       if (!cw || !ch) { layer.replaceChildren(); return; }
+      let rs = [];
+      try { rs = arrange(); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯排版失敗', e); }
       const els = [];
-      for (const b of blocks) {
-        try { const el = boxEl(b); if (el) els.push(el); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯排版失敗', e); }
+      const placed = [];
+      for (const r of rs) {
+        try { const el = boxEl(r, rs, placed); if (el) els.push(el); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯排版失敗', e); }
       }
       layer.replaceChildren(...els);
     }
@@ -2231,7 +2566,7 @@ button, input, select, output { font: inherit; }
    * 免費模式辨識前的清理：轉成黑白，並擦掉對話框外框、格線、大塊的圖。
    * Tesseract 看到字被一個大外框圍住時常常整段略過，只留「字大小」的黑色塊就讀得到。
    */
-  function mtOcrClean(src, w0, h0, scale) {
+  function mtOcrClean(src, w0, h0, scale, invert) {
     const w = Math.max(1, Math.round(w0 * scale));
     const hh = Math.max(1, Math.round(h0 * scale));
     const c = document.createElement('canvas');
@@ -2244,44 +2579,150 @@ button, input, select, output { font: inherit; }
     const d = img.data;
     const n = w * hh;
     const dark = new Uint8Array(n);
-    for (let i = 0, j = 0; i < n; i++, j += 4) dark[i] = d[j] * 299 + d[j + 1] * 587 + d[j + 2] * 114 < 128000 ? 1 : 0;
-    const label = new Int32Array(n);
+    let darkCount = 0;
+    for (let i = 0, j = 0; i < n; i++, j += 4) {
+      const lum = d[j] * 299 + d[j + 1] * 587 + d[j + 2] * 114;
+      if (lum < 128000) darkCount++;
+      // 反過來時找的是亮的字（深色底的白字、有外框的白字）
+      dark[i] = invert ? (lum > 165000 ? 1 : 0) : (lum < 128000 ? 1 : 0);
+    }
     const stack = new Int32Array(n);
-    const keep = [0];
-    const maxD = Math.max(60 * scale, w * 0.11);
-    let cur = 0;
-    for (let p = 0; p < n; p++) {
-      if (!dark[p] || label[p]) continue;
-      cur++;
+    /** 從 p 開始把 inMask 為真的相連點標成 id，回傳外框、點數、有沒有碰到 near 為真的點 */
+    const flood = (p, id, lab, inMask, near) => {
       let sp = 0;
       stack[sp++] = p;
-      label[p] = cur;
+      lab[p] = id;
       let x0 = w;
       let y0 = hh;
       let x1 = 0;
       let y1 = 0;
+      let count = 0;
+      let touch = false;
+      const visit = (r) => {
+        if (near && !touch && near(r)) touch = true;
+        if (!lab[r] && inMask(r)) { lab[r] = id; stack[sp++] = r; }
+      };
       while (sp) {
         const q = stack[--sp];
         const x = q % w;
         const y = (q - x) / w;
+        count++;
         if (x < x0) x0 = x; if (x > x1) x1 = x;
         if (y < y0) y0 = y; if (y > y1) y1 = y;
-        if (x > 0 && dark[q - 1] && !label[q - 1]) { label[q - 1] = cur; stack[sp++] = q - 1; }
-        if (x < w - 1 && dark[q + 1] && !label[q + 1]) { label[q + 1] = cur; stack[sp++] = q + 1; }
-        if (y > 0 && dark[q - w] && !label[q - w]) { label[q - w] = cur; stack[sp++] = q - w; }
-        if (y < hh - 1 && dark[q + w] && !label[q + w]) { label[q + w] = cur; stack[sp++] = q + w; }
+        if (x > 0) visit(q - 1);
+        if (x < w - 1) visit(q + 1);
+        if (y > 0) visit(q - w);
+        if (y < hh - 1) visit(q + w);
       }
-      keep[cur] = x1 - x0 <= maxD && y1 - y0 <= maxD ? 1 : 0;
+      return { x0, y0, x1, y1, bw: x1 - x0 + 1, bh: y1 - y0 + 1, count, touch };
+    };
+    // 1) 連在一起的一塊一塊：太大的（對話框外框、格線、大塊的圖）整塊擦掉，只留字大小的
+    const maxD = Math.max(60 * scale, w * 0.11);
+    const label = new Int32Array(n);
+    const keep = [0];
+    const kept = []; // 留下來的（字大小的）每一塊的外框
+    const isDark = (q) => dark[q] === 1;
+    let cur = 0;
+    for (let p = 0; p < n; p++) {
+      if (!dark[p] || label[p]) continue;
+      const r = flood(p, ++cur, label, isDark, null);
+      keep[cur] = r.bw - 1 <= maxD && r.bh - 1 <= maxD ? 1 : 0;
+      if (keep[cur]) kept.push(r);
     }
+    // 2) 字壓在直的格線上時，字和格線連成一大塊，跟著被擦掉了：拿掉格線後，把碰到格線、字大小的碎塊放回來
+    const LONG = Math.max(90 * scale, Math.min(w, hh) * 0.12);
+    const THIN = Math.max(6, Math.round(6 * scale));
+    const gone = (q) => dark[q] === 1 && !keep[label[q]];
+    const hrun = new Uint16Array(n);
+    const vrun = new Uint16Array(n);
+    for (let y = 0; y < hh; y++) {
+      const row = y * w;
+      for (let x = 0; x < w;) {
+        if (!dark[row + x]) { x++; continue; }
+        let e = x;
+        while (e < w && dark[row + e]) e++;
+        for (let k = x; k < e; k++) hrun[row + k] = Math.min(65535, e - x);
+        x = e;
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < hh;) {
+        if (!dark[y * w + x]) { y++; continue; }
+        let e = y;
+        while (e < hh && dark[e * w + x]) e++;
+        for (let k = y; k < e; k++) vrun[k * w + x] = Math.min(65535, e - y);
+        y = e;
+      }
+    }
+    const line = new Uint8Array(n);
+    let lines = 0;
+    for (let i = 0; i < n; i++) {
+      if (gone(i) && ((vrun[i] >= LONG && hrun[i] <= THIN) || (hrun[i] >= LONG && vrun[i] <= THIN))) { line[i] = 1; lines++; }
+    }
+    const sub = new Int32Array(n);
+    const rescue = [0];
+    if (lines && !invert) { // 反過來（找亮的字）時不需要：格線是深色的
+      const G = maxD * 0.7;
+      const inSub = (q) => gone(q) && !line[q];
+      const onLine = (q) => line[q] === 1;
+      const cand = [];
+      let id = 0;
+      for (let p = 0; p < n; p++) {
+        if (sub[p] || !inSub(p)) continue;
+        const r = flood(p, ++id, sub, inSub, onLine);
+        rescue[id] = 0;
+        const fill = r.count / (r.bw * r.bh);
+        if (r.touch && r.bw <= G && r.bh <= G && fill >= 0.06 && fill <= 0.85) cand.push(Object.assign(r, { id }));
+      }
+      /** 旁邊（同一行或同一列）有差不多大的字：真的是字，不是圖裡的線段 */
+      const nearText = (b, list) => list.some((k) => {
+        if (k === b) return false;
+        const oy = Math.min(b.y1, k.y1) - Math.max(b.y0, k.y0);
+        if (oy >= Math.min(b.bh, k.bh) * 0.5 && k.bh >= b.bh * 0.4 && k.bh <= b.bh * 2.5
+          && Math.max(k.x0 - b.x1, b.x0 - k.x1) <= Math.max(b.bh, k.bh) * 1.2) return true;
+        const ox = Math.min(b.x1, k.x1) - Math.max(b.x0, k.x0);
+        return ox >= Math.min(b.bw, k.bw) * 0.5 && k.bw >= b.bw * 0.4 && k.bw <= b.bw * 2.5
+          && Math.max(k.y0 - b.y1, b.y0 - k.y1) <= Math.max(b.bw, k.bw) * 1.2;
+      });
+      // 兩輪：第二輪也算第一輪救回來的（格線兩邊的字都碰到格線時）
+      const ok = [];
+      for (let round = 0; round < 2; round++) {
+        for (const b of cand) if (!rescue[b.id] && nearText(b, kept.concat(ok))) { rescue[b.id] = 1; ok.push(b); }
+      }
+    }
+    let keptN = kept.length;
+    for (let k = 1; k < rescue.length; k++) keptN += rescue[k];
     for (let i = 0, j = 0; i < n; i++, j += 4) {
-      const v = label[i] && keep[label[i]] ? 0 : 255;
+      const v = (label[i] && keep[label[i]]) || (sub[i] && rescue[sub[i]]) ? 0 : 255;
       d[j] = v;
       d[j + 1] = v;
       d[j + 2] = v;
       d[j + 3] = 255;
     }
     g.putImageData(img, 0, 0);
+    c.darkRatio = darkCount / n;
+    c.kept = keptN;
     return c;
+  }
+
+  /** 合併兩次辨識（一般、反白）的結果；重疊的只留字比較多的那個 */
+  function mtMergeGroups(a, b) {
+    const out = a.slice();
+    const letters = (g) => g.text.replace(/[^\p{L}]/gu, '').length;
+    for (const g of b) {
+      let dup = -1;
+      for (let i = 0; i < out.length; i++) {
+        const o = out[i];
+        const ix = Math.min(g.x1, o.x1) - Math.max(g.x0, o.x0);
+        const iy = Math.min(g.y1, o.y1) - Math.max(g.y0, o.y0);
+        if (ix <= 0 || iy <= 0) continue;
+        const small = Math.min((g.x1 - g.x0) * (g.y1 - g.y0), (o.x1 - o.x0) * (o.y1 - o.y0));
+        if ((ix * iy) / small >= 0.3) { dup = i; break; }
+      }
+      if (dup < 0) out.push(g);
+      else if (letters(g) > letters(out[dup])) out[dup] = g;
+    }
+    return out;
   }
 
   function mtScriptOk(text, lang) {
@@ -2509,89 +2950,195 @@ button, input, select, output { font: inherit; }
     const tell = (id, msg, opts) => { if (told.has(id)) return; told.add(id); toast(msg, Object.assign({ timeout: 6000 }, opts)); };
     const keyAction = { label: '設定金鑰', primary: true, run: () => openPanel() };
 
-    const recs = new Map(); // img → 這張圖的翻譯狀態
+    /* ---------- 漫畫頁（以圖片網址為準）與畫面上顯示它的 <img> ---------- */
+    const pages = new Map(); // 網址代號 → 這張圖的翻譯
+    const views = new Map(); // <img> → { img, P, overlay }
     let order = 0;
-    const prep = limiter(2); // 同時讀取、切片的圖片數
-    const ocrQ = limiter(1); // 免費模式一次辨識一片
 
-    /* ---------- 共用狀態更新（合併成每一格畫面最多一次） ---------- */
+    function getPage(url) {
+      const k = mtUrlKey(url);
+      let P = pages.get(k);
+      if (!P) {
+        P = {
+          key: k, url, els: new Set(), gen: 0, state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '',
+          engines: new Set(), shown: true, order: order++, noRef: false, langP: null, started: 0, queued: false, guess: false, userCancel: false,
+        };
+        pages.set(k, P);
+      } else if (P.state !== 'busy') P.url = url; // 有簽章的網址會更新
+      return P;
+    }
+    function bindImg(img) {
+      const url = mtRealUrl(img);
+      let V = views.get(img);
+      if (!url) { if (V) unbind(V); return null; }
+      const P = getPage(url);
+      if (V && V.P === P) return V;
+      if (V) unbind(V);
+      V = { img, P, overlay: null };
+      views.set(img, V);
+      P.els.add(img);
+      if (img.referrerPolicy === 'no-referrer') P.noRef = true;
+      watchPage();
+      if (P.blocks.length) render(P);
+      return V;
+    }
+    function unbind(V) {
+      V.P.els.delete(V.img);
+      if (V.overlay) { V.overlay.destroy(); V.overlay = null; }
+      views.delete(V.img);
+      visibleOv.delete(V);
+    }
+    const shouldShow = (P) => P.shown && !(pg.on && pg.hidden);
+    /** 圖片現在顯示的就是翻好的那張（延遲載入的圖還是預留的空白圖時，先不蓋譯文） */
+    const ready = (img, P) => img.complete && img.naturalWidth > 1 && !mtPlaceholder(img.currentSrc || '')
+      && mtUrlKey(mtAbs(img.currentSrc || img.getAttribute('src') || '')) === P.key;
+    function render(P) {
+      for (const img of P.els) {
+        const V = views.get(img);
+        if (!V) continue;
+        if (!P.blocks.length) { if (V.overlay) { V.overlay.destroy(); V.overlay = null; visibleOv.delete(V); } continue; }
+        if (!V.overlay || !V.overlay.alive()) {
+          V.overlay = mtOverlay(img);
+          ovIO.observe(img);
+          ro.observe(img);
+        }
+        V.overlay.setBlocks(P.blocks);
+        V.overlay.show(shouldShow(P) && ready(img, P));
+      }
+    }
+    function showAll() {
+      for (const V of views.values()) if (V.overlay) V.overlay.show(shouldShow(V.P) && ready(V.img, V.P));
+    }
+    function resetPage(P) {
+      P.gen++;
+      Object.assign(P, { state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', shown: true, langP: null, queued: false });
+      render(P);
+      setStatus();
+    }
+    /**
+     * 加入新的文字框：和已有的重疊一半以上視為同一段字，保留完整、較大的那個；
+     * 被切片切到一半的（edge），另一片已經有完整的就丟掉
+     */
+    function addBlocks(P, list) {
+      const area = (r) => Math.max(1e-9, (r.x1 - r.x0) * (r.y1 - r.y0));
+      for (const b of list) {
+        let skip = false;
+        for (let i = 0; i < P.blocks.length && !skip; i++) {
+          const o = P.blocks[i];
+          const ix = Math.min(b.x1, o.x1) - Math.max(b.x0, o.x0);
+          const iy = Math.min(b.y1, o.y1) - Math.max(b.y0, o.y0);
+          if (ix <= 0 || iy <= 0) continue;
+          const ov = ix * iy;
+          const aB = area(b);
+          const aO = area(o);
+          if (ov / Math.min(aB, aO) >= 0.5) {
+            if ((o.edge && !b.edge) || (o.edge === b.edge && aB > aO)) P.blocks[i] = b;
+            skip = true;
+          } else if (b.edge && !o.edge && ov / aB >= 0.25) skip = true;
+          else if (o.edge && !b.edge && ov / aO >= 0.25) { P.blocks.splice(i, 1); i--; }
+        }
+        if (!skip) P.blocks.push(b);
+      }
+      render(P);
+    }
+
+    /**
+     * 優先順序（數字越小越先）：畫面上的 → 下面還沒看到的（越近越先）→ 隱藏中的其他頁 → 預先載入的 → 已經看過的
+     */
+    let curAt = 0;
+    let curOrder = 0;
+    /** 目前畫面上第一張圖的順序（翻頁式閱讀器：隱藏的頁裡，這一頁之後的先翻） */
+    function currentOrder() {
+      if (Date.now() - curAt < 300) return curOrder;
+      curAt = Date.now();
+      const vh = innerHeight || 800;
+      let best = Infinity;
+      for (const V of views.values()) {
+        if (V.P.order >= best || !V.img.isConnected) continue;
+        const r = V.img.getBoundingClientRect();
+        if ((r.width || r.height) && r.bottom > 0 && r.top < vh) best = V.P.order;
+      }
+      if (best !== Infinity) curOrder = best;
+      return curOrder;
+    }
+    function prioOf(P) {
+      const vh = innerHeight || 800;
+      let best = Infinity;
+      for (const img of P.els) {
+        if (!img.isConnected) continue;
+        const r = img.getBoundingClientRect();
+        let p;
+        if (!r.width && !r.height) {
+          const cur = currentOrder();
+          p = P.order >= cur ? 20 + (P.order - cur) / 1e3 : 25 + (cur - P.order) / 1e3;
+        }
+        else if (r.bottom > 0 && r.top < vh) p = Math.max(0, r.top) / 1e6;
+        else if (r.top >= vh) p = 1 + (r.top - vh) / vh;
+        else p = 40 + -r.bottom / vh;
+        if (p < best) best = p;
+      }
+      return best === Infinity ? 30 + P.order / 1e4 : best;
+    }
+    /** 依優先順序執行的工作佇列；gate 回傳 false 時先不開始新的（避免一次準備太多張吃記憶體） */
+    function prioQueue(n, gate) {
+      const wait = [];
+      const running = new Set();
+      const next = () => {
+        while (running.size < n && wait.length) {
+          let bi = 0;
+          let bp = Infinity;
+          for (let i = 0; i < wait.length; i++) {
+            const p = prioOf(wait[i].P);
+            if (p < bp) { bp = p; bi = i; }
+          }
+          if (gate && !gate(bp)) break;
+          const t = wait.splice(bi, 1)[0];
+          running.add(t);
+          Promise.resolve().then(t.fn).then(t.resolve, t.reject).finally(() => { running.delete(t); next(); if (q.after) q.after(); });
+        }
+      };
+      const q = (P, fn) => new Promise((resolve, reject) => { wait.push({ P, fn, resolve, reject }); next(); });
+      q.kick = next;
+      q.pending = () => wait.length + running.size;
+      /** 畫面上的圖還在準備中 */
+      q.urgent = () => wait.some((t) => prioOf(t.P) < 1) || [...running].some((t) => prioOf(t.P) < 1);
+      return q;
+    }
+    // 畫面上的圖直接準備；後面的圖等 Gemini 或免費模式消化得差不多再準備，才不會一次佔用太多記憶體
+    const prepQ = prioQueue(3, (p) => p < 1 || (gq.jobs.length < 24 && ocrQ.pending() < 8));
+    const ocrQ = prioQueue(1);
+    ocrQ.after = () => prepQ.kick();
+
+    /* ---------- 狀態更新（合併成每一格畫面最多一次） ---------- */
     let statusRaf = 0;
     function setStatus() {
       if (statusRaf || stopped) return;
       statusRaf = requestAnimationFrame(() => {
         statusRaf = 0;
         chip();
-        if (hv && hv.img) paintHover(recs.get(hv.img));
+        if (hv && hv.img) paintHover();
         if (panel) panel.refresh();
       });
     }
 
-    /* ---------- 每張圖的狀態 ---------- */
-    const attrKey = (img) => `${img.getAttribute('src') || ''}|${img.getAttribute('srcset') || ''}`;
-    function getRec(img) {
-      let r = recs.get(img);
-      if (!r) {
-        r = { img, order: order++, gen: 0, state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', engines: new Set(), src: '', attr: '', shown: true, overlay: null };
-        recs.set(img, r);
-        watchPage();
-      }
-      return r;
-    }
-    function resetRec(rec) {
-      rec.gen++;
-      if (rec.overlay) { rec.overlay.destroy(); rec.overlay = null; }
-      Object.assign(rec, { state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', shown: true });
-      visibleOv.delete(rec);
-      setStatus();
-    }
-    const shouldShow = (rec) => rec.shown && !(pg.on && pg.hidden);
-    function showBlocks(rec) {
-      if (!rec.overlay || !rec.overlay.alive()) {
-        rec.overlay = mtOverlay(rec.img);
-        ovIO.observe(rec.img);
-        ro.observe(rec.img);
-      }
-      rec.overlay.setBlocks(rec.blocks);
-      rec.overlay.show(shouldShow(rec));
-    }
-    /** 加入新的文字框；和已有的重疊一半以上視為同一個（切片重疊造成），保留完整、較大的那個 */
-    function addBlocks(rec, list) {
-      for (const b of list) {
-        const aB = (b.x1 - b.x0) * (b.y1 - b.y0);
-        let dup = false;
-        for (let i = 0; i < rec.blocks.length; i++) {
-          const o = rec.blocks[i];
-          const ix = Math.min(b.x1, o.x1) - Math.max(b.x0, o.x0);
-          const iy = Math.min(b.y1, o.y1) - Math.max(b.y0, o.y0);
-          if (ix <= 0 || iy <= 0) continue;
-          const aO = (o.x1 - o.x0) * (o.y1 - o.y0);
-          if ((ix * iy) / Math.min(aB, aO) < 0.5) continue;
-          if ((o.edge && !b.edge) || (o.edge === b.edge && aB > aO)) rec.blocks[i] = b;
-          dup = true;
-          break;
-        }
-        if (!dup) rec.blocks.push(b);
-      }
-      showBlocks(rec);
-    }
-
     /* ---------- 快取：翻過的圖不再花額度 ---------- */
-    function cacheKey(img) {
-      let p = mtImgUrl(img);
-      try { const u = new URL(p, location.href); p = u.protocol === 'data:' ? strHash(u.href) : u.pathname; } catch (_) { /* 用原字串 */ }
-      return 'mtc.' + strHash([location.host, location.pathname, p, img.naturalWidth, img.naturalHeight, cfg().sfx].join('|'));
-    }
-    function cacheGet(k) {
-      const v = store.get(k, null);
-      if (!v || v.v !== 1 || !Array.isArray(v.b)) return null;
+    const cacheKeyOf = (P) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, 'v2'].join('|'));
+    function cacheGet(P) {
+      const v = store.get(cacheKeyOf(P), null);
+      if (!v || v.v !== 2 || !Array.isArray(v.b)) return null;
+      // 同一個網址換成了別張圖（長寬比不同）就不能用
+      for (const img of P.els) {
+        if (img.complete && img.naturalWidth && v.w && v.h && Math.abs(img.naturalWidth / img.naturalHeight - v.w / v.h) > 0.02) return null;
+      }
       return {
-        m: v.m || '',
-        blocks: v.b.map((a) => ({ x0: a[0], y0: a[1], x1: a[2], y1: a[3], zh: String(a[4] || ''), vertical: !!a[5], lang: a[6] || '', text: '', edge: false })),
+        m: v.m || '', t: v.t || 0, blk: !!v.blk,
+        blocks: v.b.map((a) => ({ x0: a[0], y0: a[1], x1: a[2], y1: a[3], zh: String(a[4] || ''), vertical: !!a[5], lang: a[6] || '', edge: false })),
       };
     }
-    function cachePut(k, blocks, model) {
+    function cachePut(P, model, w, h, blk) {
+      const k = cacheKeyOf(P);
       const r4 = (n) => Math.round(n * 10000) / 10000;
-      store.set(k, { v: 1, t: Date.now(), m: model, b: blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang]) });
+      store.set(k, { v: 2, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang]) });
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       idx = idx.filter((x) => x !== k);
@@ -2602,7 +3149,7 @@ button, input, select, output { font: inherit; }
       store.set('mtc.idx', idx);
     }
 
-    /* ---------- Gemini：模型清單、排隊、合併請求 ---------- */
+    /* ---------- Gemini：模型清單 ---------- */
     let chainP = null;
     let chainFail = 0;
     function ensureChain() {
@@ -2632,115 +3179,234 @@ button, input, select, output { font: inherit; }
       else if (st.kind === 'quota') tell('quota:' + new Date().toDateString(), `Gemini 今天的免費額度都用完了，改用免費模式（品質較普通）；${mtWhen(st.until)} 後自動換回 Gemini。`, { title: '漫畫翻譯' });
     }
 
-    const gq = { jobs: [], active: 0, wake: 0, soon: 0, pumping: false, again: false, preparing: 0 };
-    /** 一張圖的所有片段一起排隊，之後合併成盡量少的請求（每天的請求次數有限） */
-    function gEnqueueAll(rec, slices) {
+    /* ---------- Gemini：多個模型同時翻譯 ---------- */
+    // 每個模型有自己的每分鐘、每天額度：同時使用帳號裡所有免費的模型，畫面上的圖先送、小批送，越快看到越好
+    const gq = { jobs: [], active: 0, wake: 0, soon: 0, pumping: false, again: false };
+    const MAX_ACTIVE = 6;
+    const mstate = {};
+    const ms = (m) => mstate[m] || (mstate[m] = { active: 0, times: [], lat: /-lite$/.test(m) ? 1500 : 2800, ok: 0 });
+    function rpmOf(m) {
+      const r = store.get('mt.rpm', null);
+      const v = r && r.k === kh() && r.m ? r.m[m] : 0;
+      return v || (/-lite$/.test(m) ? 12 : 8);
+    }
+    function setRpm(m, v) {
+      const r = store.get('mt.rpm', null);
+      const cur = r && r.k === kh() && r.m ? Object.assign({}, r.m) : {};
+      cur[m] = Math.max(2, Math.min(40, Math.round(v * 10) / 10));
+      store.set('mt.rpm', { k: kh(), m: cur });
+    }
+    /** 挑模型：畫面上的圖挑目前最快的；預先翻譯的照品質順序 */
+    function pickModel(hp) {
+      const h = kh();
+      const blocks = mtBlocks(h);
       const now = Date.now();
-      const ps = slices.map((slice) => new Promise((resolve, reject) => {
-        gq.jobs.push({ rec, gen: rec.gen, slice, resolve, reject, tries: 0, t: now });
-      }));
+      let soonest = Infinity;
+      const avail = [];
+      for (const m of mtChain(h)) {
+        const b = blocks[m];
+        if (b && b.until > now) { if (b.why === 'rate') soonest = Math.min(soonest, b.until - now); continue; }
+        const s = ms(m);
+        if (s.active >= 2) { soonest = Math.min(soonest, 800); continue; }
+        // 每分鐘次數：最近一分鐘內送出的請求數
+        while (s.times.length && now - s.times[0] > 60000) s.times.shift();
+        if (s.times.length >= rpmOf(m)) { soonest = Math.min(soonest, s.times[0] + 60000 - now); continue; }
+        avail.push(m);
+      }
+      if (!avail.length) return { wait: soonest === Infinity ? 1000 : soonest };
+      // 先分給閒著的模型（同時用越多個越快）；畫面上的圖再挑最快的，預先翻譯的照品質順序
+      const rank = new Map(avail.map((m, i) => [m, i]));
+      avail.sort((a, b) => (ms(a).active - ms(b).active) || (hp < 1 ? ms(a).lat - ms(b).lat : rank.get(a) - rank.get(b)));
+      return { model: avail[0] };
+    }
+    function gEnqueueAll(P, slices, onPartial) {
+      const now = Date.now();
+      const out = slices.map((slice) => {
+        const j = { P, gen: P.gen, slice, items: [], cursor: 0, tries: 0, t: now };
+        j.notify = () => {
+          const fresh = j.items.slice(j.cursor);
+          j.cursor = j.items.length;
+          if (fresh.length) onPartial(slice, fresh);
+        };
+        j.promise = new Promise((resolve, reject) => { j.resolve = resolve; j.reject = reject; });
+        gq.jobs.push(j);
+        return j;
+      });
       pumpSoon(0);
-      return ps;
+      return out;
     }
-    function pumpSoon(ms) {
+    function pumpSoon(ms2) {
       if (gq.soon) return;
-      gq.soon = later(() => { gq.soon = 0; pump(); }, ms);
+      gq.soon = later(() => { gq.soon = 0; pump(); }, ms2);
     }
-    function rejectAll(err) { gq.jobs.splice(0).forEach((j) => j.reject(err)); }
+    function rejectAll(err) { gq.jobs.splice(0).forEach((j) => j.reject(err)); prepQ.kick(); }
     async function pump() {
       if (stopped) return;
       if (gq.pumping) { gq.again = true; return; }
       gq.pumping = true;
       try {
         await ensureChain();
-        while (!stopped && gq.active < 2 && gq.jobs.length) {
+        while (!stopped && gq.jobs.length && gq.active < MAX_ACTIVE) {
           gq.jobs = gq.jobs.filter((j) => {
-            if (j.gen === j.rec.gen && j.rec.img.isConnected) return true;
+            if (j.gen === j.P.gen) return true;
             j.reject(mtErr('cancel'));
             return false;
           });
           if (!gq.jobs.length) break;
           const st = mtEngineState(cfg());
           if (st.kind !== 'gemini') { rejectAll(mtErr(st.kind, '改用免費模式')); onFallback(st); break; }
-          if (st.wait) {
+          const pr = new Map();
+          const pOf = (P) => { if (!pr.has(P)) pr.set(P, prioOf(P)); return pr.get(P); };
+          gq.jobs.sort((a, b) => (pOf(a.P) - pOf(b.P)) || (a.P.order - b.P.order) || (a.slice.i - b.slice.i));
+          const hp = pOf(gq.jobs[0].P);
+          const limit = hp < 1 ? 2 : hp < 4 ? 4 : 6;
+          const oldest = Math.min(...gq.jobs.map((j) => j.t));
+          // 畫面上的圖還在下載、切片：先等它（最多 4 秒），讓它先送
+          if (hp >= 1 && prepQ.urgent() && Date.now() - oldest < 4000) { pumpSoon(200); break; }
+          // 很後面的預先翻譯：還有圖在準備時稍等一下，湊多一點再送，省每天的次數
+          if (hp >= 4 && gq.jobs.length < limit && prepQ.pending() > 0) {
+            const waited = Date.now() - oldest;
+            if (waited < 1200) { pumpSoon(Math.min(400, 1200 - waited)); break; }
+          }
+          const pick = pickModel(hp);
+          if (!pick.model) {
             unlater(gq.wake);
-            gq.wake = later(() => { gq.wake = 0; pump(); }, Math.min(st.wait + 250, 90000));
+            gq.wake = later(() => { gq.wake = 0; pump(); }, Math.min(Math.max(pick.wait, 200) + 50, 90000));
             setStatus();
             break;
           }
-          // 還有圖片正在讀取時，稍等一下把片段湊滿一個請求
-          if (gq.jobs.length < 8 && gq.preparing > 0) {
-            const waited = Date.now() - Math.min(...gq.jobs.map((j) => j.t));
-            if (waited < 1500) { pumpSoon(Math.min(300, 1500 - waited)); break; }
-          }
-          const batch = takeBatch();
+          const batch = gq.jobs.splice(0, limit);
+          const s = ms(pick.model);
+          s.active++;
+          s.times.push(Date.now());
           gq.active++;
-          runBatch(st.model, batch).catch((e) => console.error('[MAOBOO] 漫畫翻譯', e)).finally(() => { gq.active--; pump(); });
+          prepQ.kick();
+          runBatch(pick.model, batch).catch((e) => console.error('[MAOBOO] 漫畫翻譯', e)).finally(() => { gq.active--; s.active--; pump(); });
         }
       } finally {
         gq.pumping = false;
         if (gq.again) { gq.again = false; pumpSoon(0); }
       }
     }
-    /** 離畫面最近的圖片先翻；同一張圖的片段放在同一個請求 */
-    function takeBatch() {
-      const vh = innerHeight || 800;
-      const pri = new Map();
-      for (const j of gq.jobs) {
-        if (pri.has(j.rec)) continue;
-        const r = j.rec.img.getBoundingClientRect();
-        pri.set(j.rec, r.bottom < 0 ? -r.bottom * 3 : r.top > vh ? r.top - vh : r.top - 1e9);
-      }
-      gq.jobs.sort((a, b) => (pri.get(a.rec) - pri.get(b.rec)) || (a.slice.i - b.slice.i));
-      return gq.jobs.splice(0, 8);
-    }
 
     const recent = [];
     function remember(items) {
       for (const it of items || []) {
-        if (!it || !it.text || !it.zh || it.lang === 'zh') continue;
-        recent.push(`${String(it.text).replace(/\s+/g, ' ').slice(0, 90)} → ${String(it.zh).replace(/\s+/g, ' ').slice(0, 60)}`);
+        if (!it || !it.zh || it.lang === 'zh') continue;
+        const z = mtCleanZh(it.zh).slice(0, 60);
+        if (z && !recent.includes(z)) recent.push(z);
       }
-      if (recent.length > 24) recent.splice(0, recent.length - 24);
+      if (recent.length > 30) recent.splice(0, recent.length - 30);
     }
     function contextText() {
       const out = [];
       const title = String(document.title || '').trim().slice(0, 120);
       if (title) out.push(`Comic page title: ${title}`);
-      if (recent.length) out.push('Earlier dialogue on this page (context only, for consistent names and tone):', ...recent);
+      if (recent.length) out.push('Recent translations on this page (keep names and terms consistent with them):', ...recent);
       return out.join('\n');
     }
 
     const flags = {};
-    async function geminiCall(model, input) {
+    /** 呼叫 Gemini；串流時每翻好一個對話框就交給 onItems，馬上顯示 */
+    async function geminiCall(model, input, onItems) {
       const f = flags[model] || (flags[model] = {});
       const body = {
         model,
         input,
         system_instruction: mtSystemPrompt(cfg().sfx === 'translate')
-          + '\nAnswer with JSON only, in the form {"items":[{"image":1,"box_2d":[ymin,xmin,ymax,xmax],"lang":"en","text":"...","vertical":false,"zh":"..."}]}.',
+          + '\nAnswer with JSON only, in the form {"items":[{"image":1,"box_2d":[ymin,xmin,ymax,xmax],"lang":"en","vertical":false,"zh":"..."}]}.',
         store: false,
       };
-      if (!f.noThink) body.generation_config = { thinking_level: 'low' };
+      if (!f.noThink) body.generation_config = { thinking_level: f.think || (/-lite$/.test(model) ? 'minimal' : 'low') };
       if (!f.noSchema) body.response_format = { type: 'text', mime_type: 'application/json', schema: MT_SCHEMA };
-      const res = await mtRequest('POST', `${GEMINI_API}/interactions`, key(), body, 180000);
-      if (res.status === 200) {
-        let json = null;
-        try { json = JSON.parse(res.text); } catch (_) { throw mtErr('parse', 'Gemini 的回應無法讀取'); }
-        const items = mtParseItems(mtOutputText(json));
-        if (items) return items;
-        if (json && json.status && json.status !== 'completed') throw mtErr('blocked', `Gemini 沒有完成（${json.status}）`);
-        throw mtErr('parse', 'Gemini 沒有回傳結果');
-      }
-      const e = mtClassify(res.status, res.text);
-      if (e.kind === 'bad') {
+      const streaming = !f.noStream;
+      if (streaming) body.stream = true;
+
+      let modelText = '';
+      let completed = null;
+      let evErr = null;
+      let sawSse = false;
+      const stepType = {};
+      const scan = mtItemScanner();
+      let buf = '';
+      let seen = 0;
+      const onRaw = (raw) => {
+        buf += raw.slice(seen).replace(/\r/g, '');
+        seen = raw.length;
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const data = block.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n');
+          if (!data || data === '[DONE]') continue;
+          sawSse = true;
+          let ev = null;
+          try { ev = JSON.parse(data); } catch (_) { continue; }
+          const t = String(ev.event_type || ev.type || '');
+          const it = ev.interaction;
+          if (/start/.test(t) && (ev.step || ev.step_type)) stepType[ev.index] = (ev.step && ev.step.type) || ev.step_type;
+          const dl = ev.delta;
+          // 只收模型輸出的文字，不收思考過程
+          if (dl && typeof dl.text === 'string' && !/thought|reason/i.test(String(dl.type || '')) && !/thought|reason/i.test(String(stepType[ev.index] || ''))) {
+            modelText += dl.text;
+            const got = scan(modelText);
+            if (got.length && onItems) onItems(got);
+          }
+          if (it && /^(completed|failed|cancelled|incomplete)$/.test(String(it.status || ''))) completed = it;
+          else if (/^interaction\.(complete|done|end)/.test(t)) completed = it || ev;
+          if (ev.error) evErr = ev.error;
+        }
+      };
+      // 串流：請求內容加上 "stream": true，回應是 SSE（event: step.delta / data: {...}）
+      const res = await mtPost(`${GEMINI_API}/interactions`, key(), body, 180000, streaming ? onRaw : null);
+      if (streaming && buf.trim()) onRaw(res.text + '\n\n'); // 最後一個事件沒有空白行結尾
+      const text = String(res.text || '').trim();
+      let json = null;
+      if (!sawSse && text.startsWith('{')) { try { json = JSON.parse(text); } catch (_) { /* 不是 JSON */ } }
+      const retry = (e) => {
         // 這個模型不支援某些參數：拿掉後再試
-        if (!f.noThink && /thinking/i.test(e.message)) { f.noThink = true; return geminiCall(model, input); }
-        if (!f.noSchema && /response_format|schema|mime/i.test(e.message)) { f.noSchema = true; return geminiCall(model, input); }
+        if (e.kind !== 'bad') return null;
+        if (!f.noStream && /stream|alt=sse|\balt\b/i.test(e.message)) { f.noStream = true; return geminiCall(model, input, onItems); }
+        if (!f.noThink && /thinking/i.test(e.message)) {
+          if (f.think !== 'low' && /-lite$/.test(model)) f.think = 'low'; else f.noThink = true;
+          return geminiCall(model, input, onItems);
+        }
+        if (!f.noSchema && /response_format|schema|mime/i.test(e.message)) { f.noSchema = true; return geminiCall(model, input, onItems); }
+        return null;
+      };
+      if (json && json.error) {
+        const e = mtClassify(Number(json.error.code) || (res.status > 299 ? res.status : 400), text);
+        const again = retry(e);
+        if (again) return again;
+        throw e;
       }
-      throw e;
+      if (!sawSse && res.status !== 200) {
+        const e = mtClassify(res.status, text);
+        const again = retry(e);
+        if (again) return again;
+        throw e;
+      }
+      if (evErr) throw mtClassify(Number(evErr.code) || 500, JSON.stringify({ error: evErr }));
+      let items = modelText ? mtParseItems(modelText) : null;
+      if (!items && completed) items = mtParseItems(mtOutputText(completed));
+      if (!items && json) items = mtParseItems(mtOutputText(json));
+      if (items) return items;
+      const partial = modelText ? mtItemScanner()(modelText) : [];
+      const st = (completed && completed.status) || (json && json.status);
+      if (partial.length && (completed || json)) return partial; // 回應完整、只是字太多被截斷：用已經翻好的部分
+      if (st && st !== 'completed' && !partial.length) throw mtErr('blocked', `Gemini 沒有完成（${st}）`);
+      if (res.status === 0 || res.status === -1) throw mtClassify(res.status, '');
+      if (sawSse && !modelText && !completed && !f.noStream && !res.cut) {
+        // 收到串流卻讀不出任何文字（格式和預期的不同）：這個模型改用一般請求，馬上重送
+        f.noStream = true;
+        return geminiCall(model, input, onItems);
+      }
+      if (sawSse && !completed) throw mtErr('net', 'Gemini 連線中斷'); // 已經顯示的保留，這一片重試
+      if (streaming && !sawSse && !json) f.noStream = true; // 看不懂串流的格式：之後改用一般請求
+      throw mtErr('parse', 'Gemini 沒有回傳結果');
     }
     async function runBatch(model, batch) {
+      const t0 = Date.now();
       const input = [];
       const c = contextText();
       if (c) input.push({ type: 'text', text: c });
@@ -2748,17 +3414,29 @@ button, input, select, output { font: inherit; }
         input.push({ type: 'text', text: `Image ${i + 1}` });
         input.push({ type: 'image', mime_type: 'image/jpeg', data: j.slice.b64 });
       });
-      input.push({ type: 'text', text: batch.length > 1 ? `Find and translate the text in all ${batch.length} images above.` : 'Find and translate the text in the image above.' });
-      let items;
-      try { items = await geminiCall(model, input); } catch (e) { onBatchError(model, batch, e); return; }
-      const per = batch.map(() => []);
-      for (const it of items) {
+      input.push({ type: 'text', text: batch.length > 1 ? `Find and translate all text in the ${batch.length} images above.` : 'Find and translate all text in the image above.' });
+      const jobOf = (it) => {
         const n = Math.round(Number(it && it.image));
-        if (n >= 1 && n <= batch.length) per[n - 1].push(it);
-        else if (batch.length === 1) per[0].push(it);
-      }
+        return n >= 1 && n <= batch.length ? batch[n - 1] : batch.length === 1 ? batch[0] : null;
+      };
+      let items;
+      try {
+        items = await geminiCall(model, input, (got) => {
+          const touched = new Set();
+          for (const it of got) { const j = jobOf(it); if (j) { j.items.push(it); touched.add(j); } }
+          touched.forEach((j) => j.notify());
+        });
+      } catch (e) { onBatchError(model, batch, e); return; }
+      const per = batch.map(() => []);
+      for (const it of items) { const j = jobOf(it); if (j) per[batch.indexOf(j)].push(it); }
+      batch.forEach((j, i) => {
+        if (per[i].length > j.items.length) j.items = per[i];
+        j.resolve({ model });
+      });
       remember(items);
-      batch.forEach((j, i) => j.resolve({ items: per[i], model }));
+      const s = ms(model);
+      s.lat = s.lat * 0.6 + ((Date.now() - t0) / batch.length) * 0.4;
+      if (++s.ok % 4 === 0) setRpm(model, rpmOf(model) + 1); // 一直沒被限制：慢慢放寬
       setStatus();
     }
     function onBatchError(model, batch, e) {
@@ -2767,12 +3445,14 @@ button, input, select, output { font: inherit; }
       const back = (list) => { gq.jobs.unshift(...list); };
       if (e.kind === 'rate') {
         mtSetBlock(h, model, now + Math.max(4000, e.delay || 30000), 'rate');
+        setRpm(model, rpmOf(model) * 0.7);
+        ms(model).ok = 0;
         back(batch);
       } else if (e.kind === 'daily') {
         mtSetBlock(h, model, e.nofree ? now + 3 * 86400000 : mtNextReset(now), e.nofree ? 'nofree' : 'daily');
         back(batch);
         const next = mtPick(h);
-        if (next.model && !e.nofree) tell('switch:' + model, `${modelLabel(model)} 今天的免費額度用完了，改用 ${modelLabel(next.model)}。`, { title: '漫畫翻譯' });
+        if (next.model && !e.nofree) tell('switch:' + model, `${modelLabel(model)} 今天的免費額度用完了，其他模型會接著翻。`, { title: '漫畫翻譯' });
       } else if (e.kind === 'model') {
         mtSetBlock(h, model, now + 3 * 86400000, 'missing');
         back(batch);
@@ -2789,7 +3469,6 @@ button, input, select, output { font: inherit; }
       }
       setStatus();
     }
-
     function mapGemini(items, s, plan) {
       const sh = s.y1 - s.y0;
       const out = [];
@@ -2810,7 +3489,6 @@ button, input, select, output { font: inherit; }
           y0: (s.y0 + ymin / 1000 * sh) / plan.H,
           y1: (s.y0 + ymax / 1000 * sh) / plan.H,
           zh,
-          text: String(it.text || ''),
           lang,
           vertical: !!it.vertical,
           edge: (s.y0 > 0 && ymin < 12) || (s.y1 < plan.H && ymax > 988),
@@ -2821,13 +3499,13 @@ button, input, select, output { font: inherit; }
 
     /* ---------- 免費模式 ---------- */
     const loc = { worker: null, lang: '', failed: '', failedAt: 0 };
-    async function tessWorker(lang, rec) {
+    async function tessWorker(lang, P) {
       if (loc.failed && Date.now() - loc.failedAt < 60000) throw mtErr('local', loc.failed);
       if (loc.worker && loc.lang === lang) return loc.worker;
       const langs = lang === 'jpn' ? 'jpn_vert' : lang; // 日文漫畫幾乎都是直排
       try {
-        rec.note = '準備免費模式…';
-        renderRec(rec);
+        P.note = '準備免費模式…';
+        setStatus();
         if (loc.worker) await loc.worker.reinitialize(langs, 1);
         else {
           const T = await mtLoadTesseract();
@@ -2844,38 +3522,53 @@ button, input, select, output { font: inherit; }
         tell('local-failed', '免費模式的文字辨識載入失敗：這個網站可能不允許，或網路有問題。設定 Gemini 金鑰就不需要它。', { title: '漫畫翻譯', actions: [keyAction] });
         throw mtErr('local', loc.failed);
       } finally {
-        rec.note = '';
-        renderRec(rec);
+        P.note = '';
+        setStatus();
       }
     }
-    async function ocrRun(s, lang, plan, rec) {
+    async function ocrRun(s, lang, plan, P) {
       s.ocr = s.ocr || {};
       if (s.ocr[lang]) return s.ocr[lang]; // 判斷語言時已經辨識過
-      const w = await tessWorker(lang, rec);
+      const w = await tessWorker(lang, P);
       const scale = plan.W < 800 ? 1.5 : 1;
-      if (!s.clean) s.clean = mtOcrClean(s.canvas, plan.W, s.y1 - s.y0, scale);
+      if (!s.clean) {
+        const bmp = await createImageBitmap(s.blob);
+        try {
+          s.clean = mtOcrClean(bmp, plan.W, s.y1 - s.y0, scale, false);
+          // 深色底的白字（旁白框、黑色對話框、有外框的白字）：反過來再辨識一次
+          if (s.clean.darkRatio > 0.06) {
+            const inv = mtOcrClean(bmp, plan.W, s.y1 - s.y0, scale, true);
+            if (inv.kept >= 8) s.cleanInv = inv;
+          }
+        } finally { if (typeof bmp.close === 'function') bmp.close(); }
+      }
       const { data } = await w.recognize(s.clean, {}, { blocks: true, text: false });
-      s.ocr[lang] = mtOcrGroups(data, lang, scale);
-      return s.ocr[lang];
+      let groups = mtOcrGroups(data, lang, scale);
+      if (s.cleanInv) {
+        const r2 = await w.recognize(s.cleanInv, {}, { blocks: true, text: false });
+        groups = mtMergeGroups(groups, mtOcrGroups(r2.data, lang, scale));
+      }
+      s.ocr[lang] = groups;
+      return groups;
     }
     /**
      * 免費模式要先知道原文語言：設定 > 網站 > 這個網站之前測到的 > 實際試試看。
      * 實際測試時一片一片試（第一片常常是翻譯組的說明或沒有字），測到有把握才記住；
      * 整張圖都測不出來就當作沒有字，不硬翻出亂碼。
      */
-    function imageLang(rec, slices, plan) {
+    function imageLang(P, slices, plan) {
       const set = cfg().ocrLang;
       if (set && set !== 'auto') return Promise.resolve(set);
       const known = mtHostLang() || (store.get('mt.lang', {}) || {})[HOST];
       if (known) return Promise.resolve(known);
-      if (!rec.langP) {
-        rec.langP = ocrQ(async () => {
+      if (!P.langP) {
+        P.langP = ocrQ(P, async () => {
           let best = null;
           let bestScore = 0;
           for (const s of slices) {
             for (const lang of ['eng', 'kor', 'jpn']) {
               let groups = [];
-              try { groups = await ocrRun(s, lang, plan, rec); } catch (e) { if (lang === 'eng') throw e; continue; }
+              try { groups = await ocrRun(s, lang, plan, P); } catch (e) { if (lang === 'eng') throw e; continue; }
               const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
               if (score > bestScore) { best = lang; bestScore = score; }
               if (score >= 16) break; // 這個語言辨識得很順，就不用再試其他語言
@@ -2890,29 +3583,28 @@ button, input, select, output { font: inherit; }
           return bestScore >= 4 ? best : null;
         });
       }
-      return rec.langP;
+      return P.langP;
     }
-    async function localSlice(rec, s, plan, alive, slices) {
-      const lang = await imageLang(rec, slices, plan);
+    async function localSlice(P, s, plan, alive, slices) {
+      const lang = await imageLang(P, slices, plan);
       if (!lang) return [];
-      return ocrQ(async () => {
+      return ocrQ(P, async () => {
         if (!alive()) throw mtErr('cancel');
-        const groups = await ocrRun(s, lang, plan, rec);
+        const groups = await ocrRun(s, lang, plan, P);
         if (!groups.length) return [];
         const zh = await mtFreeTranslate(groups.map((g) => g.text), lang);
         const sh = s.y1 - s.y0;
-        rec.engines.add('free');
+        P.engines.add('free');
         return groups.map((g, i) => ({
           x0: g.x0 / plan.W,
           x1: g.x1 / plan.W,
           y0: (s.y0 + g.y0) / plan.H,
           y1: (s.y0 + g.y1) / plan.H,
           zh: mtCleanZh(zh[i]),
-          text: g.text,
           lang: MT_LANG[lang],
           vertical: g.vertical,
           edge: (s.y0 > 0 && g.y0 < 6) || (s.y1 < plan.H && g.y1 > sh - 6),
-        })).filter((b) => b.zh && b.zh !== b.text);
+        })).filter((b, i) => b.zh && b.zh !== groups[i].text);
       });
     }
     /** 使用者剛按過按鈕：Google 翻譯連不上時，趁這時候準備 Chrome 離線翻譯（第一次要下載語言，必須由使用者操作觸發） */
@@ -2924,69 +3616,77 @@ button, input, select, output { font: inherit; }
     }
 
     /* ---------- 翻譯一張圖 ---------- */
-    async function translateRec(rec) {
-      if (stopped || rec.state === 'busy') return;
-      const gen = ++rec.gen;
-      if (rec.overlay) { rec.overlay.destroy(); rec.overlay = null; }
-      Object.assign(rec, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '讀取圖片…', engines: new Set(), src: mtImgUrl(rec.img), attr: attrKey(rec.img), shown: true, started: Date.now(), langP: null });
-      renderRec(rec);
-      const alive = () => !stopped && rec.gen === gen;
+    async function translateP(P) {
+      if (stopped || P.state === 'busy') return;
+      const gen = ++P.gen;
+      Object.assign(P, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '', engines: new Set(), started: Date.now(), langP: null, queued: true });
+      render(P);
+      setStatus();
+      const alive = () => !stopped && P.gen === gen;
       try {
-        const ck = cacheKey(rec.img);
-        const hit = cacheGet(ck);
-        if (hit) {
-          rec.engines.add(hit.m || 'gemini');
-          rec.blocks = hit.blocks;
-          showBlocks(rec);
-          Object.assign(rec, { state: 'done', note: '', done: 1, total: 1 });
-          renderRec(rec);
+        const st0 = mtEngineState(cfg());
+        const hit = cacheGet(P);
+        // 免費模式的結果只在 Gemini 不能用（或 Gemini 拒絕這張圖）時沿用
+        if (hit && (hit.m !== 'free' || hit.blk || st0.kind !== 'gemini')) {
+          if (hit.m) P.engines.add(hit.m);
+          P.blocks = hit.blocks;
+          Object.assign(P, { state: 'done', done: 1, total: 1 });
+          render(P);
+          setStatus();
           return;
         }
-        gq.preparing++;
-        let job = null;
-        try {
-          job = await prep(async () => {
-            if (!alive()) return null;
-            const bmp = await mtCapture(rec.img);
-            try {
-              const plan = mtPlanSlices(bmp);
-              const slices = [];
-              for (let i = 0; i < plan.cuts.length; i++) slices.push(await mtSliceImage(bmp, plan, i));
-              return { plan, slices };
-            } finally { if (typeof bmp.close === 'function') bmp.close(); }
-          });
-        } finally { gq.preparing--; }
-        if (!job || !alive()) return;
+        const job = await prepQ(P, async () => {
+          if (!alive()) return null;
+          P.note = '讀取圖片…';
+          setStatus();
+          const img = [...P.els].find((i) => i.isConnected && i.complete && i.naturalWidth && mtAbs(i.currentSrc) === P.url) || null;
+          const bmp = await mtCaptureUrl(P.url, img, P.noRef || pg.noRefDirs.has(mtDirOf(P.url)));
+          try {
+            if (bmp.width < 200 || bmp.height < 200) return { small: true };
+            if (!P.els.size && pg.minW && bmp.width < pg.minW * 0.5) return { small: true }; // 背景找到的縮圖
+            const plan = mtPlanSlices(bmp);
+            const slices = [];
+            const lossless = mtEngineState(cfg()).kind !== 'gemini';
+            for (let i = 0; i < plan.cuts.length; i++) slices.push(await mtSliceImage(bmp, plan, i, lossless));
+            // 要送 Gemini 的話，先轉好編碼（準備完才算準備好，畫面上的圖才會排在最前面送出）
+            if (!lossless) await Promise.all(slices.map(async (sl) => { sl.b64 = await mtBase64(sl.blob); }));
+            return { plan, slices };
+          } finally { if (typeof bmp.close === 'function') bmp.close(); }
+        });
+        if (!alive()) return;
+        if (!job || job.small) { Object.assign(P, { state: 'skip', note: '' }); setStatus(); return; } // 不是漫畫頁（太小）
         const { plan, slices } = job;
         const st = mtEngineState(cfg());
         const useGemini = st.kind === 'gemini';
         if (!useGemini) onFallback(st);
-        rec.total = slices.length;
-        rec.note = '';
-        renderRec(rec);
+        P.total = slices.length;
+        P.note = '';
+        setStatus();
         let allGemini = useGemini;
+        let refused = false;
         let failed = 0;
         let lastErr = null;
-        let ps = null;
+        let jobs = null;
         if (useGemini) {
-          await Promise.all(slices.map(async (s) => { s.b64 = await mtBase64(s.blob); }));
+          await Promise.all(slices.map(async (s) => { if (!s.b64) s.b64 = await mtBase64(s.blob); }));
           if (!alive()) return;
-          ps = gEnqueueAll(rec, slices);
+          jobs = gEnqueueAll(P, slices, (s, got) => { if (alive()) { addBlocks(P, mapGemini(got, s, plan)); setStatus(); } });
         }
         await Promise.all(slices.map(async (s, idx) => {
           let blocks = null;
           try {
-            if (ps) {
+            if (jobs) {
               try {
-                const r = await ps[idx];
-                blocks = mapGemini(r.items, s, plan);
-                rec.engines.add(r.model);
+                const r = await jobs[idx].promise;
+                blocks = mapGemini(jobs[idx].items, s, plan);
+                P.engines.add(r.model);
               } catch (e) {
                 if (e && e.kind === 'cancel') return;
+                if (e && e.kind === 'blocked') refused = true;
                 allGemini = false;
-                blocks = await localSlice(rec, s, plan, alive, slices);
+                blocks = await localSlice(P, s, plan, alive, slices);
               }
-            } else blocks = await localSlice(rec, s, plan, alive, slices);
+            } else blocks = await localSlice(P, s, plan, alive, slices);
           } catch (e) {
             if (e && e.kind === 'cancel') return;
             failed++;
@@ -2994,27 +3694,24 @@ button, input, select, output { font: inherit; }
             allGemini = false;
           }
           if (!alive()) return;
-          if (blocks && blocks.length) addBlocks(rec, blocks);
-          rec.done++;
-          renderRec(rec);
+          if (blocks && blocks.length) addBlocks(P, blocks);
+          P.done++;
+          setStatus();
         }));
         if (!alive()) return;
         if (failed === slices.length) throw lastErr || new Error('翻譯失敗');
-        rec.state = 'done';
-        rec.error = failed ? mtErrText(lastErr) : '';
-        if (!rec.overlay) showBlocks(rec);
-        if (allGemini && !failed) cachePut(ck, rec.blocks, [...rec.engines][0] || '');
+        P.state = 'done';
+        P.error = failed ? mtErrText(lastErr) : '';
+        if (!failed) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free') || 'gemini') : 'free', plan.W0, plan.H0, refused);
       } catch (e) {
         if (!alive() || (e && e.kind === 'cancel')) return;
-        rec.state = 'error';
-        rec.error = mtErrText(e);
+        if (P.guess) { Object.assign(P, { state: 'skip', note: '' }); setStatus(); return; } // 猜的下一頁網址不存在
+        P.state = 'error';
+        P.error = mtErrText(e);
         console.warn('[MAOBOO] 漫畫翻譯失敗', e);
       }
-      rec.note = '';
-      renderRec(rec);
-    }
-    function renderRec(rec) {
-      if (hv && hv.img === rec.img) paintHover(rec);
+      P.note = '';
+      render(P);
       setStatus();
     }
 
@@ -3022,28 +3719,33 @@ button, input, select, output { font: inherit; }
     const visibleOv = new Set();
     const ovIO = new IntersectionObserver((entries) => {
       for (const en of entries) {
-        const rec = recs.get(en.target);
-        if (!rec) continue;
-        if (en.isIntersecting && rec.overlay) { visibleOv.add(rec); rec.overlay.align(); } else visibleOv.delete(rec);
+        const V = views.get(en.target);
+        if (!V) continue;
+        if (en.isIntersecting && V.overlay) { visibleOv.add(V); V.overlay.align(); } else visibleOv.delete(V);
       }
     }, { rootMargin: '50% 0px 50% 0px' });
     const ro = new ResizeObserver((entries) => {
-      for (const en of entries) { const rec = recs.get(en.target); if (rec && rec.overlay) rec.overlay.align(); }
+      for (const en of entries) { const V = views.get(en.target); if (V && V.overlay) V.overlay.align(); }
     });
     let alignRaf = 0;
     function alignSoon() {
       if (alignRaf || stopped) return;
       alignRaf = requestAnimationFrame(() => {
         alignRaf = 0;
-        visibleOv.forEach((rec) => { if (!rec.overlay || !rec.overlay.align()) visibleOv.delete(rec); });
+        visibleOv.forEach((V) => { if (!V.overlay || !V.overlay.align()) visibleOv.delete(V); });
         if (hoverImg) placeHover();
       });
     }
-    // 換頁式閱讀器會重複用同一個 <img>：圖片換了就撤掉舊的譯文
+    // 圖片換了（換頁式閱讀器、延遲載入換上真的網址）：重新對應到正確的翻譯
     const srcMo = new MutationObserver((muts) => {
+      const seen = new Set();
       for (const m of muts) {
-        const rec = recs.get(m.target);
-        if (rec && rec.state !== 'idle' && attrKey(m.target) !== rec.attr) { resetRec(rec); if (pg.on && pg.vis.has(m.target)) pageWant(m.target); }
+        const img = m.target;
+        if (seen.has(img) || img.tagName !== 'IMG') continue;
+        seen.add(img);
+        if (!views.has(img) && !pg.on) continue;
+        const V = bindImg(img);
+        if (V && pg.on) queueP(V.P);
       }
     });
     let pruneAt = 0;
@@ -3059,22 +3761,18 @@ button, input, select, output { font: inherit; }
         if (visibleOv.size) alignSoon();
         if (Date.now() - pruneAt > 5000) {
           pruneAt = Date.now();
-          for (const [img, rec] of recs) {
-            if (img.isConnected) continue;
-            rec.gen++;
-            if (rec.overlay) rec.overlay.destroy();
-            visibleOv.delete(rec);
-            recs.delete(img);
-          }
+          for (const V of [...views.values()]) if (!V.img.isConnected) unbind(V);
         }
       }, 700);
-      srcMo.observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ['src', 'srcset'] });
+      srcMo.observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ['src', 'srcset', 'data-src', 'data-srcset', 'data-original', 'data-lazy-src'] });
       listen(document, 'load', (e) => {
         const img = e.target;
         if (!img || img.tagName !== 'IMG') return;
-        const rec = recs.get(img);
-        if (rec && rec.state === 'done' && mtImgUrl(img) !== rec.src) resetRec(rec);
-        if (pg.on && pg.vis.has(img)) pageWant(img);
+        if (views.has(img) || pg.on) {
+          const V = bindImg(img);
+          if (V && V.P.blocks.length) render(V.P); // 延遲載入的圖剛載入：馬上蓋上先翻好的譯文
+        }
+        if (pg.on && !pg.scanT) pg.scanT = later(() => { pg.scanT = 0; pageScan(); }, 300);
       }, true);
     }
 
@@ -3091,7 +3789,7 @@ button, input, select, output { font: inherit; }
       if (!r) return null;
       const main = h('button', { type: 'button', class: 'mt-main', onclick: (e) => { e.stopPropagation(); onMainClick(); } });
       const pageBtn = h('button', {
-        type: 'button', text: '整頁', title: '翻譯這一頁所有的漫畫圖片（Alt+T）',
+        type: 'button', text: '整頁', title: '翻譯這一話所有的圖（Alt+T），下面還沒看到的也會先翻好',
         onclick: (e) => { e.stopPropagation(); warmLocal(); pageToggle(true); },
       });
       const el = h('div', { class: 'mt-hover', role: 'group', 'aria-label': '漫畫翻譯' }, main, pageBtn);
@@ -3142,7 +3840,7 @@ button, input, select, output { font: inherit; }
       const img = hoverImg;
       if (!img || !img.isConnected || !siteOn()) { v.el.classList.remove('is-on'); v.img = null; return; }
       v.img = img;
-      paintHover(recs.get(img));
+      paintHover();
       const r = img.getBoundingClientRect();
       const vw = document.documentElement.clientWidth || innerWidth;
       const top = Math.max(r.top, 0) + 10;
@@ -3152,21 +3850,23 @@ button, input, select, output { font: inherit; }
       v.el.style.transform = `translate(${Math.round(x)}px, ${Math.round(top)}px)`;
       v.el.classList.add('is-on');
     }
-    function paintHover(rec) {
+    function paintHover() {
       if (!hv) return;
-      const st = rec ? rec.state : 'idle';
+      const V = hv.img ? views.get(hv.img) : null;
+      const P = V ? V.P : null;
+      const st = P ? P.state : 'idle';
       let label = '翻譯';
       let title = '把這張圖裡的英文、日文、韓文翻成中文';
       if (st === 'busy') {
-        label = rec.note || (rec.total ? `翻譯中 ${rec.done}/${rec.total}` : '翻譯中…');
+        label = P.note || (P.total ? `翻譯中 ${P.done}/${P.total}` : '排隊中…');
         title = '翻譯中，按一下取消';
       } else if (st === 'done') {
-        label = shouldShow(rec) ? '原文' : '譯文';
-        title = shouldShow(rec) ? '暫時顯示原文' : '顯示譯文';
-        if (rec.error) title += `（部分失敗：${rec.error}）`;
+        label = shouldShow(P) ? '原文' : '譯文';
+        title = shouldShow(P) ? '暫時顯示原文' : '顯示譯文';
+        if (P.error) title += `（部分失敗：${P.error}）`;
       } else if (st === 'error') {
         label = '重試';
-        title = rec.error || '翻譯失敗，按一下重試';
+        title = P.error || '翻譯失敗，按一下重試';
       }
       hv.main.textContent = label;
       hv.main.title = title;
@@ -3177,65 +3877,160 @@ button, input, select, output { font: inherit; }
       const img = hv && hv.img;
       if (!img) return;
       warmLocal();
-      const rec = getRec(img);
-      if (rec.state === 'busy') { if (Date.now() - rec.started > 700) resetRec(rec); } // 剛按下去的連點不算取消
-      else if (rec.state === 'done') {
-        if (pg.on && pg.hidden) { rec.shown = true; pageShow(true); } else rec.shown = !rec.shown;
-        if (rec.overlay) rec.overlay.show(shouldShow(rec));
-      } else translateRec(rec);
-      paintHover(rec);
+      const V = views.get(img) || bindImg(img);
+      if (!V) return;
+      const P = V.P;
+      if (P.state === 'busy') {
+        if (Date.now() - P.started > 700) { P.userCancel = true; resetPage(P); } // 剛按下去的連點不算取消
+      } else if (P.state === 'done') {
+        if (pg.on && pg.hidden) { P.shown = true; pageShow(true); } else P.shown = !P.shown;
+        render(P);
+      } else {
+        P.userCancel = false;
+        translateP(P);
+      }
+      paintHover();
       placeHover();
     }
 
-    /* ---------- 整頁翻譯（Alt+T） ---------- */
-    const pg = { on: false, hidden: false, io: null, mo: null, scanT: 0, seen: new WeakSet(), vis: new Set() };
-    function pageWant(img) {
-      if (!pg.on || pg.hidden || stopped || !img.isConnected) return;
-      if (!img.complete || !img.naturalWidth) return; // 載入完成時會再呼叫一次
-      if (!eligible(img)) return;
-      const rec = getRec(img);
-      if (rec.state === 'idle') translateRec(rec);
+    /* ---------- 整頁翻譯：整話先下載、先翻好 ---------- */
+    const pg = { on: false, hidden: false, mo: null, scanT: 0, perf: null, dirs: new Set(), noRefDirs: new Set(), scriptsAt: 0, liveT: 0, minW: 0 };
+    const LIVE_MS = 30 * 60 * 1000;
+    const liveAt = () => ((store.get('mt.live', {}) || {})[HOST] || 0);
+    function liveSet(on) {
+      const m = Object.assign({}, store.get('mt.live', {}) || {});
+      const now = Date.now();
+      for (const k of Object.keys(m)) if (now - m[k] > LIVE_MS) delete m[k];
+      if (on) m[HOST] = now; else delete m[HOST];
+      store.set('mt.live', m);
+    }
+    function queueP(P) {
+      if (pg.on && !pg.hidden && P.state === 'idle' && !P.userCancel) translateP(P);
+    }
+    function eligibleLoaded(img) {
+      if (!img.isConnected || !img.complete || img.naturalWidth < 200 || img.naturalHeight < 200) return false;
+      const r = img.getBoundingClientRect();
+      return r.width >= 160 && r.height >= 160;
+    }
+    /** 找出閱讀器裡的圖：和已經顯示的漫畫圖在同一個區塊裡的，包含還沒載入、隱藏中的 */
+    function readerImages() {
+      const all = [...document.images];
+      const anchors = new Set(all.filter(eligibleLoaded));
+      const box = new Set();
+      for (const a of anchors) {
+        let p = a.parentElement;
+        for (let up = 0; p && up < 2; up++, p = p.parentElement) {
+          if (p === document.body || p === document.documentElement) break;
+          box.add(p);
+        }
+      }
+      const inBox = (img) => {
+        let p = img.parentElement;
+        for (let up = 0; p && up < 2; up++, p = p.parentElement) if (box.has(p)) return true;
+        return false;
+      };
+      let maxW = 0;
+      for (const a of anchors) maxW = Math.max(maxW, a.getBoundingClientRect().width);
+      // 已經顯示、但比最寬的漫畫圖窄很多的（旁邊的廣告、按鈕圖示）不算
+      const narrow = (img) => {
+        if (!img.complete || !img.naturalWidth) return false;
+        const w = img.getBoundingClientRect().width;
+        return w > 0 && w < maxW * 0.45; // 隱藏中的頁（寬度 0）不算
+      };
+      return all.filter((img) => (anchors.has(img) || inBox(img)) && !narrow(img));
     }
     function pageScan() {
-      if (!pg.on) return;
-      const imgs = document.images;
-      for (let i = 0; i < imgs.length; i++) {
-        const img = imgs[i];
-        if (pg.seen.has(img)) continue;
-        pg.seen.add(img);
-        pg.io.observe(img);
+      if (!pg.on || stopped) return;
+      const list = readerImages();
+      const bigs = [];
+      for (const img of list) {
+        const V = bindImg(img);
+        if (!V) continue;
+        if (eligibleLoaded(img)) {
+          const d = mtDirOf(V.P.url);
+          if (d) { pg.dirs.add(d); if (img.referrerPolicy === 'no-referrer') pg.noRefDirs.add(d); }
+          const r = img.getBoundingClientRect();
+          if (r.width >= 300 && r.height >= 300) bigs.push(img);
+          pg.minW = pg.minW ? Math.min(pg.minW, img.naturalWidth) : img.naturalWidth;
+        }
+        queueP(V.P);
+      }
+      if (bigs.length === 1) guessNext(bigs[0]); // 一次只顯示一張圖的閱讀器
+      scanScripts();
+      setStatus();
+    }
+    /** 圖庫裡同一個資料夾的其他圖（閱讀器預先載入的下一頁、頁面程式裡的圖片清單）也先翻 */
+    function considerUrl(u, guess) {
+      if (!pg.on || !u || !/^https?:/i.test(u)) return;
+      const d = mtDirOf(u);
+      if (!d || !pg.dirs.has(d) || !/\.(jpe?g|png|webp|avif|gif|bmp)(?:[?#]|$)/i.test(u)) return;
+      const k = mtUrlKey(u);
+      let P = pages.get(k);
+      if (!P) { P = getPage(u); P.guess = !!guess; }
+      queueP(P);
+    }
+    function watchResources() {
+      if (pg.perf || typeof PerformanceObserver !== 'function') return;
+      try {
+        pg.perf = new PerformanceObserver((list) => { for (const e of list.getEntries()) considerUrl(e.name, false); });
+        pg.perf.observe({ type: 'resource', buffered: true });
+      } catch (_) { pg.perf = null; }
+    }
+    function scanScripts() {
+      if (!pg.dirs.size || Date.now() - pg.scriptsAt < 3000) return;
+      pg.scriptsAt = Date.now();
+      let budget = 3e6;
+      for (const sc of document.scripts) {
+        if (sc.src) continue;
+        const t = sc.textContent || '';
+        if (!t) continue;
+        budget -= t.length;
+        if (budget < 0) break;
+        const re = /https?:(?:\\?\/){2}[^"'\s<>()]+?\.(?:jpe?g|png|webp|avif)(?:\?[^"'\s<>()]*)?/gi;
+        let m;
+        while ((m = re.exec(t))) considerUrl(m[0].replace(/\\\//g, '/'), false);
       }
     }
+    /** 一頁一張圖、檔名是流水號（例如 2.webp）的翻頁式閱讀器：先翻後面幾頁 */
+    function guessNext(img) {
+      const V = views.get(img);
+      if (!V || !eligibleLoaded(img)) return;
+      const m = /^(.*\/)(\d+)(\.(?:jpe?g|png|webp|avif|gif))(\?.*)?$/i.exec(V.P.url);
+      if (!m) return;
+      const n = parseInt(m[2], 10);
+      for (let k = 1; k <= 3; k++) considerUrl(m[1] + String(n + k).padStart(m[2].length, '0') + m[3] + (m[4] || ''), true);
+    }
     function pageStart() {
+      if (pg.on) return;
       pg.on = true;
       pg.hidden = false;
       watchPage();
-      pg.io = new IntersectionObserver((entries) => {
-        for (const en of entries) {
-          if (en.isIntersecting) { pg.vis.add(en.target); pageWant(en.target); } else pg.vis.delete(en.target);
-        }
-      }, { rootMargin: '150% 0px 150% 0px' });
       pageScan();
-      pg.mo = new MutationObserver(() => { if (!pg.scanT) pg.scanT = later(() => { pg.scanT = 0; pageScan(); }, 400); });
+      pg.mo = new MutationObserver(() => { if (!pg.scanT) pg.scanT = later(() => { pg.scanT = 0; pageScan(); }, 500); });
       pg.mo.observe(document.body || document.documentElement, { childList: true, subtree: true });
-      for (const rec of recs.values()) if (rec.overlay) rec.overlay.show(shouldShow(rec));
+      watchResources();
+      if (!nearOn) { nearOn = true; listen(PAGE, 'pointermove', onNear, { passive: true }); }
+      liveSet(true);
+      pg.liveT = setInterval(() => { if (!stopped) liveSet(true); }, 120000);
+      showAll();
       afterPageChange();
     }
     function pageShow(show) {
       pg.hidden = !show;
-      for (const rec of recs.values()) if (rec.overlay) rec.overlay.show(shouldShow(rec));
-      if (show) pg.vis.forEach((img) => pageWant(img));
+      showAll();
+      if (show) for (const P of pages.values()) queueP(P);
       afterPageChange();
     }
     function pageStop() {
       pg.on = false;
       pg.hidden = false;
-      if (pg.io) pg.io.disconnect();
       if (pg.mo) pg.mo.disconnect();
+      if (pg.perf) { try { pg.perf.disconnect(); } catch (_) { /* 已停止 */ } }
+      clearInterval(pg.liveT);
       unlater(pg.scanT);
-      Object.assign(pg, { io: null, mo: null, scanT: 0, seen: new WeakSet() });
-      pg.vis.clear();
-      for (const rec of recs.values()) resetRec(rec);
+      Object.assign(pg, { mo: null, perf: null, scanT: 0, liveT: 0 });
+      liveSet(false);
+      for (const P of pages.values()) resetPage(P);
       afterPageChange();
     }
     function pageToggle(force) {
@@ -3244,20 +4039,109 @@ button, input, select, output { font: inherit; }
       else pageShow(pg.hidden);
     }
     function afterPageChange() {
-      chip();
+      chip(true);
       fabSync();
       renderMenu();
       placeHover();
     }
 
-    /* ---------- 整頁翻譯的狀態列 ---------- */
+    /* ---------- 自動開始：設定成自動，或這個網站剛開過整頁翻譯（換頁會重新載入的網站） ---------- */
+    let autoT = 0;
+    function autoWanted() {
+      return (cfg().auto === 'on' && siteOn()) || Date.now() - liveAt() < LIVE_MS;
+    }
+    function autoCheck() {
+      if (pg.on || stopped || !autoWanted()) return true;
+      const big = [...document.images].filter((i) => eligibleLoaded(i) && i.getBoundingClientRect().width >= 300);
+      // 要看起來像閱讀頁（很寬的圖，或好幾張長圖）才開始，首頁、列表頁的封面不翻
+      const reader = big.some((i) => i.getBoundingClientRect().width >= Math.min(560, innerWidth * 0.4)) || big.filter((i) => i.naturalHeight >= 600).length >= 2;
+      if (reader) { pageStart(); return true; }
+      return false;
+    }
+    function autoWatch() {
+      unlater(autoT);
+      if (!autoWanted()) return;
+      const until = Date.now() + 60000;
+      const tick = () => { if (!autoCheck() && Date.now() < until) autoT = later(tick, 1000); };
+      tick();
+    }
+
+    /* ---------- 狀態列：有工作時才出現、閒置後收起，並避開網站自己的按鈕 ---------- */
     let chipEl = null;
-    function chip() {
-      if (!pg.on) { if (chipEl) { chipEl.remove(); chipEl = null; } return; }
+    let chipHideT = 0;
+    let placeAt = 0;
+    function fixedUi(el) {
+      let clickable = false;
+      for (let e = el, up = 0; e && e !== document.body && up < 8; e = e.parentElement, up++) {
+        if (up < 4 && /^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL)$/.test(e.tagName)) clickable = true;
+        if (up < 4 && /^(button|link|tab|menuitem|slider)$/.test(e.getAttribute && e.getAttribute('role'))) clickable = true;
+        let cs = null;
+        try { cs = getComputedStyle(e); } catch (_) { return false; }
+        if (cs.position === 'fixed' || cs.position === 'sticky') {
+          const r = e.getBoundingClientRect();
+          // 佔滿畫面的閱讀器容器本身不算，裡面的按鈕、連結才算
+          return !(r.width > innerWidth * 0.6 && r.height > innerHeight * 0.6) || clickable;
+        }
+      }
+      return false;
+    }
+    function siteUiAt(x, y, w, hh) {
+      const pts = [[x + 6, y + 6], [x + w - 6, y + 6], [x + 6, y + hh - 6], [x + w - 6, y + hh - 6], [x + w / 2, y + hh / 2]];
+      for (const [px, py] of pts) {
+        let list = [];
+        try { list = document.elementsFromPoint(px, py); } catch (_) { continue; }
+        for (const el of list) {
+          if (ourHosts.has(el) || el.tagName === 'MAOBOO-MT') continue;
+          if (el === document.body || el === document.documentElement) break;
+          if (fixedUi(el)) return true;
+        }
+      }
+      return false;
+    }
+    /** 依序試左下、右下、右上、左上，放在沒有網站按鈕的角落 */
+    function placeCorner(el, force) {
+      if (!el || (!force && Date.now() - placeAt < 1500)) return;
+      placeAt = Date.now();
+      const w = el.offsetWidth || 260;
+      const hh = el.offsetHeight || 40;
+      const corners = [['left', 'bottom'], ['right', 'bottom'], ['right', 'top'], ['left', 'top']];
+      let pick = corners[0];
+      for (const c of corners) {
+        const x = c[0] === 'left' ? 16 : innerWidth - 16 - w;
+        const y = c[1] === 'bottom' ? innerHeight - 16 - hh : 16;
+        if (!siteUiAt(x, y, w, hh)) { pick = c; break; }
+      }
+      el.style.left = pick[0] === 'left' ? '16px' : 'auto';
+      el.style.right = pick[0] === 'right' ? '16px' : 'auto';
+      el.style.top = pick[1] === 'top' ? '16px' : 'auto';
+      el.style.bottom = pick[1] === 'bottom' ? '16px' : 'auto';
+    }
+    function counts() {
+      let done = 0;
+      let busy = 0;
+      let total = 0;
+      let free = false;
+      let gem = false;
+      for (const P of pages.values()) {
+        if (!P.queued || P.state === 'skip' || P.state === 'idle') continue;
+        total++;
+        if (P.state === 'done') done++;
+        else if (P.state === 'busy') busy++;
+        for (const m of P.engines) { if (m === 'free') free = true; else gem = true; }
+      }
+      return { done, busy, total, free, gem };
+    }
+    function chip(force) {
+      if (!pg.on) {
+        if (chipEl) { chipEl.remove(); chipEl = null; }
+        unlater(chipHideT);
+        chipHideT = 0;
+        return;
+      }
       const r = ui();
       if (!r) return;
       if (!chipEl) {
-        const textEl = h('div', { class: 'mt-chip-text' }, h('strong', { text: '漫畫翻譯' }), h('span', {}));
+        const textEl = h('span', { class: 'mt-chip-text' });
         const toggle = h('button', { type: 'button', onclick: () => pageShow(pg.hidden) });
         const close = h('button', { type: 'button', class: 'mt-x', 'aria-label': '關閉漫畫翻譯', title: '關閉漫畫翻譯，恢復原文', text: '×', onclick: () => pageStop() });
         chipEl = h('div', { class: 'mt-chip', role: 'status' }, textEl, toggle, close);
@@ -3265,32 +4149,72 @@ button, input, select, output { font: inherit; }
         r.root.append(chipEl);
         chipEl.v = { textEl, toggle };
       }
-      let done = 0;
-      let busy = 0;
-      let free = false;
-      for (const x of recs.values()) {
-        if (!x.img.isConnected) continue;
-        if (x.state === 'done') done++;
-        else if (x.state === 'busy') busy++;
-        if (x.state !== 'idle' && x.engines.has('free')) free = true;
-      }
+      const c = counts();
       const st = mtEngineState(cfg());
-      const engine = st.kind === 'gemini' && !free ? modelLabel(st.model) + (st.wait ? '（等待額度）' : '') : st.kind === 'gemini' ? `${modelLabel(st.model)}＋免費模式` : '免費模式';
-      const what = pg.hidden ? '顯示原文中' : busy ? `翻譯中 ${done}/${done + busy}` : `已翻譯 ${done} 張`;
-      chipEl.v.textEl.lastChild.textContent = `${what} · ${engine}`;
+      const engine = c.gem && c.free ? 'Gemini＋免費模式' : c.free ? '免費模式' : c.gem ? 'Gemini' : st.kind === 'gemini' ? 'Gemini' : '免費模式';
+      const what = pg.hidden ? '顯示原文中' : c.busy ? `翻譯中 ${c.done}/${c.total}` : `已翻譯 ${c.done} 張`;
+      chipEl.v.textEl.textContent = `漫畫翻譯　${what} · ${engine}`;
       chipEl.v.toggle.textContent = pg.hidden ? '顯示譯文' : '顯示原文';
+      if (c.busy || pg.hidden || force) {
+        unlater(chipHideT);
+        chipHideT = 0;
+        chipEl.classList.add('is-on');
+        if (fab) fabSync();
+      }
+      if (!c.busy && !pg.hidden && chipEl.classList.contains('is-on')) hideChipLater(4000);
+      if (chipEl.classList.contains('is-on')) placeCorner(chipEl, force);
+    }
+    /** 沒在翻譯時收起狀態列；滑鼠停在上面時先不收 */
+    function hideChipLater(ms) {
+      if (chipHideT) return;
+      chipHideT = later(() => {
+        chipHideT = 0;
+        if (!chipEl) return;
+        let hover = false;
+        try { hover = chipEl.matches(':hover'); } catch (_) { /* 舊瀏覽器 */ }
+        if (hover || pg.hidden || counts().busy) { hideChipLater(1500); return; }
+        chipEl.classList.remove('is-on');
+        fabSync();
+      }, ms);
+    }
+    // 收起後，滑鼠移到那個角落附近會再出現
+    let nearRaf = 0;
+    let nearOn = false;
+    function onNear(e) {
+      if (nearRaf || !chipEl || !pg.on) return;
+      const x = e.clientX;
+      const y = e.clientY;
+      nearRaf = requestAnimationFrame(() => {
+        nearRaf = 0;
+        if (!chipEl) return;
+        const r = chipEl.getBoundingClientRect();
+        if (x > r.left - 40 && x < r.right + 40 && y > r.top - 40 && y < r.bottom + 40) {
+          unlater(chipHideT);
+          chipHideT = 0;
+          chipEl.classList.add('is-on');
+        } else if (chipEl.classList.contains('is-on')) hideChipLater(1500);
+      });
     }
 
-    /* ---------- 觸控裝置：右下角的「譯」按鈕 ---------- */
+    /* ---------- 觸控裝置：「譯」按鈕 ---------- */
     let fab = null;
     let fabT = 0;
+    /** 手機沒有滑鼠：還沒開始時按「譯」開始翻譯；翻譯中狀態列收起後，按「譯」把狀態列叫出來 */
     function fabSync() {
-      const want = isTouch && !pg.on && siteOn() && [...document.images].some((img) => img.naturalWidth >= 200 && img.naturalHeight >= 200);
+      const chipHidden = pg.on && (!chipEl || !chipEl.classList.contains('is-on'));
+      const want = isTouch && (pg.on ? chipHidden : siteOn() && [...document.images].some((img) => img.naturalWidth >= 200 && img.naturalHeight >= 200));
       if (want && !fab) {
         const r = ui();
         if (!r) return;
-        fab = h('button', { type: 'button', class: 'mt-fab', text: '譯', 'aria-label': '翻譯這一頁的漫畫', onclick: (e) => { e.stopPropagation(); warmLocal(); pageToggle(true); } });
+        fab = h('button', {
+          type: 'button', class: 'mt-fab', text: '譯', 'aria-label': '漫畫翻譯',
+          onclick: (e) => {
+            e.stopPropagation();
+            if (pg.on) { chip(true); fabSync(); } else { warmLocal(); pageToggle(true); }
+          },
+        });
         r.root.append(fab);
+        placeCorner(fab, true);
       } else if (!want && fab) { fab.remove(); fab = null; }
     }
     function fabWatch() {
@@ -3300,7 +4224,6 @@ button, input, select, output { font: inherit; }
       const tick = () => { fabSync(); if (!fab && Date.now() < until) fabT = later(tick, 2000); };
       fabT = later(tick, 800);
     }
-    fabWatch();
 
     /* ---------- 鍵盤、滑鼠 ---------- */
     const onOut = (e) => {
@@ -3323,7 +4246,6 @@ button, input, select, output { font: inherit; }
         placeHover();
       }
     }
-    syncHover();
     listen(PAGE, 'keydown', (e) => {
       if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.repeat || e.code !== 'KeyT') return;
       if (mtTyping(e) || inOurUi(e)) return;
@@ -3332,6 +4254,8 @@ button, input, select, output { font: inherit; }
       warmLocal();
       pageToggle();
     }, true);
+    // 網站的浮動按鈕常常捲動後才出現：捲動時偶爾重新選位置
+    listen(PAGE, 'scroll', () => { if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); if (fab) placeCorner(fab, false); }, { capture: true, passive: true });
 
     function toggleSite() {
       const list = (cfg().sites || []).slice();
@@ -3339,7 +4263,7 @@ button, input, select, output { font: inherit; }
       if (hit && String(hit).trim() === '*') return;
       if (hit) {
         ctx.save('sites', list.filter((x) => x !== hit));
-        toast('這個網站不再顯示翻譯按鈕；按 Alt+T 還是可以翻譯整頁。');
+        toast('這個網站不再顯示翻譯按鈕；按 Alt+T 還是可以翻譯整話。');
       } else {
         ctx.save('sites', list.concat([HOST.replace(/^www\./, '')]));
         toast(`已在 ${HOST} 顯示翻譯按鈕。`);
@@ -3348,12 +4272,17 @@ button, input, select, output { font: inherit; }
       fabSync();
     }
 
+    syncHover();
+    fabWatch();
+    autoWatch();
+
     return {
       onConfig() {
         syncHover();
         placeHover();
         fabSync();
         fabWatch();
+        autoWatch();
         setStatus();
         chainFail = 0;
         if (gq.jobs.length) pumpSoon(0);
@@ -3361,7 +4290,7 @@ button, input, select, output { font: inherit; }
       menuItems() {
         const items = [{
           key: 'mt.page',
-          label: '　' + (!pg.on ? '翻譯這一頁的漫畫（Alt+T）' : pg.hidden ? '顯示漫畫譯文（Alt+T）' : '暫時顯示漫畫原文（Alt+T）'),
+          label: '　' + (!pg.on ? '翻譯這一話的漫畫（Alt+T）' : pg.hidden ? '顯示漫畫譯文（Alt+T）' : '暫時顯示漫畫原文（Alt+T）'),
           run: () => { warmLocal(); pageToggle(); },
           close: true,
         }];
@@ -3378,23 +4307,26 @@ button, input, select, output { font: inherit; }
         timers.forEach(clearTimeout);
         timers.clear();
         clearInterval(alignTimer);
+        clearInterval(pg.liveT);
         hoverOn = true;
         syncHover();
         cancelAnimationFrame(hoverRaf);
         cancelAnimationFrame(alignRaf);
         cancelAnimationFrame(statusRaf);
+        cancelAnimationFrame(nearRaf);
         srcMo.disconnect();
         ovIO.disconnect();
         ro.disconnect();
-        if (pg.io) pg.io.disconnect();
         if (pg.mo) pg.mo.disconnect();
+        if (pg.perf) { try { pg.perf.disconnect(); } catch (_) { /* 已停止 */ } }
         rejectAll(mtErr('cancel'));
-        for (const rec of recs.values()) { rec.gen++; if (rec.overlay) rec.overlay.destroy(); }
-        recs.clear();
+        for (const P of pages.values()) P.gen++;
+        for (const V of views.values()) if (V.overlay) V.overlay.destroy();
+        views.clear();
+        pages.clear();
         if (hv) hv.el.remove();
         if (chipEl) chipEl.remove();
         if (fab) fab.remove();
-        unlater(fabT);
         if (loc.worker) { try { loc.worker.terminate(); } catch (_) { /* 已結束 */ } }
       },
     };
@@ -3409,7 +4341,8 @@ button, input, select, output { font: inherit; }
       const list = mtChainFrom(names);
       store.set('mt.chain', { k: h, t: Date.now(), list: list.length ? list : GEMINI_DEFAULT_CHAIN });
       if (store.get('mt.badkey', '') === h) store.set('mt.badkey', '');
-      return { ok: true, text: `金鑰可以用，會先用 ${modelLabel((list.length ? list : GEMINI_DEFAULT_CHAIN)[0])}` };
+      const use = list.length ? list : GEMINI_DEFAULT_CHAIN;
+      return { ok: true, text: use.length > 1 ? `金鑰可以用，會同時用 ${use.length} 個免費模型（${modelLabel(use[0])} 等）` : `金鑰可以用，會用 ${modelLabel(use[0])}` };
     } catch (e) {
       if (e && e.kind === 'key') { store.set('mt.badkey', h); return { ok: false, text: '金鑰無效，請確認有完整複製' }; }
       if (e && e.kind === 'region') return { ok: false, text: '你所在的地區不能使用 Gemini API' };
@@ -4030,10 +4963,11 @@ button, input, select, output { font: inherit; }
       name: '漫畫翻譯',
       site: '漫畫網站',
       desc: '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕；任何網站都可以按 Alt+T 翻譯整頁。',
-      defaults: { apiKey: '', sites: MT_SITES, sfx: 'skip', ocrLang: 'auto' },
+      defaults: { apiKey: '', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
       fields: [
         { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k) },
         { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站' },
+        { key: 'auto', label: '在這些網站', type: 'select', options: [['off', '按了才翻譯'], ['on', '打開漫畫就自動翻譯整話']] },
         { key: 'sfx', label: '狀聲詞', type: 'select', options: [['skip', '不翻'], ['translate', '也翻']] },
         { key: 'ocrLang', label: '免費模式的原文', type: 'select', options: [['auto', '自動判斷'], ['eng', '英文'], ['kor', '韓文'], ['jpn', '日文']] },
       ],
