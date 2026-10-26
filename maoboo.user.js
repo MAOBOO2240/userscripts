@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.0
-// @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、滑過圖片看大圖、隱藏 FB／Threads 推薦內容、解除複製限制、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
+// @version      1.5.1
+// @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
 // @supportURL   https://github.com/MAOBOO2240/userscripts/issues
@@ -41,6 +41,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.1  油猴選單只留「漫畫翻譯」（放在最上面）、「短影片自動下一部」和「開啟設定面板」，其他功能的開關和檢查更新都在設定面板裡；
+ *        拿掉「滑過圖片看大圖」和「解除複製限制」；隱藏推薦內容預設改成完全隱藏，不再留「已收起」那一行
  * 1.5.0  新功能：簡體轉繁體（簡體網頁自動轉成繁體）、解除複製限制（選單按一下，這個網站就能選取、複製、按右鍵）、
  *        滑過圖片看大圖（X、Threads、IG）、隱藏推薦內容（FB、Threads 動態裡的贊助、推薦貼文、你可能認識的朋友、為你推薦的帳號收成一行）；
  *        音量記憶多了 Instagram、Facebook，跟 Threads、X 合成一張「影片音量記憶」卡片；IG、FB 的 Reels 切到其他分頁也會繼續播
@@ -247,10 +249,6 @@ button, input, select, output { font: inherit; }
 .mb-link:hover { text-decoration: underline; }
 
 /* ---------- 影片音量條（Threads） ---------- */
-.mb-zoom { position: fixed; top: 0; left: 0; z-index: 3; pointer-events: none; overflow: hidden; border-radius: 8px; background: #111;
-  box-shadow: 0 10px 34px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .08); }
-.mb-zoom[hidden] { display: none; }
-.mb-zoom img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .mb-vol { position: fixed; top: 0; left: 0; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px 0 9px;
   border-radius: 17px; background: rgba(15, 22, 30, .76); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
   color: #FFFFFF; font-family: var(--font); font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums;
@@ -389,125 +387,6 @@ button, input, select, output { font: inherit; }
     while (stack.children.length > 3) stack.firstElementChild.remove();
     if (!opts.sticky) timer = setTimeout(close, opts.timeout || 3500);
     return { close };
-  }
-
-  /* ======================================================================
-   * 滑過圖片看大圖（X、Threads、Instagram）
-   * ==================================================================== */
-  function startHoverZoom(ctx) {
-    const r = ui();
-    if (!r) return () => {};
-    const view = h('img', { alt: '' });
-    const box = h('div', { class: 'mb-zoom', hidden: true }, view);
-    r.root.append(box);
-    let px = -1;
-    let py = -1;
-    let shift = false;
-    let cur = null; // 滑鼠下的那張圖
-    let seq = 0;
-    let timer = 0;
-    let raf = 0;
-    /** 原尺寸的網址：X 的貼文圖改成 name=orig；Threads、IG 用 srcset 裡最大的那張。小圖、大頭貼不算 */
-    const bigUrl = (img) => {
-      const src = img.currentSrc || img.src;
-      if (!src) return null;
-      let u;
-      try { u = new URL(src, location.href); } catch (_) { return null; }
-      if (u.hostname === 'pbs.twimg.com') {
-        if (!u.pathname.startsWith('/media/')) return null; // 大頭貼、影片縮圖、表情符號
-        u.searchParams.set('name', 'orig');
-        return u.href;
-      }
-      let best = '';
-      let bw = 0;
-      for (const part of (img.srcset || '').split(',')) {
-        const [url, d] = part.trim().split(/\s+/);
-        const w = parseFloat(d) || 0;
-        if (url && w > bw) { bw = w; best = url; }
-      }
-      if (!best || bw < img.getBoundingClientRect().width * 1.3) return null; // 已經是原尺寸
-      try { return new URL(best, location.href).href; } catch (_) { return null; }
-    };
-    /** 滑鼠下面的圖（上面常常蓋著一層透明的區塊） */
-    const imgAt = (x, y) => {
-      let list = [];
-      try { list = document.elementsFromPoint(x, y); } catch (_) { return null; }
-      for (const el of list) {
-        if (el.tagName !== 'IMG') continue;
-        const rc = el.getBoundingClientRect();
-        if (rc.width < 80 || rc.height < 80) return null; // 大頭貼、表情符號
-        if (/大頭貼|profile picture|avatar/i.test(el.alt || '')) return null;
-        return el;
-      }
-      return null;
-    };
-    const hide = () => {
-      seq++;
-      clearTimeout(timer);
-      timer = 0;
-      box.hidden = true;
-      view.removeAttribute('src');
-    };
-    /** 放在滑鼠旁邊空間比較大的那一邊，整張圖都看得到，不放大超過原尺寸 */
-    const place = (nw, nh) => {
-      const W = innerWidth;
-      const H = innerHeight;
-      const m = 10;
-      const right = px < W / 2;
-      let x0 = right ? px + 24 : m;
-      let x1 = right ? W - m : px - 24;
-      if (x1 - x0 < W * 0.35) { x0 = m; x1 = W - m; } // 旁邊太窄：用整個畫面
-      const k = Math.min(1, (x1 - x0) / nw, (H - m * 2) / nh);
-      const w = Math.round(nw * k);
-      const hh = Math.round(nh * k);
-      const left = right ? x0 : x1 - w;
-      const top = Math.min(Math.max(m, py - hh / 2), H - m - hh);
-      Object.assign(box.style, { width: w + 'px', height: hh + 'px', transform: `translate(${Math.round(left)}px, ${Math.round(top)}px)` });
-    };
-    const show = (img, url) => {
-      const token = ++seq;
-      const big = new Image();
-      big.decoding = 'async';
-      big.onload = () => {
-        if (token !== seq || cur !== img) return;
-        if (big.naturalWidth <= img.getBoundingClientRect().width * 1.15) return; // 沒有比較大
-        place(big.naturalWidth, big.naturalHeight);
-        view.src = url;
-        box.hidden = false;
-      };
-      big.src = url;
-    };
-    const update = () => {
-      raf = 0;
-      if (px < 0) return;
-      const img = imgAt(px, py);
-      if (img === cur) { if (!box.hidden && view.naturalWidth) place(view.naturalWidth, view.naturalHeight); return; }
-      hide();
-      cur = img;
-      if (!img || (ctx.cfg().trigger === 'shift' && !shift)) return;
-      const url = bigUrl(img);
-      if (!url) return;
-      timer = setTimeout(() => { timer = 0; if (cur === img) show(img, url); }, 250);
-    };
-    const onMove = (e) => { px = e.clientX; py = e.clientY; if (!raf) raf = requestAnimationFrame(update); };
-    const reset = () => { hide(); cur = null; };
-    const onKey = (e) => {
-      if (e.key !== 'Shift' || ctx.cfg().trigger !== 'shift') { if (e.key === 'Escape') reset(); return; }
-      const down = e.type === 'keydown';
-      if (down === shift) return;
-      shift = down;
-      reset();
-      if (down) update();
-    };
-    const opts = { capture: true, passive: true };
-    const winEvents = [['pointermove', onMove], ['pointerdown', reset], ['wheel', reset], ['scroll', reset], ['blur', reset], ['keydown', onKey], ['keyup', onKey]];
-    winEvents.forEach(([t, fn]) => PAGE.addEventListener(t, fn, opts));
-    return () => {
-      winEvents.forEach(([t, fn]) => PAGE.removeEventListener(t, fn, opts));
-      if (raf) cancelAnimationFrame(raf);
-      hide();
-      box.remove();
-    };
   }
 
   /* ======================================================================
@@ -7055,7 +6934,6 @@ button, input, select, output { font: inherit; }
    * 每個模組：start() 啟動並回傳 stop()；設定開關可以即時套用，不用重新整理
    * ==================================================================== */
 
-  const MOD_NAME = { ctrl: 'Ctrl', shift: 'Shift', alt: 'Alt' };
   const WIKI_RE = /^[a-z0-9-]+\.m\.(wikipedia|wiktionary|wikibooks|wikinews|wikiquote|wikisource|wikiversity|wikivoyage|wikimedia|wikidata|mediawiki|wikifunctions)\.org$/;
 
   const MODULES = [
@@ -7071,7 +6949,6 @@ button, input, select, output { font: inherit; }
         { key: 'seconds', label: '秒數', type: 'number', min: 1, max: 3600, step: 1, unit: '秒' },
         { key: 'modifier', label: '修飾鍵', type: 'select', options: [['ctrl', 'Ctrl'], ['shift', 'Shift'], ['alt', 'Alt']] },
       ],
-      menu: (c) => `影片快轉（${MOD_NAME[c.modifier] || 'Ctrl'} + ←/→ ${c.seconds} 秒）`,
       frames: 'all',
       phase: 'start',
       match: () => true,
@@ -7738,35 +7615,18 @@ button, input, select, output { font: inherit; }
       },
     },
 
-    /* ---------------- 滑過圖片看大圖 ---------------- */
-    {
-      id: 'hoverZoom',
-      group: 'social',
-      name: '滑過圖片看大圖',
-      site: 'X／Threads／IG',
-      desc: '滑鼠停在貼文的圖片上，旁邊會跳出原尺寸的大圖，不用點進去；移開滑鼠、捲動或點一下就收起來。大頭貼、表情符號這類小圖不會跳出來。',
-      defaults: { trigger: 'hover' },
-      fields: [{ key: 'trigger', label: '什麼時候顯示', type: 'select', options: [['hover', '滑過就顯示'], ['shift', '按住 Shift 才顯示']] }],
-      frames: 'top',
-      phase: 'idle',
-      match: () => HOST === 'x.com' || HOST === 'twitter.com' || /(^|\.)threads\.(com|net)$/.test(HOST) || /(^|\.)instagram\.com$/.test(HOST),
-      start(ctx) {
-        return startHoverZoom(ctx);
-      },
-    },
-
     /* ---------------- 隱藏推薦內容 ---------------- */
     {
       id: 'feedClean',
       group: 'social',
       name: '隱藏推薦內容',
       site: 'FB／Threads',
-      desc: '把動態裡的「贊助」廣告、還沒追蹤的粉專和社團的推薦貼文、「你可能認識的朋友」和「為你推薦」的帳號收起來。收起來的地方留一行字，點一下就能打開；也可以改成完全隱藏。',
-      defaults: { fb: 'all', threads: 'all', style: 'line' },
+      desc: '把動態裡的「贊助」廣告、還沒追蹤的粉專和社團的推薦貼文、「你可能認識的朋友」和「為你推薦」的帳號直接隱藏。想知道收了哪些，可以改成留一行字（點一下就能打開）。',
+      defaults: { fb: 'all', threads: 'all', style: 'hide' },
       fields: [
         { key: 'fb', label: 'Facebook', type: 'select', options: [['all', '收贊助和推薦'], ['reels', '收贊助、推薦和 Reels'], ['ads', '只收贊助'], ['off', '不收']] },
         { key: 'threads', label: 'Threads', type: 'select', options: [['all', '收贊助和推薦帳號'], ['ads', '只收贊助'], ['off', '不收']] },
-        { key: 'style', label: '收起來的樣子', type: 'select', options: [['line', '留一行字，點一下打開'], ['hide', '完全隱藏']] },
+        { key: 'style', label: '收起來的樣子', type: 'select', options: [['hide', '完全隱藏'], ['line', '留一行字，點一下打開']] },
       ],
       frames: 'top',
       phase: 'start',
@@ -7774,82 +7634,6 @@ button, input, select, output { font: inherit; }
       here: () => !/(^|\.)facebook\.com$/.test(HOST) || /^\/(home\.php)?$/.test(location.pathname),
       start(ctx) {
         return startFeedClean(ctx);
-      },
-    },
-
-    /* ---------------- 解除複製限制 ---------------- */
-    {
-      id: 'copyUnlock',
-      group: 'web',
-      name: '解除複製限制',
-      site: '指定網站',
-      desc: '有些網站不讓你選取文字、按右鍵或複製：在 Tampermonkey 選單按「解除這個網站的複製限制」，這個網站之後都能正常選取、複製、按右鍵（不用重新整理）。',
-      defaults: { sites: [] },
-      fields: [{ key: 'sites', label: '已解除的網站', type: 'list', placeholder: '例如 example.com' }],
-      frames: 'all',
-      phase: 'start',
-      menuExtra: true,
-      match: () => /^https?:$/.test(location.protocol),
-      here: (c) => mtSiteMatch(c.sites) !== '',
-      start(ctx) {
-        const doc = document;
-        let style = null;
-        let on = false;
-        // 網站擋選取、複製、右鍵的程式：在最前面攔下來，不讓它執行（瀏覽器原本的動作照常）
-        const stop = (e) => { e.stopImmediatePropagation(); };
-        const stopRight = (e) => { if (e.button === 2) e.stopImmediatePropagation(); };
-        const stopKeys = (e) => {
-          if (!(e.ctrlKey || e.metaKey) || e.altKey || mtTyping(e)) return;
-          if (/^[acx]$/i.test(e.key)) e.stopImmediatePropagation();
-        };
-        const EVENTS = [['copy', stop], ['cut', stop], ['contextmenu', stop], ['selectstart', stop], ['dragstart', stop],
-          ['mousedown', stopRight], ['mouseup', stopRight], ['pointerdown', stopRight], ['pointerup', stopRight], ['auxclick', stopRight], ['keydown', stopKeys]];
-        const CSS = '*, *::before, *::after { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }';
-        const addStyle = () => {
-          if (style && style.isConnected) return;
-          style = doc.createElement('style');
-          style.id = 'maoboo-copy-unlock';
-          style.textContent = CSS;
-          (doc.head || doc.documentElement).appendChild(style);
-        };
-        const apply = () => {
-          const want = !!mtSiteMatch(ctx.cfg().sites);
-          if (want === on) { if (on) addStyle(); return; }
-          on = want;
-          if (on) {
-            EVENTS.forEach(([t, fn]) => PAGE.addEventListener(t, fn, true));
-            if (doc.documentElement) addStyle(); else doc.addEventListener('DOMContentLoaded', addStyle, { once: true });
-          } else {
-            EVENTS.forEach(([t, fn]) => PAGE.removeEventListener(t, fn, true));
-            if (style) style.remove();
-            style = null;
-          }
-        };
-        apply();
-        // 有些網站會把加上去的樣式拿掉：頁面載入完再補一次
-        const again = () => { if (on) addStyle(); };
-        doc.addEventListener('DOMContentLoaded', again, { once: true });
-        const toggle = () => {
-          const list = (ctx.cfg().sites || []).slice();
-          const hit = mtSiteMatch(list);
-          if (hit) {
-            ctx.save('sites', list.filter((x) => x !== hit));
-            toast(`已恢復 ${HOST} 原本的設定（重新整理後完全恢復）。`);
-          } else {
-            ctx.save('sites', list.concat([HOST.replace(/^www\./, '')]));
-            toast(`已解除 ${HOST} 的複製限制：可以選取、複製、按右鍵了。`);
-          }
-        };
-        return {
-          onConfig: apply,
-          menuItems: () => [{ key: 'cu.site', label: '　' + (on ? '恢復這個網站的複製限制' : '解除這個網站的複製限制'), run: toggle, close: true }],
-          stop() {
-            doc.removeEventListener('DOMContentLoaded', again);
-            doc.removeEventListener('DOMContentLoaded', addStyle);
-            if (on) { EVENTS.forEach(([t, fn]) => PAGE.removeEventListener(t, fn, true)); if (style) style.remove(); }
-            on = false;
-          },
-        };
       },
     },
 
@@ -8056,24 +7840,22 @@ button, input, select, output { font: inherit; }
   })();
   const menuIds = {};
   let menuKeys = '';
+  /** 選單只放這幾個常用的（照這個順序），其他功能和檢查更新都在設定面板裡 */
+  const MENU_MODULES = ['mangaTranslate', 'ytShorts'];
 
   function renderMenu() {
     if (!IS_TOP || typeof GM_registerMenuCommand !== 'function') return;
-    const items = [{ key: '_panel', label: '開啟設定面板', run: () => openPanel(), close: true }];
-    for (const m of MODULES) {
-      items.push({
-        key: m.id,
-        label: (isOn(m) ? '【開】' : '【關】') + (m.menu ? m.menu(getCfg(m)) : m.name),
-        title: m.desc,
-        run: () => toggleFromMenu(m),
-        close: false,
-      });
+    const items = [];
+    for (const id of MENU_MODULES) {
+      const m = MODULES.find((x) => x.id === id);
+      if (!m) continue;
+      items.push({ key: m.id, label: (isOn(m) ? '【開】' : '【關】') + m.name, title: m.desc, run: () => toggleFromMenu(m), close: false });
       const inst = m.menuExtra && running.get(m.id);
       if (inst && typeof inst.menuItems === 'function') {
         try { items.push(...inst.menuItems()); } catch (e) { console.error(`[MAOBOO] 「${m.name}」選單項目`, e); }
       }
     }
-    items.push({ key: '_update', label: `檢查更新（目前 ${VERSION}）`, run: () => checkUpdate(true), close: true });
+    items.push({ key: '_panel', label: '開啟設定面板', run: () => openPanel(), close: true });
     // 項目有增減時要全部重新登記，順序才會對
     const keys = items.map((it) => it.key).join('|');
     if (!MENU_IN_PLACE || keys !== menuKeys) {
@@ -8390,6 +8172,12 @@ button, input, select, output { font: inherit; }
     const old = store.get('cfg.twimgVolume', null);
     const cur = store.get('cfg.xVolume', {}) || {};
     if (old && Number.isFinite(Number(old.volume)) && cur.direct === undefined) store.set('cfg.xVolume', Object.assign({}, cur, { direct: Number(old.volume) }));
+  })();
+  // 1.5.1：拿掉「滑過圖片看大圖」和「解除複製限制」，清掉它們留下的開關和設定
+  (() => {
+    for (const k of ['on.hoverZoom', 'cfg.hoverZoom', 'on.copyUnlock', 'cfg.copyUnlock']) {
+      try { if (GM_getValue(k) !== undefined) GM_deleteValue(k); } catch (_) { /* 管理器不支援就留著，不影響使用 */ }
+    }
   })();
   // 1.5.0：「Threads 音量記憶」和「X 影片音量」合成「影片音量記憶」，原本的開關和設定搬過來（記住的音量不變）
   (() => {
