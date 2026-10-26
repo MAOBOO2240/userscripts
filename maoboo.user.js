@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.3
+// @version      1.5.4
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,7 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.4  隱藏推薦內容：Facebook 一放進廣告、推薦貼文就馬上收起來（在畫面畫出來之前），不會再先閃一下才消失
  * 1.5.3  Facebook 的音量條會顯示記住的音量（之前音量條是 100%、實際聲音是 10%）；設定面板的音量可以直接打數字，
  *        也可以把滑鼠移到拉桿或數字上用滾輪調；預設音量：Threads、Instagram、Facebook 10%，X 1%，X 影片網址 5%
  * 1.5.2  圖示換成新的小浣熊：Tampermonkey 裡的腳本圖示和設定面板左上角都換了（圖示直接放在腳本裡，不用連外部網站）
@@ -559,29 +560,55 @@ button, input, select, output { font: inherit; }
         if (b.getAttribute(SUM) !== text) b.setAttribute(SUM, text);
       }
     };
+    /** 判斷一則貼文要不要收起來 */
+    const check = (u, m) => {
+      const sig = sigOf(u);
+      if (!sig) return; // 還沒載入、或捲遠了內容被拿掉：維持原狀
+      let st = state.get(u);
+      if (st && st.sig === sig) {
+        // 收起來的一直收著（Facebook 的「贊助」字樣捲遠了會被拿掉）
+        if (st.reason) { if (st.box === u) setBox(st, boxOf(u)); return; }
+        if (!fb) return; // Threads：內容沒變就不用再看；Facebook 的「贊助」字樣可能晚一點才出現
+      } else if (st && st.reason) clearBox(st.box); // 換成別則貼文：重新判斷
+      const reason = fb ? fbReason(u, m) : thReason(u, m);
+      const name = reason === '贊助' || reason === '推薦貼文' ? nameOf(u) : '';
+      st = { sig, reason, text: `已收起「${reason}」${name ? '：' + name : ''}（點一下打開）`, box: null };
+      state.set(u, st);
+      if (reason) setBox(st, boxOf(u));
+    };
     const scan = () => {
       if (!active()) return;
       addStyle();
       const m = mode();
-      for (const u of doc.querySelectorAll(UNIT)) {
-        const sig = sigOf(u);
-        if (!sig) continue; // 還沒載入、或捲遠了內容被拿掉：維持原狀
-        let st = state.get(u);
-        if (st && st.sig === sig) {
-          // 收起來的一直收著（Facebook 的「贊助」字樣捲遠了會被拿掉）
-          if (st.reason) { if (st.box === u) setBox(st, boxOf(u)); continue; }
-          if (!fb) continue; // Threads：內容沒變就不用再看；Facebook 的「贊助」字樣可能晚一點才出現
-        } else if (st && st.reason) clearBox(st.box); // 換成別則貼文：重新判斷
-        const reason = fb ? fbReason(u, m) : thReason(u, m);
-        const name = reason === '贊助' || reason === '推薦貼文' ? nameOf(u) : '';
-        st = { sig, reason, text: `已收起「${reason}」${name ? '：' + name : ''}（點一下打開）`, box: null };
-        state.set(u, st);
-        if (reason) setBox(st, boxOf(u));
-      }
+      for (const u of doc.querySelectorAll(UNIT)) check(u, m);
       for (const b of folded) if (!b.isConnected) folded.delete(b);
       if (!hideAll()) tidyRuns();
     };
-    // 網站一直在改畫面：最多每 0.1 秒整理一次，在畫面更新之前做完（不會先閃一下）
+    // 新出現、內容有變的貼文：網站一放進來就馬上判斷（在畫面更新之前，不會先露出來再被收掉）
+    const touched = new Set();
+    const onMutations = (records) => {
+      if (active()) {
+        for (const r of records) {
+          const t = r.target;
+          const u = t.nodeType === 1 ? t.closest(UNIT) : null;
+          if (u) { touched.add(u); continue; }
+          for (const n of r.addedNodes) {
+            if (n.nodeType !== 1) continue;
+            if (n.matches(UNIT)) touched.add(n);
+            else if (n.firstElementChild) for (const x of n.querySelectorAll(UNIT)) touched.add(x);
+          }
+        }
+        if (touched.size) {
+          addStyle();
+          const m = mode();
+          try { touched.forEach((u) => check(u, m)); } catch (e) { console.error(TAG, e); }
+          touched.clear();
+          if (!hideAll()) tidyRuns();
+        }
+      }
+      schedule();
+    };
+    // 其他的變化（例如「贊助」字樣是另外放在別處的）：最多每 0.1 秒整個看一次
     let raf = 0;
     let timer = 0;
     let lastRun = 0;
@@ -596,7 +623,7 @@ button, input, select, output { font: inherit; }
       if (wait > 0) timer = setTimeout(() => { timer = 0; raf = requestAnimationFrame(run); }, wait);
       else raf = requestAnimationFrame(run);
     };
-    const mo = new MutationObserver(schedule);
+    const mo = new MutationObserver(onMutations);
     mo.observe(doc, { childList: true, subtree: true });
     // 點一下收起來的那一行：打開這則（併在一起的全部打開）
     const onClick = (e) => {
