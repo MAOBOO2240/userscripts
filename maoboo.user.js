@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.4.4
+// @version      1.4.5
 // @description  整合影片快轉、YouTube Shorts 自動下一部、Threads／X 音量記憶、漫畫翻譯、X 影片下載、LINE 貼圖下載、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.4.5  漫畫翻譯：兩個連在一起、中間沒有外框的對話框（8 字形）分開翻，各自橫排，框裡沒認出來的字（像 Y—?）也一起蓋白底；
+ *        結巴的字（H-HOW、I-I'M）翻成「你、你…」，不會再出現「H-你…」，話說到一半的破折號改成「——」；
+ *        MM-HMM、HMM、SHH 這種沒有母音的語氣詞不會再被當成雜訊丟掉（之前會露出半行原文）
  * 1.4.4  漫畫翻譯：狀聲詞「不翻」判斷加強：DUN、TILT、NOD 這類效果字、動作字（NODS、GRABBED、THUMP THUMP 也算）不翻也不蓋白底，
  *        白底上的大狀聲詞被當成對話框時也會跳過；一行字剛好被切在兩張圖的接縫上時，把接縫附近拼起來重新認字，
  *        整句翻成一段、跨兩張圖畫成一個框（不會再露出半行原文、翻出怪字）；外面有一圈光線的對話框也認得出來，白底不會超出框外
@@ -3042,7 +3045,7 @@ button, input, select, output { font: inherit; }
      * 回傳每個對話框裡可以放字的最大方框（x0～y1）、對話框的範圍（bx0～by1）和底色；每個字框加上 bub（第幾個對話框，-1 是不在對話框裡）。
      * 沒有圍起來（連到圖片邊緣）、比裡面的字大太多、形狀太奇怪的白色區域不算。
      */
-    function bubbles(bmp, boxes) {
+    function bubbles(bmp, boxes, extra) {
       const out = [];
       boxes.forEach((b) => { b.bub = -1; });
       if (!boxes.length) return out;
@@ -3120,8 +3123,7 @@ button, input, select, output { font: inherit; }
       const cellsOf = (b) => [Math.max(0, Math.floor(b.x0 / f)), Math.max(0, Math.floor(b.y0 / f)),
         Math.min(gw - 1, Math.ceil(b.x1 / f) - 1), Math.min(gh - 1, Math.ceil(b.y1 / f) - 1)];
       // 每個字框屬於哪一塊白色：字框裡（字的四周留有一點空白）的白色格子，大多屬於的那一塊（字母裡的小洞不算）
-      const byComp = new Map();
-      boxes.forEach((b, i) => {
+      const compOf = (b) => {
         const [x0, y0, x1, y1] = cellsOf(b);
         const cnt = new Map();
         let tot = 0;
@@ -3139,10 +3141,24 @@ button, input, select, output { font: inherit; }
         let best = 0;
         let bn = 0;
         for (const [id, k] of cnt) if (k > bn) { bn = k; best = id; }
-        if (!best || bn < tot * 0.6) return;
-        if (!byComp.has(best)) byComp.set(best, []);
-        byComp.get(best).push(i);
+        return best && bn >= tot * 0.6 ? best : 0;
+      };
+      const byComp = new Map();
+      boxes.forEach((b, i) => {
+        const id = compOf(b);
+        if (!id) return;
+        if (!byComp.has(id)) byComp.set(id, []);
+        byComp.get(id).push(i);
       });
+      // 認不太出來的字框（Y—?、單一個字母）：不拿來找對話框，但在找到的對話框裡面的話一起算（一起蓋白底）
+      const extraBy = new Map();
+      for (const b of extra || []) {
+        b.bub = -1;
+        const id = compOf(b);
+        if (!id || !byComp.has(id)) continue;
+        if (!extraBy.has(id)) extraBy.set(id, []);
+        extraBy.get(id).push(b);
+      }
       for (const [id, list] of byComp) {
         const s = comps[id];
         // 碰到圖片邊緣的：只接受被一個邊切掉一段的對話框（接在上一張圖的對話框常常這樣）；碰到兩邊以上、貼著邊緣一大段的是背景
@@ -3150,13 +3166,13 @@ button, input, select, output { font: inherit; }
         const cut = sides === 1;
         if (sides > 1 || (cut && (s.e.some((v, i) => v > (i < 2 ? gw : gh) * 0.6)
           || (s.e[0] || s.e[1] ? s.x1 - s.x0 + 1 > gw * 0.85 : s.y1 - s.y0 + 1 > gh * 0.85)))) continue;
-        // 字的範圍（往內縮一點，大約是字本身）：字太靠近外框時，字和外框會連在一起，所以字本身直接算在對話框裡
-        const core = list.map((i) => {
-          const b = boxes[i];
+        /** 字的範圍（往內縮一點，大約是字本身）：字太靠近外框時，字和外框會連在一起，所以字本身直接算在對話框裡 */
+        const coreOf = (b) => {
           const e = Math.min(b.x1 - b.x0, b.y1 - b.y0) * 0.18;
           return [Math.max(0, Math.floor((b.x0 + e) / f)), Math.max(0, Math.floor((b.y0 + e) / f)),
             Math.min(gw - 1, Math.ceil((b.x1 - e) / f) - 1), Math.min(gh - 1, Math.ceil((b.y1 - e) / f) - 1)];
-        });
+        };
+        const core = list.map((i) => coreOf(boxes[i]));
         // 範圍：白色區域加上整個字框（字框可能超出對話框一點）
         const full = list.map((i) => cellsOf(boxes[i]));
         const X0 = Math.min(s.x0, ...full.map((c) => c[0]));
@@ -3199,158 +3215,226 @@ button, input, select, output { font: inherit; }
         for (const i of list) { const b = boxes[i]; text += ((b.x1 - b.x0) * (b.y1 - b.y0)) / (f * f); }
         // 對話框大多是圓的、方的：範圍裡大半是對話框；也不會比裡面的字大太多（大片空白的背景不算；大喊的大框裡常常只有幾個字）
         if (inside < bw * bh * (cut ? 0.65 : 0.5) || inside > text * (cut ? 15 : 60)) continue;
-        // 兩個對話框連在一起時（外框中間有缺口）分開：字和字之間隔著外框的，是不同的對話框
-        const ctr = list.map((i) => { const b = boxes[i]; return [(b.x0 + b.x1) / 2 / f - X0, (b.y0 + b.y1) / 2 / f - Y0]; });
-        const par = list.map((_, k) => k);
-        const root = (k) => { while (par[k] !== k) { par[k] = par[par[k]]; k = par[k]; } return k; };
-        for (let a = 0; a < list.length; a++) {
-          for (let z = a + 1; z < list.length; z++) {
-            if (root(a) === root(z)) continue;
-            const steps = Math.max(2, Math.ceil(Math.hypot(ctr[z][0] - ctr[a][0], ctr[z][1] - ctr[a][1])));
-            let bad = 0;
-            for (let t = 0; t <= steps; t++) {
-              if (!isIn(Math.round(ctr[a][0] + ((ctr[z][0] - ctr[a][0]) * t) / steps), Math.round(ctr[a][1] + ((ctr[z][1] - ctr[a][1]) * t) / steps))) bad++;
-            }
-            if (bad <= (steps + 1) * 0.04) par[root(a)] = root(z);
-          }
+        // 這個對話框裡的所有字框：認得出的字，加上大部分在對話框裡面的其他字框
+        const all = list.map((i) => boxes[i]);
+        const extraSet = new Set();
+        for (const b of extraBy.get(id) || []) {
+          const [x0, y0, x1, y1] = cellsOf(b);
+          let tin = 0;
+          let tot = 0;
+          for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { tot++; if (isIn(x - X0, y - Y0)) tin++; }
+          if (tot && tin >= tot * 0.85) { all.push(b); extraSet.add(b); }
         }
-        const parts = new Map();
-        list.forEach((i, k) => { const r = root(k); if (!parts.has(r)) parts.set(r, []); parts.get(r).push(i); });
         const hex = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
         const bg = cs ? '#' + hex(rs / cs) + hex(gs / cs) + hex(bs / cs) : '#ffffff';
-        // 可以蓋白底的地方：對話框的白色、字和字框；對話框裡其他的洞（小圖案）不要蓋掉
-        const fr = new Uint8Array(bw * bh);
-        for (let k = 0; k < m.length; k++) fr[k] = m[k] === 1 || m[k] === 3 ? 1 : 0;
-        for (const i of list) {
-          const b = boxes[i];
-          for (let y = Math.max(0, Math.floor(b.y0 / f) - Y0); y <= Math.min(bh - 1, Math.ceil(b.y1 / f) - 1 - Y0); y++) {
-            for (let x = Math.max(0, Math.floor(b.x0 / f) - X0); x <= Math.min(bw - 1, Math.ceil(b.x1 / f) - 1 - X0); x++) if (m[y * bw + x] !== 2) fr[y * bw + x] = 1;
+        /** 一個對話框（mask 是它的範圍；8 字形切開的話是其中一塊）：找形狀、放譯文的地方，輸出 */
+        const emit = (L, pm, et, eb) => {
+          const inP = (x, y) => x >= 0 && y >= 0 && x < bw && y < bh && pm[y * bw + x] !== 2;
+          let pin = 0;
+          let qx0 = bw; let qy0 = bh; let qx1 = -1; let qy1 = -1; // 白色區域的範圍
+          for (let y = 0; y < bh; y++) {
+            for (let x = 0; x < bw; x++) {
+              const v = pm[y * bw + x];
+              if (v === 2) continue;
+              pin++;
+              if (v !== 1) continue;
+              if (x < qx0) qx0 = x;
+              if (x > qx1) qx1 = x;
+              if (y < qy0) qy0 = y;
+              if (y > qy1) qy1 = y;
+            }
           }
-        }
-        let dirty = 0;
-        for (let k = 0; k < m.length; k++) if (m[k] !== 2 && !fr[k]) dirty++;
-        // 形狀：大多數對話框是橢圓形或方形，這時白底直接蓋滿整個對話框，譯文排在正中間
-        let shape = null;
-        if (parts.size === 1 && !cut && dirty <= inside * 0.02) {
-          const sx0 = s.x0 - X0;
-          const sy0 = s.y0 - Y0;
-          const sx1 = s.x1 - X0;
-          const sy1 = s.y1 - Y0;
-          let rin = 0;
-          for (let y = sy0; y <= sy1; y++) for (let x = sx0; x <= sx1; x++) if (m[y * bw + x] !== 2) rin++;
-          if (rin >= (sx1 - sx0 + 1) * (sy1 - sy0 + 1) * 0.96) shape = { kind: 'rect', x0: sx0, y0: sy0, x1: sx1 + 1, y1: sy1 + 1 };
-          else {
-            // 橢圓：用面積的分布（平均、變異數）估出中心和半徑
-            let n0 = 0; let mx = 0; let my = 0; let vx = 0; let vy = 0;
-            for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) if (m[y * bw + x] !== 2) { n0++; mx += x; my += y; vx += x * x; vy += y * y; }
-            mx /= n0;
-            my /= n0;
-            const ra = 2 * Math.sqrt(Math.max(0, vx / n0 - mx * mx));
-            const rb = 2 * Math.sqrt(Math.max(0, vy / n0 - my * my));
-            const inE = (x, y, ka, kb) => ((x - mx) / ka) ** 2 + ((y - my) / kb) ** 2 <= 1;
-            // 估出來的橢圓可能比對話框大一點（形狀不是正橢圓）：縮小到整個橢圓都在對話框裡（不會蓋到外框）
-            for (let t = 1; t >= 0.83 && !shape; t -= 0.03) {
-              const ka = ra * t;
-              const kb = rb * t;
-              if (ka < 3 || kb < 3) break;
-              let ein = 0;
-              let etot = 0;
-              for (let y = Math.floor(my - kb); y <= Math.ceil(my + kb); y++) {
-                for (let x = Math.floor(mx - ka); x <= Math.ceil(mx + ka); x++) {
-                  if (!inE(x, y, ka, kb)) continue;
-                  etot++;
-                  if (isIn(x, y)) ein++;
+          if (qx1 < 0) return;
+          // 兩個對話框連在一起時（外框中間有缺口）分開：字和字之間隔著外框的，是不同的對話框
+          const real = L.filter((b) => !extraSet.has(b));
+          if (!real.length) return;
+          const ctrOf = (b) => [(b.x0 + b.x1) / 2 / f - X0, (b.y0 + b.y1) / 2 / f - Y0];
+          const seen = (p, q) => {
+            const steps = Math.max(2, Math.ceil(Math.hypot(q[0] - p[0], q[1] - p[1])));
+            let bad = 0;
+            for (let t = 0; t <= steps; t++) if (!inP(Math.round(p[0] + ((q[0] - p[0]) * t) / steps), Math.round(p[1] + ((q[1] - p[1]) * t) / steps))) bad++;
+            return bad <= (steps + 1) * 0.04;
+          };
+          const ctr = real.map(ctrOf);
+          const par = real.map((_, k) => k);
+          const root = (k) => { while (par[k] !== k) { par[k] = par[par[k]]; k = par[k]; } return k; };
+          for (let a = 0; a < real.length; a++) {
+            for (let z = a + 1; z < real.length; z++) if (root(a) !== root(z) && seen(ctr[a], ctr[z])) par[root(a)] = root(z);
+          }
+          const parts = new Map();
+          real.forEach((b, k) => { const r = root(k); if (!parts.has(r)) parts.set(r, []); parts.get(r).push(b); });
+          // 認不太出來的字框：跟看得到的那一段字放一起（看不到的就不管）
+          for (const b of L) {
+            if (!extraSet.has(b)) continue;
+            const c = ctrOf(b);
+            const k = real.findIndex((_, j) => seen(c, ctr[j]));
+            if (k >= 0) parts.get(root(k)).push(b);
+          }
+          // 可以蓋白底的地方：對話框的白色、字和字框；對話框裡其他的洞（小圖案）不要蓋掉
+          const fr = new Uint8Array(bw * bh);
+          for (let k = 0; k < pm.length; k++) fr[k] = pm[k] === 1 || pm[k] === 3 ? 1 : 0;
+          for (const b of L) {
+            for (let y = Math.max(0, Math.floor(b.y0 / f) - Y0); y <= Math.min(bh - 1, Math.ceil(b.y1 / f) - 1 - Y0); y++) {
+              for (let x = Math.max(0, Math.floor(b.x0 / f) - X0); x <= Math.min(bw - 1, Math.ceil(b.x1 / f) - 1 - X0); x++) if (pm[y * bw + x] !== 2) fr[y * bw + x] = 1;
+            }
+          }
+          let dirty = 0;
+          for (let k = 0; k < pm.length; k++) if (pm[k] !== 2 && !fr[k]) dirty++;
+          // 形狀：大多數對話框是橢圓形或方形，這時白底直接蓋滿整個對話框，譯文排在正中間
+          let shape = null;
+          if (parts.size === 1 && !cut && dirty <= pin * 0.02) {
+            let rin = 0;
+            for (let y = qy0; y <= qy1; y++) for (let x = qx0; x <= qx1; x++) if (pm[y * bw + x] !== 2) rin++;
+            if (rin >= (qx1 - qx0 + 1) * (qy1 - qy0 + 1) * 0.96) shape = { kind: 'rect', x0: qx0, y0: qy0, x1: qx1 + 1, y1: qy1 + 1 };
+            else {
+              // 橢圓：用面積的分布（平均、變異數）估出中心和半徑
+              let n0 = 0; let mx = 0; let my = 0; let vx = 0; let vy = 0;
+              for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) if (pm[y * bw + x] !== 2) { n0++; mx += x; my += y; vx += x * x; vy += y * y; }
+              mx /= n0;
+              my /= n0;
+              const ra = 2 * Math.sqrt(Math.max(0, vx / n0 - mx * mx));
+              const rb = 2 * Math.sqrt(Math.max(0, vy / n0 - my * my));
+              const inE = (x, y, ka, kb) => ((x - mx) / ka) ** 2 + ((y - my) / kb) ** 2 <= 1;
+              const cores = L.map(coreOf);
+              // 估出來的橢圓可能比對話框大一點（形狀不是正橢圓）：縮小到整個橢圓都在對話框裡（不會蓋到外框）
+              for (let t = 1; t >= 0.83 && !shape; t -= 0.03) {
+                const ka = ra * t;
+                const kb = rb * t;
+                if (ka < 3 || kb < 3) break;
+                let ein = 0;
+                let etot = 0;
+                for (let y = Math.floor(my - kb); y <= Math.ceil(my + kb); y++) {
+                  for (let x = Math.floor(mx - ka); x <= Math.ceil(mx + ka); x++) {
+                    if (!inE(x, y, ka, kb)) continue;
+                    etot++;
+                    if (inP(x, y)) ein++;
+                  }
                 }
+                if (!etot || ein < etot * 0.995) continue;
+                // 字（往內縮過的範圍）都要在橢圓裡，白底才蓋得到
+                const coreIn = cores.every((c) => [[c[0], c[1]], [c[2] + 1, c[1]], [c[0], c[3] + 1], [c[2] + 1, c[3] + 1]]
+                  .every(([x, y]) => inE(x - X0, y - Y0, ka * 1.04, kb * 1.04)));
+                if (coreIn) shape = { kind: 'ellipse', x0: mx - ka + 0.5, y0: my - kb + 0.5, x1: mx + ka + 0.5, y1: my + kb + 0.5 };
+                break;
               }
-              if (!etot || ein < etot * 0.995) continue;
-              // 字（往內縮過的範圍）都要在橢圓裡，白底才蓋得到
-              const coreIn = core.every((c) => [[c[0], c[1]], [c[2] + 1, c[1]], [c[0], c[3] + 1], [c[2] + 1, c[3] + 1]]
-                .every(([x, y]) => inE(x - X0, y - Y0, ka * 1.04, kb * 1.04)));
-              if (coreIn) shape = { kind: 'ellipse', x0: mx - ka + 0.5, y0: my - kb + 0.5, x1: mx + ka + 0.5, y1: my + kb + 0.5 };
-              break;
             }
+          }
+          for (const part of parts.values()) {
+            let rx0 = bw; let ry0 = bh; let rx1 = -1; let ry1 = -1;
+            for (const b of part) {
+              rx0 = Math.min(rx0, Math.max(0, Math.floor(b.x0 / f) - X0));
+              ry0 = Math.min(ry0, Math.max(0, Math.floor(b.y0 / f) - Y0));
+              rx1 = Math.max(rx1, Math.min(bw - 1, Math.ceil(b.x1 / f) - 1 - X0));
+              ry1 = Math.max(ry1, Math.min(bh - 1, Math.ceil(b.y1 / f) - 1 - Y0));
+            }
+            // 字的範圍大部分要在對話框裡
+            let inU = 0;
+            for (let y = ry0; y <= ry1; y++) for (let x = rx0; x <= rx1; x++) if (pm[y * bw + x] !== 2) inU++;
+            if (inU < (rx1 - rx0 + 1) * (ry1 - ry0 + 1) * 0.75) continue;
+            let box;
+            if (shape) box = shape;
+            else {
+              // 從字的範圍往外擴，直到碰到對話框的邊：這就是可以放譯文的地方（最多擴到字的範圍的一半，不會蓋到太多圖）
+              const gx = Math.max(2, Math.round((rx1 - rx0 + 1) * 0.5));
+              const gy = Math.max(2, Math.round((ry1 - ry0 + 1) * 0.5));
+              const lim = [ry0 - gy, ry1 + gy, rx0 - gx, rx1 + gx];
+              const rowOk = (y, a, z) => {
+                if (y < 0 || y >= bh || y < lim[0] || y > lim[1]) return false;
+                let bad = 0;
+                const most = (z - a + 1) * 0.02;
+                for (let x = a; x <= z; x++) if (!fr[y * bw + x] && ++bad > most) return false;
+                return true;
+              };
+              const colOk = (x, a, z) => {
+                if (x < 0 || x >= bw || x < lim[2] || x > lim[3]) return false;
+                let bad = 0;
+                const most = (z - a + 1) * 0.02;
+                for (let y = a; y <= z; y++) if (!fr[y * bw + x] && ++bad > most) return false;
+                return true;
+              };
+              for (let grow = true; grow;) {
+                grow = false;
+                if (rowOk(ry0 - 1, rx0, rx1)) { ry0--; grow = true; }
+                if (rowOk(ry1 + 1, rx0, rx1)) { ry1++; grow = true; }
+                if (colOk(rx0 - 1, ry0, ry1)) { rx0--; grow = true; }
+                if (colOk(rx1 + 1, ry0, ry1)) { rx1++; grow = true; }
+              }
+              box = { kind: '', x0: rx0, y0: ry0, x1: rx1 + 1, y1: ry1 + 1 };
+              // 方框超出對話框的地方（例如橢圓的四個角）：記下每一列在對話框裡的左右範圍，白底照這個形狀剪掉
+              const rows = [];
+              const n2 = Math.min(24, ry1 - ry0 + 1);
+              const ww = rx1 - rx0 + 1;
+              const hh = ry1 - ry0 + 1;
+              // 字框裡一定要蓋（字太靠近外框時，字的邊緣會被當成外面）
+              const pb = part.map((b) => cellsOf(b).map((v, j) => v - (j % 2 ? Y0 : X0)));
+              const keep = (x, y) => pm[y * bw + x] !== 2 || pb.some((c) => x >= c[0] && x <= c[2] && y >= c[1] && y <= c[3]);
+              let cut2 = false;
+              for (let k = 0; k < n2; k++) {
+                const y = ry0 + Math.round((k * (hh - 1)) / Math.max(1, n2 - 1));
+                let xl = rx0;
+                let xr = rx1;
+                while (xl < xr && !keep(xl, y)) xl++;
+                while (xr > xl && !keep(xr, y)) xr--;
+                if (xl > rx0 || xr < rx1) cut2 = true;
+                const r3 = (v) => Math.round(v * 1000) / 1000;
+                rows.push([r3((y - ry0 + (k === 0 ? 0 : k === n2 - 1 ? 1 : 0.5)) / hh), r3((xl - rx0) / ww), r3((xr + 1 - rx0) / ww)]);
+              }
+              if (cut2) box.rows = rows;
+            }
+            const k = out.length;
+            out.push({
+              x0: Math.max(0, (X0 + box.x0) * f),
+              y0: Math.max(0, (Y0 + box.y0) * f),
+              x1: Math.min(W, (X0 + box.x1) * f),
+              y1: Math.min(H, (Y0 + box.y1) * f),
+              shape: box.kind,
+              rows: box.rows || null,
+              et: et ? 1 : 0, // 對話框碰到這一段圖的上緣／下緣（被切開的對話框）
+              eb: eb ? 1 : 0,
+              bx0: (X0 + qx0) * f,
+              by0: (Y0 + qy0) * f,
+              bx1: Math.min(W, (X0 + qx1 + 1) * f),
+              by1: Math.min(H, (Y0 + qy1 + 1) * f),
+              bg,
+            });
+            for (const b of part) b.bub = k;
+          }
+        };
+        // 兩個對話框連在一起、中間沒有外框（8 字形）：字分成上下兩群，兩群中間的對話框明顯變窄（腰）的地方切開，各算一個
+        const cuts = [];
+        if (list.length >= 2) {
+          const span = new Int32Array(bh);
+          for (let y = 0; y < bh; y++) {
+            let a = -1;
+            let z = -1;
+            for (let x = 0; x < bw; x++) if (m[y * bw + x] !== 2) { if (a < 0) a = x; z = x; }
+            span[y] = a < 0 ? 0 : z - a + 1;
+          }
+          const ls = list.map((i) => [boxes[i].y0 / f - Y0, boxes[i].y1 / f - Y0]).sort((p, q) => p[0] - q[0]);
+          const hs = ls.map((p) => p[1] - p[0]).sort((p, q) => p - q);
+          const lh = hs[hs.length >> 1];
+          const runs = [];
+          for (const p of ls) {
+            const last = runs[runs.length - 1];
+            if (last && p[0] - last[1] < lh) last[1] = Math.max(last[1], p[1]);
+            else runs.push([p[0], p[1]]);
+          }
+          const widest = (a, z) => { let v = 0; for (let y = Math.max(0, Math.floor(a)); y <= Math.min(bh - 1, Math.ceil(z)); y++) v = Math.max(v, span[y]); return v; };
+          for (let k = 0; k + 1 < runs.length; k++) {
+            let best = -1;
+            let bv = Infinity;
+            for (let y = Math.ceil(runs[k][1]); y <= Math.floor(runs[k + 1][0]); y++) if (span[y] < bv) { bv = span[y]; best = y; }
+            if (best >= 0 && bv <= Math.min(widest(...runs[k]), widest(...runs[k + 1])) * 0.75) cuts.push(best);
           }
         }
-        for (const part of parts.values()) {
-          let rx0 = bw; let ry0 = bh; let rx1 = -1; let ry1 = -1;
-          for (const i of part) {
-            const b = boxes[i];
-            rx0 = Math.min(rx0, Math.max(0, Math.floor(b.x0 / f) - X0));
-            ry0 = Math.min(ry0, Math.max(0, Math.floor(b.y0 / f) - Y0));
-            rx1 = Math.max(rx1, Math.min(bw - 1, Math.ceil(b.x1 / f) - 1 - X0));
-            ry1 = Math.max(ry1, Math.min(bh - 1, Math.ceil(b.y1 / f) - 1 - Y0));
-          }
-          // 字的範圍大部分要在對話框裡
-          let inU = 0;
-          for (let y = ry0; y <= ry1; y++) for (let x = rx0; x <= rx1; x++) if (m[y * bw + x] !== 2) inU++;
-          if (inU < (rx1 - rx0 + 1) * (ry1 - ry0 + 1) * 0.75) continue;
-          let box;
-          if (shape) box = shape;
-          else {
-            // 從字的範圍往外擴，直到碰到對話框的邊：這就是可以放譯文的地方（最多擴到字的範圍的一半，不會蓋到太多圖）
-            const gx = Math.max(2, Math.round((rx1 - rx0 + 1) * 0.5));
-            const gy = Math.max(2, Math.round((ry1 - ry0 + 1) * 0.5));
-            const lim = [ry0 - gy, ry1 + gy, rx0 - gx, rx1 + gx];
-            const rowOk = (y, a, z) => {
-              if (y < 0 || y >= bh || y < lim[0] || y > lim[1]) return false;
-              let bad = 0;
-              const most = (z - a + 1) * 0.02;
-              for (let x = a; x <= z; x++) if (!fr[y * bw + x] && ++bad > most) return false;
-              return true;
-            };
-            const colOk = (x, a, z) => {
-              if (x < 0 || x >= bw || x < lim[2] || x > lim[3]) return false;
-              let bad = 0;
-              const most = (z - a + 1) * 0.02;
-              for (let y = a; y <= z; y++) if (!fr[y * bw + x] && ++bad > most) return false;
-              return true;
-            };
-            for (let grow = true; grow;) {
-              grow = false;
-              if (rowOk(ry0 - 1, rx0, rx1)) { ry0--; grow = true; }
-              if (rowOk(ry1 + 1, rx0, rx1)) { ry1++; grow = true; }
-              if (colOk(rx0 - 1, ry0, ry1)) { rx0--; grow = true; }
-              if (colOk(rx1 + 1, ry0, ry1)) { rx1++; grow = true; }
-            }
-            box = { kind: '', x0: rx0, y0: ry0, x1: rx1 + 1, y1: ry1 + 1 };
-            // 方框超出對話框的地方（例如橢圓的四個角）：記下每一列在對話框裡的左右範圍，白底照這個形狀剪掉
-            const rows = [];
-            const n2 = Math.min(24, ry1 - ry0 + 1);
-            const ww = rx1 - rx0 + 1;
-            const hh = ry1 - ry0 + 1;
-            // 字框裡一定要蓋（字太靠近外框時，字的邊緣會被當成外面）
-            const pb = part.map((i) => cellsOf(boxes[i]).map((v, j) => v - (j % 2 ? Y0 : X0)));
-            const keep = (x, y) => m[y * bw + x] !== 2 || pb.some((c) => x >= c[0] && x <= c[2] && y >= c[1] && y <= c[3]);
-            let cut2 = false;
-            for (let k = 0; k < n2; k++) {
-              const y = ry0 + Math.round((k * (hh - 1)) / Math.max(1, n2 - 1));
-              let xl = rx0;
-              let xr = rx1;
-              while (xl < xr && !keep(xl, y)) xl++;
-              while (xr > xl && !keep(xr, y)) xr--;
-              if (xl > rx0 || xr < rx1) cut2 = true;
-              const r3 = (v) => Math.round(v * 1000) / 1000;
-              rows.push([r3((y - ry0 + (k === 0 ? 0 : k === n2 - 1 ? 1 : 0.5)) / hh), r3((xl - rx0) / ww), r3((xr + 1 - rx0) / ww)]);
-            }
-            if (cut2) box.rows = rows;
-          }
-          const k = out.length;
-          out.push({
-            x0: Math.max(0, (X0 + box.x0) * f),
-            y0: Math.max(0, (Y0 + box.y0) * f),
-            x1: Math.min(W, (X0 + box.x1) * f),
-            y1: Math.min(H, (Y0 + box.y1) * f),
-            shape: box.kind,
-            rows: box.rows || null,
-            et: s.e[0] > 0 ? 1 : 0, // 對話框碰到這一段圖的上緣／下緣（被切開的對話框）
-            eb: s.e[1] > 0 ? 1 : 0,
-            bx0: s.x0 * f,
-            by0: s.y0 * f,
-            bx1: Math.min(W, (s.x1 + 1) * f),
-            by1: Math.min(H, (s.y1 + 1) * f),
-            bg,
-          });
-          for (const i of part) boxes[i].bub = k;
+        if (!cuts.length) { emit(all, m, s.e[0] > 0, s.e[1] > 0); continue; }
+        const bounds = [0, ...cuts, bh];
+        for (let p = 0; p + 1 < bounds.length; p++) {
+          const pa = bounds[p];
+          const pz = bounds[p + 1];
+          const pm = m.map((v, k) => ((k / bw) | 0) >= pa && ((k / bw) | 0) < pz ? v : 2);
+          const L = all.filter((b) => { const cy = (b.y0 + b.y1) / 2 / f - Y0; return cy >= pa && cy < pz; });
+          if (L.length) emit(L, pm, p === 0 && s.e[0] > 0, p === bounds.length - 2 && s.e[1] > 0);
         }
       }
       return out;
@@ -3457,10 +3541,12 @@ button, input, select, output { font: inherit; }
               const c = String(t || '').replace(/[\s\p{P}\p{S}]/gu, '');
               if (!c || /^(.)\1+$/u.test(c)) return false;
               // 英文：至少兩個字母、有母音（沒有母音的只認 HMM、SHH、TSK 這種常見的）
-              return m.rec !== 'eng' || (c.replace(/[^A-Za-z]/g, '').length >= 2 && (/[aeiouy]/i.test(c) || /^(h+m+|m+h+m+|s+h+|t+s+k+|p+f+t*|p+s+t+|g+r+|b+r+)$/i.test(c)));
+              return m.rec !== 'eng' || (c.replace(/[^A-Za-z]/g, '').length >= 2 && (/[aeiouy]/i.test(c) || /^(?:m+h*m+|h+m+(?:p+h+)?|s+h+|t+s+k+|t+c+h+|p+f+t*|p+s+t+|g+r+|b+r+|z{2,}|n{2,})+$/i.test(c)));
             };
             boxes.forEach((b) => { b.bub = -1; });
-            const bubs = bubbles(bmp, boxes.filter((b, i) => lines[i] && lines[i].conf >= 0.5 && real(lines[i].text)));
+            const sure = (i) => lines[i] && lines[i].conf >= 0.5 && real(lines[i].text);
+            // 其他有認出東西的字框（Y—?、單一個字母）：在對話框裡面的話一起蓋白底
+            const bubs = bubbles(bmp, boxes.filter((b, i) => sure(i)), boxes.filter((b, i) => !sure(i) && lines[i] && lines[i].conf >= 0.3 && /[\p{L}\p{N}]/u.test(lines[i].text || '')));
             post({ type: 'ok', id: m.id, boxes, bubbles: bubs, lines: boxes.map((b, i) => Object.assign({}, b, lines[i])) });
           } finally { if (bmp.close) bmp.close(); }
         }
@@ -3471,13 +3557,15 @@ button, input, select, output { font: inherit; }
   }
 
   /** 英文、韓文、日文的字有沒有對（沒有的多半是圖上的雜訊） */
+  // 沒有母音的英文，只認常見的語氣詞（MM-HMM、HMM、SHH、TSK、PSST、GRR）
+  const MT_EN_NOVOWEL = /^(?:m+h*m+|h+m+(?:p+h+)?|s+h+|t+s+k+|t+c+h+|p+f+t*|p+s+t+|g+r+|b+r+|z{2,}|n{2,})+$/i;
   function mtPaddleScript(text, lang) {
     const s = text.replace(/[\s\d\p{P}\p{S}]/gu, '');
     if (!s.length) return false;
     const re = lang === 'kor' ? /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/ : lang === 'jpn' ? /[\u3040-\u30FF\u3400-\u9FFF\u3005\u3006\u30FC]/ : /[A-Za-z]/;
     let n = 0;
     for (const ch of s) if (re.test(ch)) n++;
-    if (lang === 'eng' && (n < 2 || !/[aeiouyAEIOUY]/.test(s))) return false;
+    if (lang === 'eng' && (n < 2 || !(/[aeiouy]/i.test(s) || MT_EN_NOVOWEL.test(s)))) return false;
     return n / s.length >= 0.7;
   }
 
@@ -3854,7 +3942,7 @@ button, input, select, output { font: inherit; }
     const re = lang === 'kor' ? /[가-힯ᄀ-ᇿ㄰-㆏]/ : lang === 'jpn' ? /[぀-ヿ一-鿿]/ : /[A-Za-z]/;
     let n = 0;
     for (const ch of s) if (re.test(ch)) n++;
-    if (lang === 'eng' && (n < 2 || !/[aeiouyAEIOUY]/.test(s))) return false;
+    if (lang === 'eng' && (n < 2 || !(/[aeiouy]/i.test(s) || MT_EN_NOVOWEL.test(s)))) return false;
     if (lang === 'jpn' && !/[\u3040-\u30FF]/.test(s)) return false; // 只有漢字、沒有假名的多半是中文，不用翻
     return n / s.length >= 0.7;
   }
@@ -4047,18 +4135,43 @@ button, input, select, output { font: inherit; }
     return out;
   }
   let mtGtxFailed = false;
+  /**
+   * 英文的結巴（H-HOW、I-I'M、W-W-WHAT）：翻譯前拿掉（不然 Google 會把「H-」留在譯文裡）；
+   * 結巴在句子開頭的話（lead），翻好後把中文的第一個字重複一次（你、你過得…）
+   */
+  function mtStutter(t) {
+    let lead = false;
+    let text = String(t || '').replace(/\b([A-Za-z]{1,3})-(?=\1([A-Za-z']*))/gi, (m0, a, rest, at, all) => {
+      // 不是結巴：HA-HA、SO-SO 這種重複的字，RE-READ 這種字首
+      if (a.length > 1 && (!rest || /^(re|co|de|pre|pro|non|sub|mid)$/i.test(a))) return m0;
+      if (!/[A-Za-z]/.test(all.slice(0, at))) lead = true;
+      return '';
+    });
+    if (lead) text = text.replace(/^([^A-Za-z]*)([a-z])/, (_m, a, b) => a + b.toUpperCase());
+    return { text, lead };
+  }
+  /** 譯文：開頭的字重複一次（結巴）；話說到一半的破折號（了-？）改成中文的「——」 */
+  function mtZhFix(zh, lead) {
+    let t = String(zh || '').replace(/([\u3400-\u9FFF])\s*(?:-{1,2}|[\u2010-\u2015]{1,2})\s*(?=[？！?!。」』]|$)/g, '$1——');
+    if (lead) t = t.replace(/^([\s「『"“(（]*)([\u3400-\u9FFF])(?!、)/, '$1$2、$2');
+    return t;
+  }
   /** 免費翻譯：Google 翻譯（跟 Chrome 右鍵「翻譯成中文」同一套）；連不上時改用 Chrome 的離線翻譯 */
   async function mtFreeTranslate(texts, lang) {
     const src = MT_LANG[lang] || 'en';
+    const prep = texts.map((t) => (src === 'en' ? mtStutter(t) : { text: t, lead: false }));
+    const send = prep.map((p) => p.text);
+    let out;
     try {
-      return await mtGtx(texts, src);
+      out = await mtGtx(send, src);
     } catch (e) {
       mtGtxFailed = true;
       console.warn('[MAOBOO] Google 翻譯失敗，改用 Chrome 離線翻譯', e);
       const tr = await mtChromeTranslator(src);
       if (!tr) throw e;
-      return mtTimeout(Promise.all(texts.map((t) => tr.translate(t))), 20000);
+      out = await mtTimeout(Promise.all(send.map((t) => tr.translate(t))), 20000);
     }
+    return out.map((z, i) => (src === 'en' && z ? mtZhFix(z, prep[i].lead) : z));
   }
   /** 依網站猜漫畫原文（免費模式的文字辨識要先指定語言） */
   function mtHostLang() {
@@ -4572,16 +4685,16 @@ button, input, select, output { font: inherit; }
     }
 
     /* ---------- 快取：翻過的圖不再花額度 ---------- */
-    // v4：免費模式的狀聲詞判斷、接縫重新認字改過了（舊版免費模式翻的重新翻一次；Gemini 看圖翻的沿用）
-    const cacheKeyOf = (P, ver = 'v4') => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
+    // v5：免費模式的對話框（8 字形分開）、結巴、語氣詞改過了（舊版免費模式翻的重新翻一次；Gemini 看圖翻的沿用）
+    const MTC_VER = 5;
+    const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
     function cacheGet(P) {
       let v = store.get(cacheKeyOf(P), null);
-      for (const ver of ['v3', 'v2']) {
-        if (v) break;
-        const old = store.get(cacheKeyOf(P, ver), null);
-        if (old && (old.v === 3 || old.v === 2) && old.m && old.m !== 'free') v = old;
+      for (let ver = MTC_VER - 1; ver >= 2 && !v; ver--) {
+        const old = store.get(cacheKeyOf(P, 'v' + ver), null);
+        if (old && old.v === ver && old.m && old.m !== 'free') v = old;
       }
-      if (!v || (v.v !== 4 && v.v !== 3 && v.v !== 2) || !Array.isArray(v.b)) return null;
+      if (!v || !(v.v >= 2 && v.v <= MTC_VER) || !Array.isArray(v.b)) return null;
       // 同一個網址換成了別張圖（長寬比不同）就不能用
       for (const img of P.els) {
         if (img.complete && img.naturalWidth && v.w && v.h && Math.abs(img.naturalWidth / img.naturalHeight - v.w / v.h) > 0.02) return null;
@@ -4597,7 +4710,7 @@ button, input, select, output { font: inherit; }
     function cachePut(P, model, w, h, blk, fx) {
       const k = cacheKeyOf(P);
       const r4 = (n) => Math.round(n * 10000) / 10000;
-      store.set(k, { v: 4, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, ex: P.seamExt ? P.seamExt.map(r4) : 0,
+      store.set(k, { v: MTC_VER, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, ex: P.seamExt ? P.seamExt.map(r4) : 0,
         b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang, b.src || '', b.bub ? 1 : 0, r4(b.lh || 0), b.bg || '', b.shape || '', b.rows || 0,
           (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0), b.msrc || '']) });
       let idx = store.get('mtc.idx', []);
