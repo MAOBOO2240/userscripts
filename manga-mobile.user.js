@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.14
+// @version      1.5.15
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.15  按「顯示原文」時翻譯先暫停：還沒翻完的圖不再認字、不再送 Google 或 Gemini（已經送出去的做完），
+ *         按「顯示譯文」從暫停的地方接著翻；狀態列會寫「顯示原文中・翻譯暫停」
  * 1.5.14  漫畫翻譯：浮水印（翻譯組、網站的名字和網址，例如 RINKO COMICS.COM）不翻也不蓋，原圖保持原樣；
  *         壓在對話框邊上的浮水印不會再混進對話的譯文；之前用「快速」翻過的圖，再打開時會重新翻一次
  * 1.5.13  「譯」按住可以拖到畫面上別的地方，每個網站各自記住位置；點一下照樣開始翻譯
@@ -5483,6 +5485,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     /** 這張圖翻好了：跟上下相鄰、也翻好的圖接起被切開的字；等著接的那張圖可以送修正了 */
     async function stitchAround(P) {
+      await untilResumed(); // 接縫重新認字、接起來的句子也要送翻譯：顯示原文時先等
       const fixOn = () => mode() === 'fast' && mtEngineState(cfg()).kind === 'gemini';
       for (const [U, L] of [[stacked(P, -1), P], [P, stacked(P, 1)]]) {
         if (!U || !L) continue;
@@ -5574,9 +5577,22 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       q.urgent = () => wait.some((t) => prioOf(t.P) < 1) || [...running].some((t) => prioOf(t.P) < 1);
       return q;
     }
+    /* ---------- 按「顯示原文」時翻譯先暫停 ---------- */
+    // 已經送出去的做完（結果留著），還沒開始的（下載圖、認字、Google 翻譯、Gemini）等按「顯示譯文」再接著做
+    function paused() { return pg.on && pg.hidden; }
+    const resumeWait = [];
+    function untilResumed() { return paused() ? new Promise((r) => resumeWait.push(r)) : Promise.resolve(); }
+    function resumeWork() {
+      resumeWait.splice(0).forEach((r) => r());
+      bump(); // 暫停的那段時間不算沒有進展（不會一繼續就顯示「好像卡住了」）
+      prepQ.kick();
+      ocrQ.kick();
+      pumpSoon(0);
+      fixSoon(0);
+    }
     // 畫面上的圖直接準備；後面的圖等 Gemini 或免費模式消化得差不多再準備，才不會一次佔用太多記憶體
-    const prepQ = prioQueue(3, (p) => p < 1 || (gq.jobs.length < 24 && ocrQ.pending() < 8));
-    const ocrQ = prioQueue(MT_TESS_N);
+    const prepQ = prioQueue(3, (p) => !paused() && (p < 1 || (gq.jobs.length < 24 && ocrQ.pending() < 8)));
+    const ocrQ = prioQueue(MT_TESS_N, () => !paused());
     ocrQ.after = () => prepQ.kick();
 
     /* ---------- 狀態更新（合併成每一格畫面最多一次） ---------- */
@@ -5738,7 +5754,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       gq.pumping = true;
       try {
         await ensureChain();
-        while (!stopped && gq.jobs.length && gq.active < MAX_ACTIVE) {
+        while (!stopped && !paused() && gq.jobs.length && gq.active < MAX_ACTIVE) {
           gq.jobs = gq.jobs.filter((j) => {
             if (j.gen === j.P.gen) return true;
             j.reject(mtErr('cancel'));
@@ -6451,7 +6467,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       try {
         await ensureChain();
         for (;;) {
-          if (stopped || !fq.jobs.length) break;
+          if (stopped || paused() || !fq.jobs.length) break;
           fq.jobs = fq.jobs.filter((j) => {
             if (j.gen === j.P.gen) return true;
             if (j.P.fix === 'wait') j.P.fix = '';
@@ -7060,11 +7076,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       showAll();
       afterPageChange();
     }
+    /** 切換原文／譯文：顯示原文時翻譯先暫停，顯示譯文時從暫停的地方接著翻 */
     function pageShow(show) {
       pg.hidden = !show;
       pg.chipOff = false; // 使用者切換了原文／譯文：狀態列顯示現在是哪一個
       showAll();
-      if (show) for (const P of pages.values()) queueP(P);
+      if (show) {
+        resumeWork();
+        for (const P of pages.values()) queueP(P);
+      }
       afterPageChange();
     }
     function pageStop() {
@@ -7079,6 +7099,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       liveSet(false);
       for (const P of pages.values()) resetPage(P);
       for (const V of views.values()) dropOverlay(V);
+      resumeWork(); // 暫停中排隊的工作放掉（都已經作廢，開始後馬上結束）
       afterPageChange();
     }
     function pageToggle(force) {
@@ -7273,11 +7294,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const now = Date.now();
       // 有圖在翻、但超過 30 秒完全沒有進展（也不是在等 Gemini 的每分鐘次數）：好像卡住了
       const waiting = Math.max(gq.waitUntil, fq.waitUntil) > now;
-      const stuck = c.busy > 0 && !waiting && now - lastProgress > 30000;
+      const stuck = c.busy > 0 && !waiting && !pg.hidden && now - lastProgress > 30000;
       const fixing = c.fixBusy + c.fixWait + c.seam;
       const act = activity(c);
       let text;
-      if (pg.hidden) text = '顯示原文中';
+      if (pg.hidden) text = c.busy || fixing ? '顯示原文中・翻譯暫停' : '顯示原文中';
       else if (c.busy) text = `${c.done}/${c.total} 張 · ${stuck ? `好像卡住了（${act}）` : act}`;
       else if (c.err) text = `已翻譯 ${c.done} 張，${c.err} 張失敗`;
       else if (fixing) text = `已翻譯 ${c.done} 張 · ${act}`;
@@ -7290,6 +7311,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       chipEl.v.textEl.textContent = isTouch ? text : `漫畫翻譯　${text}`;
       chipEl.title = `漫畫翻譯　${text}`;
       chipEl.v.toggle.textContent = pg.hidden ? '顯示譯文' : '顯示原文';
+      chipEl.v.toggle.title = pg.hidden ? '顯示譯文，沒翻完的接著翻' : '顯示原文，還沒翻完的先暫停';
       chipEl.v.retry.hidden = !(stuck || (c.err && !c.busy));
       chipEl.classList.toggle('is-stuck', stuck);
       const pct = c.total ? c.frac / c.total : 0;
@@ -7356,7 +7378,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       for (const V of views.values()) {
         const P = V.P;
         const busy = P.state === 'busy';
-        let want = busy || P.fix === 'busy' || P.fix === 'wait';
+        let want = !paused() && (busy || P.fix === 'busy' || P.fix === 'wait'); // 暫停中不標進度
         if (want) {
           const r = V.img.getBoundingClientRect();
           if (!(r.width || r.height) || r.bottom < -vh || r.top > vh * 2) want = false;
