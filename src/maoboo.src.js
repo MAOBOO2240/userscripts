@@ -27,7 +27,6 @@
 // @connect      generativelanguage.googleapis.com
 // @connect      translate.googleapis.com
 // @connect      edge.microsoft.com
-// @connect      api-edge.cognitive.microsofttranslator.com
 // @connect      cdn.jsdelivr.net
 // @connect      unpkg.com
 // @connect      huggingface.co
@@ -2249,6 +2248,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (/PerDay/i.test(ids) || /per day/i.test(msg)) return mtErr('daily', msg);
       return mtErr('rate', msg, { delay: delay || 30000 });
     }
+    if (/Prohibited Use|Input blocked|prompt could not be submitted/i.test(msg)) return mtErr('blocked', msg);
     if (status === 400 && /location is not supported/i.test(msg)) return mtErr('region', msg);
     if (status === 400) return mtErr('bad', msg);
     if (status >= 500) return mtErr('busy', msg);
@@ -4795,28 +4795,28 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    */
   let mtGtxPauseUntil = 0;
   const MT_GTX_PAUSE = 10 * 60 * 1000;
-  /** 微軟翻譯（Microsoft Edge 內建翻譯用的同一套）：先拿一個大約 10 分鐘有效的通行證 */
-  let mtMsTok = null;
-  async function mtMsToken(fresh) {
-    if (!fresh && mtMsTok && Date.now() < mtMsTok.exp) return mtMsTok.t;
-    const t = String(await mtGmText('https://edge.microsoft.com/translate/auth')).trim();
-    if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(t)) throw new Error('微軟翻譯沒有回應');
-    mtMsTok = { t, exp: Date.now() + 8 * 60 * 1000 };
-    return t;
-  }
-  function mtMsOnce(texts, src, tok) {
+  /**
+   * 微軟翻譯（Microsoft Edge 內建翻譯用的同一套）。2026 年舊的通行證網址（translate/auth）已經停用（回 404），
+   * 改用不需要通行證的 translate/translatetext：送一串文字，回傳每一段的譯文
+   */
+  function mtMsOnce(texts, src) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method: 'POST',
-        url: `https://api-edge.cognitive.microsofttranslator.com/translate?from=${src}&to=zh-Hant&api-version=3.0`,
-        headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' },
-        data: JSON.stringify(texts.map((t) => ({ Text: t }))),
+        url: `https://edge.microsoft.com/translate/translatetext?isEnterpriseClient=false${src ? '&from=' + src : ''}&to=zh-Hant`,
+        headers: { 'Content-Type': 'application/json' },
+        data: JSON.stringify(texts),
         timeout: 20000,
         onload: (res) => {
           if (res.status !== 200) { reject(Object.assign(new Error(`微軟翻譯失敗（HTTP ${res.status}）`), { status: res.status })); return; }
           try {
-            const j = JSON.parse(res.responseText);
-            resolve(texts.map((_, i) => String((j[i] && j[i].translations && j[i].translations[0] && j[i].translations[0].text) || '')));
+            let j = JSON.parse(res.responseText);
+            if (typeof j === 'string') j = JSON.parse(j); // 有時整個回應包成一個 JSON 字串
+            if (!Array.isArray(j)) throw new Error('格式不對');
+            resolve(texts.map((_, i) => {
+              const tr = j[i] && j[i].translations;
+              return Array.isArray(tr) ? tr.map((t) => (t && t.text) || '').join(' ') : '';
+            }));
           } catch (_) { reject(new Error('微軟翻譯的回應無法讀取')); }
         },
         onerror: () => reject(new Error('微軟翻譯連線失敗')),
@@ -4829,9 +4829,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     for (let i = 0; i < texts.length; i += 50) {
       const part = texts.slice(i, i + 50);
       let r;
-      try { r = await mtMsOnce(part, src, await mtMsToken()); } catch (e) {
-        if (!e || e.status !== 401) throw e;
-        r = await mtMsOnce(part, src, await mtMsToken(true)); // 通行證過期：換一張再試
+      try { r = await mtMsOnce(part, src); } catch (e) {
+        if (!e || e.status !== 400 || !src) throw e;
+        r = await mtMsOnce(part, ''); // 不接受這個原文語言：讓微軟自己判斷再試一次
       }
       out.push(...r.map((z) => z.trim()));
     }
@@ -7289,6 +7289,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
             const b0 = sr && sr.querySelector('.b');
             o.ov = { alive: ov.alive(), conn: hs.isConnected, next: hs.previousSibling === img || hs.previousSibling === img.parentElement, r: R(hs.getBoundingClientRect()), s: sty(hs),
               hid: !!(layer && layer.hidden), n: layer ? layer.childElementCount : -1, b0: b0 ? R(b0.getBoundingClientRect()) : null };
+            // 譯文看起來多大（手機螢幕上的點）、有幾個框塞不下、幾個是照對話框的形狀蓋的
+            if (sr) {
+              const vs = window.visualViewport ? visualViewport.scale : 1;
+              const bs = [...sr.querySelectorAll('.b')];
+              o.ov.fonts = bs.map((b) => b.querySelector('.t')).filter(Boolean).map((t) => Math.round(parseFloat(t.style.fontSize || getComputedStyle(t).fontSize) * vs * 10) / 10).sort((a, b) => a - b).slice(0, 24);
+              o.ov.ovf = bs.filter((b) => { const t = b.querySelector('.t'); return t && (t.scrollHeight > b.clientHeight + 2 || t.scrollWidth > b.clientWidth + 2); }).length;
+              o.ov.bub = bs.filter((b) => b.classList.contains('bub')).length;
+              o.ov.sizes = bs.slice(0, 24).map((b) => { const r = b.getBoundingClientRect(); return Math.round(r.width * vs) + 'x' + Math.round(r.height * vs); });
+            }
           }
         }
         return o;
