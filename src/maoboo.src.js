@@ -3264,7 +3264,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       else if (first.zh.includes(second.zh)) zh = first.zh;
       else zh = first.zh + (/[A-Za-z0-9]$/.test(first.zh) && /^[A-Za-z0-9]/.test(second.zh) ? ' ' : '') + second.zh;
       return { x0: Math.min(a.x0, c.x0), y0: Math.min(a.y0, c.y0), x1: Math.max(a.x1, c.x1), y1: Math.max(a.y1, c.y1), zh, vertical,
-        lh: Math.max(a.lh || 0, c.lh || 0), bub: false, bg: '', shape: '', rows: null, blank: !!(a.blank && c.blank) };
+        lh: Math.max(a.lh || 0, c.lh || 0), bub: false, bg: a.bg && c.bg ? mtMixBg([a.bg, c.bg]) : '', shape: '', rows: null, blank: !!(a.blank && c.blank) };
     }
 
     function boxEl(r, all, placed) {
@@ -3365,7 +3365,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const style = { left: x0 + 'px', top: y0 + 'px', width: w + 'px', height: hh + 'px' };
       // 圓角不超過留白的 3 倍：角落的原文一定蓋得到，又比較不會切到對話框的外框；對話框裡用對話框的底色
       style.borderRadius = r.shape === 'ellipse' ? '50%' : (r.shape === 'rect' ? 2 : r.bub ? Math.min(w, hh) * 0.2 : Math.min(pad * 3, Math.min(w, hh) * 0.3)) + 'px';
-      if (r.bub && /^#[0-9a-f]{6}$/i.test(r.bg)) style.backgroundColor = r.bg;
+      if (/^#[0-9a-f]{6}$/i.test(r.bg)) style.backgroundColor = r.bg;
       if (r.bub && !r.shape && Array.isArray(r.rows) && r.rows.length >= 2) {
         const pct = (v) => Math.round(v * 1000) / 10 + '%';
         style.borderRadius = '0';
@@ -3380,7 +3380,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       }
       if (blank) return h('div', { class: 'b' + (r.bub ? ' bub' : ''), style });
       return h('div', { class: 'b' + (r.bub ? ' bub' : ''), style },
-        h('div', { class: 't' + (lay.vertical ? ' v' : ''), style: { fontSize: lay.s + 'px' } }, lay.lines.map((t) => h('div', { text: t }))));
+        h('div', { class: 't' + (lay.vertical ? ' v' : ''), style: Object.assign({ fontSize: lay.s + 'px' }, mtDarkBg(r.bg) ? { color: '#FFFFFF' } : {}) }, lay.lines.map((t) => h('div', { text: t }))));
     }
 
     function layout() {
@@ -4180,6 +4180,36 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           if (L.length) place(pm, L, p === 0 && s.e[0] > 0, p === bounds.length - 2 && s.e[1] > 0, 1);
         }
       }
+      // 不在對話框裡的字：字框外面一圈的顏色夠一致的話（純色的底：沒有封閉外框的淺藍色對話框、深色的旁白底…），
+      // 記下那個顏色，譯文框用同一個顏色，蓋上去才不會多一塊白的
+      const hx = (v) => v.toString(16).padStart(2, '0');
+      for (const b of boxes) {
+        if (b.bub >= 0) continue;
+        b.bgc = '';
+        const mg = Math.max(3, Math.min(12, Math.round(Math.min(b.x1 - b.x0, b.y1 - b.y0) * 0.35)));
+        const x0 = Math.max(0, Math.floor(b.x0 - mg));
+        const y0 = Math.max(0, Math.floor(b.y0 - mg));
+        const x1 = Math.min(W - 1, Math.ceil(b.x1 + mg));
+        const y1 = Math.min(H - 1, Math.ceil(b.y1 + mg));
+        const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+        const samp = [];
+        for (let y = y0; y <= y1; y += 2) {
+          const inY = y >= b.y0 && y < b.y1;
+          for (let x = x0; x <= x1; x += 2) {
+            if (inY && x >= b.x0 && x < b.x1) continue; // 字框裡面不算
+            const j = (y * W + x) * 4;
+            hist[0][px[j]]++;
+            hist[1][px[j + 1]]++;
+            hist[2][px[j + 2]]++;
+            samp.push(j);
+          }
+        }
+        if (samp.length < 24) continue;
+        const med = hist.map((hs) => { let c = 0; for (let v = 0; v < 256; v++) { c += hs[v]; if (c * 2 >= samp.length) return v; } return 255; });
+        let near = 0;
+        for (const j of samp) if (Math.abs(px[j] - med[0]) <= 24 && Math.abs(px[j + 1] - med[1]) <= 24 && Math.abs(px[j + 2] - med[2]) <= 24) near++;
+        if (near >= samp.length * 0.72) b.bgc = '#' + med.map(hx).join('');
+      }
       return out;
     }
 
@@ -4343,6 +4373,20 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     return true;
   }
 
+  /** 幾個底色（#rrggbb）差不多的話取平均，差太多（不是同一塊純色的底）就不用 */
+  function mtMixBg(list) {
+    const cs = (list || []).filter((c) => /^#[0-9a-f]{6}$/i.test(c)).map((c) => [1, 3, 5].map((k) => parseInt(c.slice(k, k + 2), 16)));
+    if (!cs.length) return '';
+    for (let k = 0; k < 3; k++) if (Math.max(...cs.map((c) => c[k])) - Math.min(...cs.map((c) => c[k])) > 28) return '';
+    return '#' + [0, 1, 2].map((k) => Math.round(cs.reduce((a, c) => a + c[k], 0) / cs.length).toString(16).padStart(2, '0')).join('');
+  }
+  /** 底色夠暗：譯文改用白字 */
+  function mtDarkBg(c) {
+    if (!/^#[0-9a-f]{6}$/i.test(c || '')) return false;
+    const [r, g, b] = [1, 3, 5].map((k) => parseInt(c.slice(k, k + 2), 16));
+    return r * 0.299 + g * 0.587 + b * 0.114 < 128;
+  }
+
   /**
    * PaddleOCR 認出來的一行一行 → 一個個對話框（同一框的行合併，照閱讀順序接起來）。
    * 有找到對話框時：同一個對話框裡的行一定合在一起、不同對話框的一定分開，譯文框用對話框裡面的整個空間
@@ -4367,7 +4411,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const letters = text.replace(/[^\p{L}]/gu, '').length;
       // 很短又不太確定的（例如兩個字母）：單獨出現時多半是圖上的雜訊，跟別的行在一起才算
       const shaky = bub < 0 && (lang === 'eng' ? letters <= 2 : letters <= 1) && l.conf < 0.85;
-      lines.push({ x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, w, h, text, shaky, bub, vertical: h >= w * 1.5, square: Math.max(w, h) < Math.min(w, h) * 1.5 });
+      lines.push({ x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, w, h, text, shaky, bub, vertical: h >= w * 1.5, square: Math.max(w, h) < Math.min(w, h) * 1.5, bgc: l.bgc || '' });
     }
     // 日文旁邊的小字（假名注音）：緊貼著一行粗很多的直排字，拿掉
     if (cjk) {
@@ -4481,6 +4525,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           bub: true, bg: b.bg || '', shape: b.shape || '', rows: !exact && inside && Array.isArray(b.rows) ? b.rows : null,
           et: !!b.et, eb: !!b.eb,
         });
+      } else {
+        // 不在對話框裡：字的周圍是純色的話，譯文框用同一個顏色（大部分的行都量得到、而且顏色差不多才用）
+        const cs = g.map((l) => l.bgc).filter(Boolean);
+        if (cs.length * 2 >= g.length) o.bg = mtMixBg(cs);
       }
       out.push(o);
     }
@@ -5507,7 +5555,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     /* ---------- 快取：翻過的圖不再花額度 ---------- */
     // v5：免費模式的對話框（8 字形分開）、結巴、語氣詞改過了（舊版免費模式翻的重新翻一次；Gemini 看圖翻的沿用）
     // v6：免費模式的對話框（斜斜錯開的連體對話框、疊在一起的旁白方框）、直排的條件、狀聲詞改過了
-    const MTC_VER = 6;
+    // v7：不在對話框裡的字，譯文框改用周圍的底色
+    const MTC_VER = 7;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
     function cacheGet(P) {
       let v = store.get(cacheKeyOf(P), null);
