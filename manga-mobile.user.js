@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.13
+// @version      1.5.14
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.14  漫畫翻譯：浮水印（翻譯組、網站的名字和網址，例如 RINKO COMICS.COM）不翻也不蓋，原圖保持原樣；
+ *         壓在對話框邊上的浮水印不會再混進對話的譯文；之前用「快速」翻過的圖，再打開時會重新翻一次
  * 1.5.13  「譯」按住可以拖到畫面上別的地方，每個網站各自記住位置；點一下照樣開始翻譯
  * 1.5.12  漫畫翻譯：沒有被當成對話框的字（例如外圍只有放射狀短線、沒有封閉外框的淺藍色對話框，或黑底白字的旁白），
  *         譯文框改用周圍的底色，不會再多出一塊白的；深色的底用白字。底下是花花的圖時照舊用白底；之前用「快速」翻過的圖會重新翻一次
@@ -4374,6 +4376,53 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     return r * 0.299 + g * 0.587 + b * 0.114 < 128;
   }
 
+  /* ---------- 浮水印（翻譯組、網站的名字和網址）：不翻也不蓋，原圖保持原樣 ---------- */
+  // 網址開頭：http(s)://、www.、discord.gg/
+  const MT_WM_URL = /(?<![\p{L}\p{N}])(?:https?:\/\/|www[.,]\s?|discord\.gg\/)\S+/iu;
+  // xxx.com（認字常把點認成逗號）；後面接連字號的不算（COM- 是斷到下一行的字）
+  const MT_WM_COM = /(?<![\p{L}\p{N}])[\p{L}\p{N}][\p{L}\p{N}-]{1,40}[.,]com(?:\/\S*)?(?![\p{L}\p{N}-])/iu;
+  // 其他網域結尾（網站名字至少三個字：ME.NET 多半是句點後面少了空格）
+  const MT_WM_TLD = /(?<![\p{L}\p{N}])[\p{L}\p{N}][\p{L}\p{N}-]{2,40}\.(?:net|org|io|xyz|info|site|club|online|vip|cc|tv|ws|ru|biz|asia|pw|website|cn|jp|kr|tw)(?:\/\S*)?(?![\p{L}\p{N}-])/iu;
+  // 點的前後多了空格（COMICS . COM）或漏掉點（COMICS COM）
+  const MT_WM_LOOSE = /(?<![\p{L}\p{N}])[\p{L}\p{N}][\p{L}\p{N}-]{2,40}(?:\s?\.\s?|\s)com(?![\p{L}\p{N}-])/iu;
+  // 像英文單字的網域結尾（.to、.me…）：整行只有網址、而且有小寫字母或數字才算（全大寫的 WHAT.TO 多半是句點後面少了空格）
+  const MT_WM_WEAK = /^(?:www\.)?[\p{L}\p{N}][\p{L}\p{N}-]{2,40}\.(?:to|me|co|gg|moe|top|live|in|so|ac|app|fun|one|pro|art|ink|life|link|store|space|tech|world|cloud|lol)(?:\/\S*)?$/iu;
+  /** 這一行是不是浮水印：有網址，旁邊頂多再幾個字（網站的名字、READ AT 之類） */
+  function mtIsWatermark(text) {
+    const s = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!s) return false;
+    if (MT_WM_WEAK.test(s) && /[a-z0-9]/.test(s)) return true;
+    const rest = (re) => {
+      const m = re.exec(s);
+      return m ? (s.slice(0, m.index) + ' ' + s.slice(m.index + m[0].length)).replace(/[^\p{L}\p{N}]+/gu, ' ').trim() : null;
+    };
+    // 剩下的字：英文最多 n 個字，中日韓最多六個字
+    const few = (r, n) => r !== null && (!r || (/[\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/.test(r) ? r.replace(/\s/g, '').length <= 6 : r.split(' ').length <= n));
+    return [MT_WM_URL, MT_WM_COM, MT_WM_TLD].some((re) => few(rest(re), 3)) || few(rest(MT_WM_LOOSE), 1);
+  }
+  /**
+   * 和浮水印網址排在一起的短字（網站的名字，例如 COMICS.COM 上面的 RINKO）：也是浮水印。
+   * 對話框裡的字只有壓在對話框邊上、超出去的才算（對話不會跑到對話框外面）
+   */
+  function mtWmNear(l, marks, B) {
+    if (l.text.split(' ').length > 2 || l.text.replace(/[^\p{L}\p{N}]/gu, '').length > 16) return false;
+    const b = l.bub >= 0 ? B[l.bub] : null;
+    if (b) {
+      const cy = (l.y0 + l.y1) / 2;
+      const m = Math.min(l.w, l.h) * 0.3;
+      if (mtInShape(b, l.x0 + m, cy) && mtInShape(b, l.x1 - m, cy)) return false;
+    }
+    return marks.some((k) => {
+      const r = l.h / Math.max(1, k.h);
+      if (r < 0.55 || r > 2.4) return false;
+      const hm = Math.max(l.h, k.h);
+      const oy = Math.min(l.y1, k.y1) - Math.max(l.y0, k.y0);
+      if (oy >= Math.min(l.h, k.h) * 0.5) return Math.max(l.x0 - k.x1, k.x0 - l.x1) <= hm * 0.8; // 同一行、左右接著
+      if (-oy > hm * 0.9) return false; // 上下隔太遠
+      return Math.abs((l.x0 + l.x1) / 2 - (k.x0 + k.x1) / 2) <= Math.max(l.w, k.w) * 0.35 || Math.abs(l.x0 - k.x0) <= hm * 0.6 || Math.abs(l.x1 - k.x1) <= hm * 0.6;
+    });
+  }
+
   /**
    * PaddleOCR 認出來的一行一行 → 一個個對話框（同一框的行合併，照閱讀順序接起來）。
    * 有找到對話框時：同一個對話框裡的行一定合在一起、不同對話框的一定分開，譯文框用對話框裡面的整個空間
@@ -4382,12 +4431,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const cjk = lang === 'jpn';
     const B = Array.isArray(bubbles) ? bubbles : [];
     const lines = [];
+    const marks = []; // 浮水印網址的位置（認字信心低的也算）：旁邊的網站名字要一起拿掉
     for (const l of raw || []) {
       let text = String(l.text || '').replace(/\s+/g, ' ').trim();
       if (lang === 'eng') text = mtPaddleEnFix(text);
       if (!text) continue;
       const w = l.x1 - l.x0;
       const h = l.y1 - l.y0;
+      // 浮水印：不翻、也不蓋（壓在對話框邊上的也不會混進對話裡）
+      if (mtIsWatermark(text)) { marks.push({ x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, w, h }); continue; }
       let bub = Number.isInteger(l.bub) && B[l.bub] ? l.bub : -1;
       if (bub < 0) {
         // 沒分到對話框、但中心在某個對話框裡的行（例如字框超出外框一點）：算那一個
@@ -4411,6 +4463,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (ruby) lines.splice(i, 1);
       }
     }
+    if (marks.length) for (let i = lines.length - 1; i >= 0; i--) if (mtWmNear(lines[i], marks, B)) lines.splice(i, 1);
     const n = lines.length;
     const parent = lines.map((_, i) => i);
     const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
@@ -4734,7 +4787,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       for (const p of b.paragraphs || []) {
         for (const l of p.lines || []) {
           const text = String(l.text || '').replace(/\s+/g, ' ').trim();
-          if (!text || !l.bbox) continue;
+          if (!text || !l.bbox || mtIsWatermark(text)) continue;
           const letters = text.replace(/[^\p{L}]/gu, '').length;
           const short = lang === 'eng' ? letters <= 3 : letters <= 1; // 很短的辨識結果常常是圖上的雜訊
           if (l.confidence < (short ? 85 : 55)) continue;
@@ -5543,7 +5596,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // v5：免費模式的對話框（8 字形分開）、結巴、語氣詞改過了（舊版免費模式翻的重新翻一次；Gemini 看圖翻的沿用）
     // v6：免費模式的對話框（斜斜錯開的連體對話框、疊在一起的旁白方框）、直排的條件、狀聲詞改過了
     // v7：不在對話框裡的字，譯文框改用周圍的底色
-    const MTC_VER = 7;
+    // v8：浮水印（翻譯組、網站的名字和網址）不翻，壓在對話框邊上的也不會混進對話
+    const MTC_VER = 8;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
     function cacheGet(P) {
       let v = store.get(cacheKeyOf(P), null);
@@ -5923,7 +5977,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (!it || !Array.isArray(it.box_2d) || it.box_2d.length < 4) continue;
         const lang = String(it.lang || '').toLowerCase();
         const zh = mtCleanZh(it.zh);
-        if (!zh || lang === 'zh') continue;
+        if (!zh || lang === 'zh' || mtIsWatermark(zh)) continue; // 只有網站名字、網址的（浮水印）不要
         let [ymin, xmin, ymax, xmax] = it.box_2d.slice(0, 4).map((v) => Math.min(1000, Math.max(0, Number(v))));
         if (![ymin, xmin, ymax, xmax].every(Number.isFinite)) continue;
         if (ymin > ymax) [ymin, ymax] = [ymax, ymin];
@@ -6356,7 +6410,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           // 字（或它的對話框）碰到整張圖的上緣、下緣：可能是被切在兩張圖中間的一句話
           ct: s.y0 === 0 && (g.et || g.y0 < Math.max(6, (g.lh || 20) * 0.5)),
           cb: s.y1 >= plan.H && (g.eb || g.y1 > sh - Math.max(6, (g.lh || 20) * 0.5)),
-        })).filter((b, i) => b.zh && b.zh !== groups[i].text);
+        })).filter((b, i) => b.zh && b.zh !== groups[i].text && (b.bub || !mtIsWatermark(b.zh))); // 譯出來只剩網址、網站名字的：浮水印
       });
     }
     /** 使用者剛按過按鈕：Google 翻譯連不上時，趁這時候準備 Chrome 離線翻譯（第一次要下載語言，必須由使用者操作觸發） */
@@ -6497,7 +6551,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           left.set(l.j, left.get(l.j) - 1);
           if (l.j.gen !== l.j.P.gen || l.b.blank || (l.b.msrc || l.b.src) !== l.src) continue; // 送出後這一行又被接上別張圖的字：等下一次修正
           const zh = mtCleanZh(it.zh);
-          if (zh) {
+          if (zh && !mtIsWatermark(zh)) {
             l.b.zh = zh;
             // 接縫上的字：另一張圖上的那一份也換成修正後的譯文
             const tw = l.b.twin;
