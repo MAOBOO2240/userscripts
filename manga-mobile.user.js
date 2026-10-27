@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.6
+// @version      1.5.7
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -40,44 +40,15 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
- * 1.5.6  漫畫翻譯：網站換頁、重畫版面時錯過時機，譯文會自己補回圖上（手機上「已翻譯」但圖上還是原文的問題）；手機上「譯」和狀態列
- *        會避開網站的換頁列和小按鈕；翻譯中的選單多了「複製診斷資訊」，譯文沒出來時可以複製這一頁的狀況回報
- * 1.5.5  新增「手機版漫畫翻譯」（manga-mobile.user.js）：整合包裡的漫畫翻譯單獨拿出來給手機用；手機上的介面：設定面板從下方滑上來、
- *        開關和按鈕加大、輸入框 16px（iPhone 點了不會放大畫面），「譯」加大，狀態列多「設定」、寬度固定（按鈕不會跟著進度文字移動）；
- *        沒有手機版排版的網站整頁縮小顯示時，介面放大回正常大小；整合包和手機版同時裝時只有一個在翻譯
- * 1.5.4  隱藏推薦內容：Facebook 一放進廣告、推薦貼文就馬上收起來（在畫面畫出來之前），不會再先閃一下才消失
- * 1.5.3  Facebook 的音量條會顯示記住的音量（之前音量條是 100%、實際聲音是 10%）；設定面板的音量可以直接打數字，
- *        也可以把滑鼠移到拉桿或數字上用滾輪調；預設音量：Threads、Instagram、Facebook 10%，X 1%，X 影片網址 5%
- * 1.5.2  圖示換成新的小浣熊：Tampermonkey 裡的腳本圖示和設定面板左上角都換了（圖示直接放在腳本裡，不用連外部網站）
- * 1.5.1  油猴選單只留「漫畫翻譯」（放在最上面）、「短影片自動下一部」和「開啟設定面板」，其他功能的開關和檢查更新都在設定面板裡；
- *        拿掉「滑過圖片看大圖」和「解除複製限制」；隱藏推薦內容預設改成完全隱藏，不再留「已收起」那一行
- * 1.5.0  新功能：簡體轉繁體（簡體網頁自動轉成繁體）、解除複製限制（選單按一下，這個網站就能選取、複製、按右鍵）、
- *        滑過圖片看大圖（X、Threads、IG）、隱藏推薦內容（FB、Threads 動態裡的贊助、推薦貼文、你可能認識的朋友、為你推薦的帳號收成一行）；
- *        音量記憶多了 Instagram、Facebook，跟 Threads、X 合成一張「影片音量記憶」卡片；IG、FB 的 Reels 切到其他分頁也會繼續播
- * 1.4.6  「YouTube Shorts 自動下一部」改成「短影片自動下一部」：Instagram、Facebook 的 Reels 也會自動跳下一部；
- *        改成播完才跳：播到最後一格就換下一部，不會先聽到同一部重播的開頭（想提早跳可以調「提早幾秒跳」）
- * 1.4.5  漫畫翻譯：兩個連在一起、中間沒有外框的對話框（8 字形）分開翻，各自橫排，框裡沒認出來的字（像 Y—?）也一起蓋白底；
- *        結巴的字（H-HOW、I-I'M）翻成「你、你…」，不會再出現「H-你…」，話說到一半的破折號改成「——」；
- *        MM-HMM、HMM、SHH 這種沒有母音的語氣詞不會再被當成雜訊丟掉（之前會露出半行原文）
- * 1.4.4  漫畫翻譯：狀聲詞「不翻」判斷加強：DUN、TILT、NOD 這類效果字、動作字（NODS、GRABBED、THUMP THUMP 也算）不翻也不蓋白底，
- *        白底上的大狀聲詞被當成對話框時也會跳過；一行字剛好被切在兩張圖的接縫上時，把接縫附近拼起來重新認字，
- *        整句翻成一段、跨兩張圖畫成一個框（不會再露出半行原文、翻出怪字）；外面有一圈光線的對話框也認得出來，白底不會超出框外
- * 1.4.3  漫畫翻譯：會找出對話框，同一個框裡的字合成一段翻、用同一個字級，白底照對話框的形狀蓋滿，原文不會漏出來；
- *        又高又窄的對話框改成直排（由上到下）；譯文的字不會比原文大太多；淺色的框用原本的底色；
- *        長條漫畫被網站切成好幾張圖時，剛好被切在兩張圖中間的一句話會接起來翻（譯文放一邊、另一邊只蓋白底）
- *        Gemini 修正變快：畫面上的圖單獨先送、思考程度調到最低，一張修好就馬上換上，不用等同一批的其他張
- * 1.4.2  X：按住 S 點圖片時不會再跳出分享選單（只擋掉 X 自己的 S 快捷鍵，打字和其他程式不受影響）
- * 1.4.1  設定面板：「X 音量記憶」和「X 直連影片音量」合成一個「X 影片音量」，兩條音量在同一張卡片裡（之前設的音量會保留）
- * 1.4.0  漫畫翻譯的免費認字改用 PaddleOCR（PP-OCRv6），英文、日文直排、韓文都認得準很多；
- *        辨識模型第一次下載後存在瀏覽器裡，之後不用再下載；載入失敗時自動改用原本的 Tesseract
- * 1.3.0  漫畫翻譯預設改成快速模式：瀏覽器認字＋Google 翻譯馬上顯示，Gemini 只收文字幫忙修正（很多張合成一次，很省次數）；
- *        加上進度條：狀態列顯示翻到第幾張、正在做什麼，圖上也標出進度；太久沒有進度會提示，可以按「重試」。Gemini 看圖翻譯改成設定裡的「精準」
- * 1.2.0  漫畫翻譯：深色底、沒有白底的字也會翻；Gemini 同時用多個模型、邊翻邊顯示，快很多；整頁翻譯會先下載後面的圖先翻好（翻頁式也是）；
- *        狀態列縮小並避開網站按鈕；字壓在格線上不會再被切開翻錯，譯文不會互相蓋住；混進簡體字會自動轉繁體
- * 1.1.0  新增漫畫翻譯：英文、日文、韓文漫畫翻成繁體中文並用白底蓋住原文；滑到圖片上按「翻譯」，或按 Alt+T 翻譯整頁
- * 1.0.2  Threads 自己的音量條會跟記住的音量同步，拉的時候不會突然變大聲；在 Threads 音量條上調的音量也會記住
- * 1.0.1  Threads 影片上的音量條改成預設不顯示，音量在設定面板調（面板裡可以再打開）
- * 1.0.0  第一版：整合 7 支腳本，新增 Threads 音量記憶與 X 音量記憶，LINE 動態貼圖改成直接在 LINE 頁面轉 GIF
+ * 1.5.7  漫畫翻譯：一個字都沒認到的結果不會再被記住，下次打開會重新辨識（之前 iPhone 上翻出空的結果後，那幾頁就一直沒有譯文）；
+ *        新的文字辨識（PaddleOCR）載入後先認一張測試圖，認不出字就自動改用舊的辨識方式；
+ *        選單的「複製診斷資訊」會實際測一次文字辨識和 Google 翻譯，找出手機上翻不出字的原因；
+ *        手機版改成自己的版本號和更新紀錄，手機版更新時電腦版不會跟著更新
+ * 1.5.6  漫畫翻譯：網站換頁、重畫版面時錯過時機，譯文會自己補回圖上；「譯」和狀態列會避開網站的換頁列和小按鈕；
+ *        翻譯中的選單多了「複製診斷資訊」
+ * 1.5.5  手機版漫畫翻譯第一版：整合包裡的漫畫翻譯單獨拿出來給手機用；設定面板從下方滑上來、按鈕和輸入框加大
+ *        （輸入框 16px，iPhone 點了不會放大畫面）；狀態列多「設定」、寬度固定；沒有手機版排版的網站介面自動放大；
+ *        和整合包同時裝時只有一個在翻譯
  * ==/更新紀錄== */
 
 (function () {
@@ -2485,9 +2456,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         responseType: 'arraybuffer',
         timeout: 30000,
         headers: referer ? { Referer: referer } : {},
-        onload: (res) => (res.status >= 200 && res.status < 300 && res.response
-          ? resolve(new Blob([res.response]))
-          : reject(new Error(`圖片下載失敗（HTTP ${res.status}）`))),
+        onload: (res) => {
+          if (!(res.status >= 200 && res.status < 300 && res.response)) { reject(new Error(`圖片下載失敗（HTTP ${res.status}）`)); return; }
+          // 標上圖片格式（有些瀏覽器解碼沒有格式的資料時比較挑）：先看伺服器說的，沒有就看副檔名
+          const ext = ((/\.([a-z0-9]+)(?:[?#]|$)/i.exec(url) || [])[1] || '').toLowerCase();
+          const ct = (/^content-type:\s*(image\/[\w.+-]+)/im.exec(res.responseHeaders || '') || [])[1]
+            || { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp' }[ext] || '';
+          resolve(new Blob([res.response], ct ? { type: ct } : {}));
+        },
         onerror: () => reject(new Error('圖片下載失敗（網路錯誤或沒有允許連線）')),
         ontimeout: () => reject(new Error('圖片下載逾時')),
       });
@@ -2654,6 +2630,21 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // 只留壓縮過的圖：整話先下載時不會吃掉太多記憶體。免費模式要辨識文字，用不失真的 PNG
     const blob = await mtToBlob(c, lossless ? 'image/png' : 'image/jpeg', 0.82);
     return { i, y0, y1, blob };
+  }
+
+  /** 白底黑字的測試圖（HELLO WORLD / THIS IS A TEST）：檢查認字程式在這個瀏覽器算得對不對 */
+  async function mtTestBlob() {
+    const c = mtCanvas(560, 150);
+    const g = c.getContext('2d');
+    g.fillStyle = '#FFFFFF';
+    g.fillRect(0, 0, 560, 150);
+    g.fillStyle = '#000000';
+    g.textBaseline = 'middle';
+    g.font = 'bold 46px Arial, Helvetica, sans-serif';
+    g.fillText('HELLO WORLD', 28, 52);
+    g.font = 'bold 32px Arial, Helvetica, sans-serif';
+    g.fillText('THIS IS A TEST', 28, 112);
+    return mtToBlob(c, 'image/png');
   }
 
   /* ---------- 譯文排版：找出最大、放得進方框的字級，並平均每行長度 ---------- */
@@ -3568,7 +3559,24 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const feeds = {};
       feeds[S.det.inputNames[0]] = new ort.Tensor('float32', t, [1, 3, h, w]);
       const out = await S.det.run(feeds);
-      return boxesOf(out[S.det.outputNames[0]].data, w, h, w / W, h / H, W, H, o);
+      const D = out[S.det.outputNames[0]].data;
+      // 診斷用：送進模型的圖平均亮度、模型輸出的最大值、超過門檻的點數、壞掉的數字（NaN）有幾個
+      if (o.stats) {
+        let lum = 0;
+        let k = 0;
+        for (let j = 0; j < px.length; j += 4 * 7, k++) lum += (px[j] + px[j + 1] + px[j + 2]) / 3;
+        let mx = -Infinity;
+        let above = 0;
+        let nan = 0;
+        for (let i = 0; i < D.length; i++) {
+          const v = D[i];
+          if (Number.isNaN(v)) { nan++; continue; }
+          if (v > mx) mx = v;
+          if (v > (o.thresh || 0.2)) above++;
+        }
+        o.stats = { in: [w, h], src: [W, H], lum: Math.round(lum / Math.max(1, k)), max: Math.round(mx * 1000) / 1000, above, nan, n: D.length };
+      }
+      return boxesOf(D, w, h, w / W, h / H, W, H, o);
     }
 
     function boxesOf(P, w, h, rx, ry, W, H, o) {
@@ -4117,6 +4125,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           const bmp = await createImageBitmap(m.blob);
           try {
             const boxes = m.boxes || await detect(bmp, m.opts || {});
+            if (m.opts && m.opts.detOnly) { post({ type: 'ok', id: m.id, boxes, stats: typeof m.opts.stats === 'object' ? m.opts.stats : undefined }); return; }
             post({ type: 'progress', id: m.id, frac: 0.4 });
             const lines = boxes.length ? await recognize(bmp, boxes, m.rec, (f) => post({ type: 'progress', id: m.id, frac: 0.4 + 0.6 * f }), m.opts || {}) : [];
             // 對話框：只用認得出字的字框來找（放射狀的光線、花紋被當成字框時，常認成 TTT、lll 這種字，不算）
@@ -4130,7 +4139,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
             const sure = (i) => lines[i] && lines[i].conf >= 0.5 && real(lines[i].text);
             // 其他有認出東西的字框（Y—?、單一個字母）：在對話框裡面的話一起蓋白底
             const bubs = bubbles(bmp, boxes.filter((b, i) => sure(i)), boxes.filter((b, i) => !sure(i) && lines[i] && lines[i].conf >= 0.3 && /[\p{L}\p{N}]/u.test(lines[i].text || '')));
-            post({ type: 'ok', id: m.id, boxes, bubbles: bubs, lines: boxes.map((b, i) => Object.assign({}, b, lines[i])) });
+            const stats = m.opts && typeof m.opts.stats === 'object' ? m.opts.stats : undefined;
+            post({ type: 'ok', id: m.id, boxes, bubbles: bubs, lines: boxes.map((b, i) => Object.assign({}, b, lines[i])), stats });
           } finally { if (bmp.close) bmp.close(); }
         }
       } catch (err) {
@@ -5765,7 +5775,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const ocrPart = (P) => Math.min(0.99, loc.workers.concat(pd.workers).reduce((n, w) => n + (w.busy && w.page === P ? w.prog : 0), 0));
 
     /* ---------- 免費模式的認字：PaddleOCR（背景執行緒，同時開幾個；載入失敗才用 Tesseract） ---------- */
-    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [] };
+    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [], checked: {} };
     /** 開一個背景執行緒（網站不允許時改用網頁自己的 Worker） */
     function pdWorker(code) {
       let w = null;
@@ -5888,6 +5898,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const prev = P && P.step;
       try {
         await orCancel(pdReady(lang, P));
+        await orCancel(pdSelfCheck(lang));
       } catch (e) {
         if (e && e.kind === 'cancel') throw e;
         throw Object.assign(e instanceof Error ? e : new Error(String(e)), { setup: true });
@@ -5902,6 +5913,31 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         return mtPaddleGroups(r.lines, lang, s.bubbles);
       } finally { pdRelease(wk); }
     }
+    /**
+     * PaddleOCR 載入後，先認一張白底黑字的測試圖：找不到字、算出壞掉的數字、英文認錯（某些瀏覽器上模型算出來的數字不對），
+     * 就當作 PaddleOCR 不能用，改用 Tesseract，不會整話翻完卻一個字都沒有
+     */
+    function pdSelfCheck(lang) {
+      const want = lang === 'eng' ? 'eng' : 'det';
+      if (pd.checked[want]) return pd.checked[want];
+      const gen = pd.gen;
+      const p = (async () => {
+        const blob = await mtTestBlob();
+        const wk = await pdTake();
+        let r;
+        try {
+          r = await wk.call({ type: 'ocr', blob, rec: lang, boxes: null, opts: { stats: true, detOnly: want === 'det' } }, null, 60000);
+        } finally { pdRelease(wk); }
+        const st = r.stats || {};
+        const text = (r.lines || []).map((l) => l.text || '').join(' ');
+        if (r.boxes.length < 2 || st.nan > 0 || !(st.max > 0.5) || (want === 'eng' && !/HELLO|WORLD|TEST/i.test(text))) {
+          throw Object.assign(new Error(`PaddleOCR 自我檢查沒通過（字框 ${r.boxes.length}、最大值 ${st.max}、NaN ${st.nan}${want === 'eng' ? '、認出「' + text.slice(0, 30) + '」' : ''}）`), { setup: true });
+        }
+      })();
+      pd.checked[want] = p;
+      p.catch(() => { if (gen === pd.gen && pd.checked[want] === p) delete pd.checked[want]; });
+      return p;
+    }
     /** PaddleOCR 不能用（網站擋住、下載不到）：改用 Tesseract；按「重試」時會再試一次 */
     function pdFail(e) {
       if (pd.failed) return;
@@ -5909,13 +5945,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       mtWarn('PaddleOCR 載入失敗，改用 Tesseract', e);
       pd.workers.forEach((wk) => wk.die(new Error('停止')));
       pd.workers = [];
-      tell('pd-failed', '新的文字辨識（PaddleOCR）在這個網站載入失敗，先改用舊的辨識方式，準確度會差一些。可以按狀態列的「重試」再試一次。', { title: '漫畫翻譯' });
+      tell('pd-failed', /自我檢查/.test(pd.failed)
+        ? '新的文字辨識（PaddleOCR）在這個瀏覽器認不出測試用的字，先改用舊的辨識方式，準確度會差一些。'
+        : '新的文字辨識（PaddleOCR）在這個網站載入失敗，先改用舊的辨識方式，準確度會差一些。可以按狀態列的「重試」再試一次。', { title: '漫畫翻譯' });
     }
     function pdReset() {
       pd.gen++;
       mtPdLoading.clear(); // 卡住的下載不要再等，重新下載
       pd.workers.forEach((wk) => wk.die(mtErr('cancel')));
-      Object.assign(pd, { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '' });
+      Object.assign(pd, { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', checked: {} });
       pd.queue.splice(0).forEach((r) => r());
     }
 
@@ -6269,7 +6307,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       try {
         const st0 = mtEngineState(cfg());
         const fast = mode() === 'fast';
-        const hit = cacheGet(P);
+        let hit = cacheGet(P);
+        // 免費模式一個字都沒認到的舊結果不沿用（可能是那時候認字出了問題），重新辨識一次
+        if (hit && hit.m === 'free' && !hit.blocks.length) hit = null;
         // 快速模式：有翻過就用；精準模式：免費模式翻的只在 Gemini 不能用（或 Gemini 拒絕這張圖）時沿用
         if (hit && (fast || hit.m !== 'free' || hit.blk || st0.kind !== 'gemini')) {
           if (hit.m) P.engines.add(hit.m);
@@ -6364,7 +6404,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         P.state = 'done';
         P.step = '';
         P.error = failed ? mtErrText(lastErr) : '';
-        if (!failed) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free') || 'gemini') : 'free', plan.W0, plan.H0, refused, false);
+        // 免費模式一個字都沒認到的結果不記住：下次打開會再認一次（真的沒有字的頁也只是多花一點時間）
+        if (!failed && (allGemini || P.blocks.length)) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free') || 'gemini') : 'free', plan.W0, plan.H0, refused, false);
         // 被切在上下兩張圖中間的字接起來；快速模式再請 Gemini 依前後文修正（只送文字）
         const fixIt = fast && !allGemini && mtEngineState(cfg()).kind === 'gemini';
         stitchAround(P).finally(() => { if (fixIt && P.gen === gen) fixWhenReady(P); });
@@ -7078,7 +7119,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     listen(PAGE, 'scroll', () => { if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); if (fab) placeCorner(fab, false); }, { capture: true, passive: true });
 
     /* ---------- 回報問題：這一頁的翻譯狀況整理成一段文字（手機上看不到主控台，複製起來貼給開發者） ---------- */
-    function diagText() {
+    function diagText(test) {
       // 只留網域（數字換成 #）和檔名，不放完整網址
       const name = (u) => { try { const x = new URL(u, location.href); return `${x.hostname.replace(/\d+/g, '#')}/…/${x.pathname.split('/').pop()}`; } catch (_) { return String(u || '').slice(0, 40); } };
       const R = (r) => [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
@@ -7126,8 +7167,107 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         scr: [innerWidth, innerHeight, window.devicePixelRatio, vv ? Math.round(vv.scale * 100) / 100 : null, uiZ],
         pg: { on: pg.on, hidden: pg.hidden, dirs: pg.dirs ? pg.dirs.size : 0 }, c: counts(), views: views.size,
         pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => `${name(P.url)} ${P.state} b${P.blocks.length} e${P.els.size}${P.guess ? ' g' : ''}`),
-        imgs, err: DIAG_ERRS.slice(),
+        imgs, test: test || undefined, err: DIAG_ERRS.slice(),
       });
+    }
+    /** 一張圖縮小後的平均亮度、亮度差異、透明度（全黑、全透明代表讀到的是空白圖） */
+    function lumStats(src) {
+      const c = mtCanvas(48, 48);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(src, 0, 0, 48, 48);
+      const d = g.getImageData(0, 0, 48, 48).data;
+      let sum = 0;
+      let sq = 0;
+      let a = 0;
+      const n = d.length / 4;
+      for (let i = 0; i < d.length; i += 4) {
+        const l = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+        sum += l;
+        sq += l * l;
+        a += d[i + 3];
+      }
+      const m = sum / n;
+      return { lum: Math.round(m), sd: Math.round(Math.sqrt(Math.max(0, sq / n - m * m))), alpha: Math.round(a / n) };
+    }
+    /** 認出來的字像不像英文（只回報數量和比例，不放漫畫裡的文字） */
+    function lineQuality(lines) {
+      const words = lines.flatMap((l) => String(l.text || '').split(/\s+/)).filter(Boolean);
+      const good = words.filter((w) => /^[A-Za-z][A-Za-z'’.,!?…-]*$/.test(w) && /[aeiouy]/i.test(w) && w.replace(/[^A-Za-z]/g, '').length >= 2);
+      const conf = lines.length ? lines.reduce((t, l) => t + (l.conf || 0), 0) / lines.length : 0;
+      return { lines: lines.length, words: words.length, good: good.length, conf: Math.round(conf * 100) };
+    }
+    /** 診斷用：直接跑一次 PaddleOCR，拿原始結果（字框、認出的字、模型的統計） */
+    async function pdProbe(blob, lang) {
+      await pdReady(lang, null);
+      const wk = await pdTake();
+      try { return await wk.call({ type: 'ocr', blob, rec: lang, boxes: null, opts: { stats: true } }, null, 90000); } finally { pdRelease(wk); }
+    }
+    /**
+     * 實際測一次：合成的測試圖認不認得出字、Google 翻譯通不通、畫面上這一頁的圖讀不讀得到、認不認得出字。
+     * 手機上看不到主控台，問題出在哪一步，從這裡看得出來
+     */
+    async function diagOcr() {
+      const ms = (t) => Date.now() - t;
+      const errOf = (e) => String((e && e.message) || e).slice(0, 160);
+      const langs = store.get('mt.lang', {}) || {};
+      const out = {
+        env: { coi: !!self.crossOriginIsolated, oc: typeof OffscreenCanvas === 'function', cores: navigator.hardwareConcurrency || 0 },
+        pd: { ok: pd.ok, failed: pd.failed || '', langs: Object.keys(pd.langOk || {}), workers: pd.workers.length, checked: Object.keys(pd.checked || {}) },
+        lang: { set: cfg().ocrLang || '', guess: mtHostLang(), series: langs[seriesKey()] || '', site: langs[HOST] || '' },
+        gtxFailed: mtGtxFailed,
+      };
+      // 1) 合成的測試圖：白底黑字的 HELLO WORLD
+      let t0 = Date.now();
+      try {
+        const blob = await mtTestBlob();
+        out.self = { png: blob.size };
+        if (!pd.failed) {
+          const r = await mtTimeout(pdProbe(blob, 'eng'), 120000);
+          out.self.pd = { ms: ms(t0), boxes: r.boxes.length, lines: (r.lines || []).slice(0, 4).map((l) => `${l.text}|${Math.round((l.conf || 0) * 100)}`), stats: r.stats };
+        }
+        t0 = Date.now();
+        const groups = await mtTimeout(ocrRun({ blob, y0: 0, y1: 150 }, 'eng', { W: 560, H: 150, W0: 560, H0: 150, k: 1, cuts: [[0, 150]] }, null), 120000);
+        out.self.ocr = { ms: ms(t0), by: pd.failed ? 'tesseract' : 'paddle', n: groups.length, text: groups.map((x) => x.text).join(' / ').slice(0, 80) };
+      } catch (e) { out.self = Object.assign(out.self || {}, { err: errOf(e), ms: ms(t0) }); }
+      // 2) Google 翻譯
+      t0 = Date.now();
+      try {
+        const z = await mtTimeout(mtFreeTranslate(['HELLO WORLD'], 'eng'), 30000);
+        out.gtx = { ms: ms(t0), zh: String(z[0] || '').slice(0, 20) };
+      } catch (e) { out.gtx = { err: errOf(e), ms: ms(t0) }; }
+      // 3) 畫面上這一頁的圖
+      const V = [...views.values()].find((v) => { const r = v.img.getBoundingClientRect(); return v.img.isConnected && r.width > 100 && r.bottom > 0 && r.top < innerHeight; });
+      if (V) {
+        t0 = Date.now();
+        try {
+          const bmp = await mtTimeout(mtCaptureUrl(V.P.url, V.img, V.P.noRef || pg.noRefDirs.has(mtDirOf(V.P.url))), 30000);
+          try {
+            out.page = { cap: Object.assign({ w: bmp.width, h: bmp.height, ms: ms(t0) }, lumStats(bmp)) };
+            const plan = mtPlanSlices(bmp);
+            const sl = await mtSliceImage(bmp, plan, 0, true);
+            out.page.slices = plan.cuts.length;
+            out.page.s0 = { size: sl.blob.size, type: sl.blob.type };
+            const sb = await createImageBitmap(sl.blob);
+            try { Object.assign(out.page.s0, lumStats(sb)); } finally { if (sb.close) sb.close(); }
+            if (!pd.failed) {
+              t0 = Date.now();
+              const r = await mtTimeout(pdProbe(sl.blob, 'eng'), 120000);
+              const groups = mtPaddleGroups(r.lines || [], 'eng', r.bubbles || []);
+              const kept = cfg().sfx !== 'translate' ? groups.filter((x) => !mtIsSfx(x, groups, 'eng', plan.W)) : groups;
+              out.page.pd = Object.assign({ ms: ms(t0), boxes: r.boxes.length, stats: r.stats, groups: groups.length, kept: kept.length }, lineQuality(r.lines || []));
+              // 翻譯這一步：有幾段翻出來是空的、跟原文一樣（這兩種都會被丟掉）
+              const k2 = kept.slice(0, 12);
+              if (k2.length) {
+                try {
+                  const zh = await mtTimeout(mtFreeTranslate(k2.map((x) => x.text), 'eng'), 30000);
+                  out.page.pd.tr = { n: k2.length, empty: zh.filter((z) => !mtCleanZh(z)).length, same: zh.filter((z, i) => mtCleanZh(z) === k2[i].text).length };
+                } catch (e) { out.page.pd.tr = { err: errOf(e) }; }
+              }
+            }
+          } finally { if (bmp.close) bmp.close(); }
+        } catch (e) { out.page = Object.assign(out.page || {}, { err: errOf(e), ms: ms(t0) }); }
+      }
+      return out;
     }
     async function copyText(text) {
       try { await navigator.clipboard.writeText(text); return true; } catch (_) { /* 改用舊方法 */ }
@@ -7144,9 +7284,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         return ok;
       } catch (_) { return false; }
     }
-    function diag() {
+    let diagBusy = false;
+    async function diag() {
+      if (diagBusy) return;
+      diagBusy = true;
+      const wait = toast('會實際認一次字、翻一次譯，大約 10～40 秒，請先不要離開這一頁。', { title: '正在檢查文字辨識和翻譯…', sticky: true });
+      let test = null;
+      try { test = await diagOcr(); } catch (e) { test = { err: String((e && e.message) || e) }; }
+      if (wait) wait.close();
+      diagBusy = false;
       let text = '';
-      try { text = diagText(); } catch (e) { text = JSON.stringify({ v: VERSION, ed: EDITION, site: HOST, diagErr: String((e && e.message) || e), err: DIAG_ERRS.slice() }); }
+      try { text = diagText(test); } catch (e) { text = JSON.stringify({ v: VERSION, ed: EDITION, site: HOST, diagErr: String((e && e.message) || e), test, err: DIAG_ERRS.slice() }); }
       console.log('[MAOBOO] 診斷資訊', text);
       toast('按「複製」後貼上回報就可以了（只有網頁和圖片的狀態，不含金鑰）。', {
         title: '診斷資訊準備好了',
@@ -8523,8 +8671,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const latest = m[1];
         if (cmpVer(latest, VERSION) <= 0) { if (manual) toast(`已是最新版本 ${VERSION}`); return; }
         const note = readNote(text, latest);
-        // 手機版只有漫畫翻譯：整合包其他功能的改版不跳通知（Tampermonkey 自己還是會定期更新；按「檢查更新」也看得到）
-        if (!manual && EDITION === 'manga' && !/漫畫|手機/.test(note)) return;
         const snooze = store.get('upd.snooze', null);
         if (!manual && snooze && snooze.v === latest && snooze.until > now) return;
         const later = () => store.set('upd.snooze', { v: latest, until: Date.now() + 6 * 3600 * 1000 });
