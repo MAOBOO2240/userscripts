@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.5
+// @version      1.5.6
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.6  漫畫翻譯：網站換頁、重畫版面時錯過時機，譯文會自己補回圖上（手機上「已翻譯」但圖上還是原文的問題）；手機上「譯」和狀態列
+ *        會避開網站的換頁列和小按鈕；翻譯中的選單多了「複製診斷資訊」，譯文沒出來時可以複製這一頁的狀況回報
  * 1.5.5  新增「手機版漫畫翻譯」（manga-mobile.user.js）：整合包裡的漫畫翻譯單獨拿出來給手機用；手機上的介面：設定面板從下方滑上來、
  *        開關和按鈕加大、輸入框 16px（iPhone 點了不會放大畫面），「譯」加大，狀態列多「設定」、寬度固定（按鈕不會跟著進度文字移動）；
  *        沒有手機版排版的網站整頁縮小顯示時，介面放大回正常大小；整合包和手機版同時裝時只有一個在翻譯
@@ -100,6 +102,14 @@
   const MT_TOKEN = `${EDITION}-${Math.random().toString(36).slice(2, 8)}`;
   /** 觸控裝置（手機、平板）：沒有「滑鼠移上去」這件事 */
   const TOUCH = (() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })();
+  /** 最近的錯誤（「複製診斷資訊」會一起附上；手機上看不到主控台） */
+  const DIAG_ERRS = [];
+  function mtWarn(msg, ...args) {
+    const last = args[args.length - 1];
+    DIAG_ERRS.push(`${new Date().toTimeString().slice(0, 8)} ${msg}${args.length ? '：' + String((last && last.message) || last).slice(0, 160) : ''}`);
+    if (DIAG_ERRS.length > 12) DIAG_ERRS.shift();
+    console.warn('[MAOBOO] ' + msg, ...args);
+  }
   const REPO_URL = 'https://github.com/MAOBOO2240/userscripts';
   // 需要碰到網頁本身的 JavaScript（history、visibilityState）時用 PAGE
   const PAGE = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
@@ -2161,7 +2171,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         mtLiveReqs.delete(req);
         resolve({ status: st, text: raw, cut });
       };
-      const feed = () => { if (onRaw) { try { onRaw(raw); } catch (e) { console.warn('[MAOBOO] 串流處理', e); } } };
+      const feed = () => { if (onRaw) { try { onRaw(raw); } catch (e) { mtWarn('串流處理', e); } } };
       const readStream = async (stream) => {
         streamed = true;
         const reader = stream.getReader();
@@ -3332,11 +3342,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       laidH = ch;
       if (!cw || !ch) { layer.replaceChildren(); return; }
       let rs = [];
-      try { rs = arrange(); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯排版失敗', e); }
+      try { rs = arrange(); } catch (e) { mtWarn('漫畫翻譯排版失敗', e); }
       const els = [];
       const placed = [];
       for (const r of rs) {
-        try { const el = boxEl(r, rs, placed); if (el) els.push(el); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯排版失敗', e); }
+        try { const el = boxEl(r, rs, placed); if (el) els.push(el); } catch (e) { mtWarn('漫畫翻譯排版失敗', e); }
       }
       layer.replaceChildren(...els);
     }
@@ -4740,7 +4750,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       out = await mtGtx(send, src);
     } catch (e) {
       mtGtxFailed = true;
-      console.warn('[MAOBOO] Google 翻譯失敗，改用 Chrome 離線翻譯', e);
+      mtWarn('Google 翻譯失敗，改用 Chrome 離線翻譯', e);
       const tr = await mtChromeTranslator(src);
       if (!tr) throw e;
       out = await mtTimeout(Promise.all(send.map((t) => tr.translate(t))), 20000);
@@ -4868,7 +4878,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     function ensureOverlay(V) {
       if (V.overlay && V.overlay.alive()) return V.overlay;
       V.overlay = mtOverlay(V.img);
+      // 同一張圖之前已經在監看時，再 observe 一次不會收到通知（新的譯文層就不會跟著校正位置）：先取消再重新監看
+      ovIO.unobserve(V.img);
       ovIO.observe(V.img);
+      ro.unobserve(V.img);
       ro.observe(V.img);
       return V.overlay;
     }
@@ -4953,7 +4966,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         a.xs = true;
         b.xs = true;
         let zh = '';
-        try { zh = mtCleanZh((await mtFreeTranslate([src], lang))[0]); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯（接起來的句子）', e); }
+        try { zh = mtCleanZh((await mtFreeTranslate([src], lang))[0]); } catch (e) { mtWarn('漫畫翻譯（接起來的句子）', e); }
         if (U.gen !== gu || L.gen !== gl) return false;
         if (!zh) { a.xs = false; b.xs = false; continue; }
         Object.assign(keep, { msrc: src, zh, fixed: false, blank: false });
@@ -5154,8 +5167,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (!U || !L) continue;
         let changed = false;
         if (U.state === 'done' && L.state === 'done') {
-          try { changed = await seamOcr(U, L); } catch (e) { if (!e || e.kind !== 'cancel') console.warn('[MAOBOO] 漫畫翻譯（接縫）', e); }
-          if (!changed) { try { changed = await stitch(U, L); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯（接起來的句子）', e); } }
+          try { changed = await seamOcr(U, L); } catch (e) { if (!e || e.kind !== 'cancel') mtWarn('漫畫翻譯（接縫）', e); }
+          if (!changed) { try { changed = await stitch(U, L); } catch (e) { mtWarn('漫畫翻譯（接起來的句子）', e); } }
         }
         for (const Q of [U, L]) {
           if (Q === P) continue;
@@ -5320,7 +5333,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       store.set('mt.badkey', h);
       const msg = e.kind === 'region' ? '你所在的地區不能使用 Gemini API，先用免費模式翻譯。' : 'Gemini 金鑰無效或沒有權限，先用免費模式翻譯。';
       tell('bad:' + h, msg, { actions: [keyAction] });
-      console.warn('[MAOBOO] Gemini 金鑰無法使用：', e.message);
+      mtWarn('Gemini 金鑰無法使用：', e.message);
     }
     function onFallback(st) {
       const fast = cfg().mode !== 'accurate';
@@ -5629,7 +5642,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const keep = [];
         for (const j of batch) { j.tries++; if (j.tries <= limit) keep.push(j); else j.reject(e); }
         if (keep.length) { back(keep); mtSetBlock(h, model, now + 3000 * keep[0].tries, 'rate'); }
-        console.warn('[MAOBOO] Gemini 錯誤', model, e.kind, e.message);
+        mtWarn('Gemini 錯誤', model, e.kind, e.message);
       }
       setStatus();
     }
@@ -5741,7 +5754,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       } catch (e) {
         if (wk) dropWorker(wk);
         if ((e && e.kind === 'cancel') || gen0 !== loc.gen) throw mtErr('cancel');
-        console.warn('[MAOBOO] 免費模式（Tesseract）載入失敗', e);
+        mtWarn('免費模式（Tesseract）載入失敗', e);
         loc.failed = '文字辨識載入失敗（這個網站可能不允許，或網路有問題）';
         loc.failedAt = Date.now();
         tell('local-failed', '免費模式的文字辨識載入失敗：這個網站可能不允許，或網路有問題。可以按狀態列的「重試」，或在設定改用 Gemini 看圖翻譯。', { title: '漫畫翻譯' });
@@ -5894,7 +5907,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     function pdFail(e) {
       if (pd.failed) return;
       pd.failed = String((e && e.message) || e || '');
-      console.warn('[MAOBOO] PaddleOCR 載入失敗，改用 Tesseract', e);
+      mtWarn('PaddleOCR 載入失敗，改用 Tesseract', e);
       pd.workers.forEach((wk) => wk.die(new Error('停止')));
       pd.workers = [];
       tell('pd-failed', '新的文字辨識（PaddleOCR）在這個網站載入失敗，先改用舊的辨識方式，準確度會差一些。可以按狀態列的「重試」再試一次。', { title: '漫畫翻譯' });
@@ -5919,7 +5932,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           return groups;
         } catch (e) {
           if (e && e.kind === 'cancel') throw e;
-          if (e && e.setup) pdFail(e); else console.warn('[MAOBOO] PaddleOCR 這一段失敗，改用 Tesseract', e);
+          if (e && e.setup) pdFail(e); else mtWarn('PaddleOCR 這一段失敗，改用 Tesseract', e);
         }
       }
       const scale = plan.W < 800 ? 1.5 : 1;
@@ -6239,7 +6252,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const keep = e.kind === 'blocked' ? [] : batch.filter((j) => ++j.tries <= 1);
         batch.filter((j) => !keep.includes(j)).forEach((j) => { j.P.fix = 'fail'; });
         if (keep.length) { keep.forEach((j) => { j.P.fix = 'wait'; }); fq.jobs.unshift(...keep); mtSetBlock(h, model, now + 3000, 'rate'); }
-        console.warn('[MAOBOO] Gemini 修正失敗', model, e.kind, e.message);
+        mtWarn('Gemini 修正失敗', model, e.kind, e.message);
       }
       setStatus();
     }
@@ -6346,7 +6359,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         P.cutT = !!((s0.boxes || []).some((b) => b.y0 <= 3) || (s0.bubbles || []).some((b) => b.et));
         P.cutB = !!((sN.boxes || []).some((b) => b.y1 >= sN.y1 - sN.y0 - 3) || (sN.bubbles || []).some((b) => b.eb));
         P.seamExt = [seamExtent(P, s0, plan, true), seamExtent(P, sN, plan, false)];
-        try { await keepStrips(P, slices, plan, gen); } catch (e) { console.warn('[MAOBOO] 漫畫翻譯（留下接縫）', e); }
+        try { await keepStrips(P, slices, plan, gen); } catch (e) { mtWarn('漫畫翻譯（留下接縫）', e); }
         for (const s of slices) s.blob = null;
         if (!alive()) return;
         P.state = 'done';
@@ -6362,7 +6375,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         P.state = 'error';
         P.step = '';
         P.error = mtErrText(e);
-        console.warn('[MAOBOO] 漫畫翻譯失敗', e);
+        mtWarn('漫畫翻譯失敗', e);
       }
       P.note = '';
       bump();
@@ -6403,6 +6416,26 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (V && pg.on) queueP(V.P);
       }
     });
+    /**
+     * 保險：畫面附近已經翻好的圖，確認譯文層還在、位置對、該顯示就顯示。
+     * 網站換掉圖片、重畫版面時，偶爾會錯過通知（例如手機的 Safari），最晚不到一秒也會補上
+     */
+    function heal() {
+      if (stopped) return;
+      const vh = innerHeight || 800;
+      for (const V of views.values()) {
+        const P = V.P;
+        if (!P.blocks.length || !V.img.isConnected) continue;
+        const r = V.img.getBoundingClientRect();
+        if (!(r.width > 1 && r.height > 1) || r.bottom < -vh * 0.5 || r.top > vh * 1.5) continue;
+        const fresh = !V.overlay || !V.overlay.alive();
+        const ov = ensureOverlay(V);
+        if (fresh) ov.setBlocks(P.blocks); else ov.align();
+        const want = shouldShow(P) && ready(V.img, P);
+        if (ov.shown !== want) ov.show(want);
+        visibleOv.add(V);
+      }
+    }
     let pruneAt = 0;
     let alignTimer = 0;
     let watching = false;
@@ -6414,6 +6447,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       listen(PAGE, 'resize', alignSoon, { passive: true });
       alignTimer = setInterval(() => {
         if (visibleOv.size) alignSoon();
+        heal();
         if (Date.now() - pruneAt > 5000) {
           pruneAt = Date.now();
           for (const V of [...views.values()]) if (!V.img.isConnected) unbind(V);
@@ -6741,8 +6775,25 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       }
       return false;
     }
+    /**
+     * 手機上，網頁本身（不是浮動的）小小的按鈕、連結也要避開，例如閱讀器上下的換頁列（＜ 2 / 62 ＞）捲到畫面底部時；
+     * 包著整張漫畫圖的大連結不算
+     */
+    function smallControl(el) {
+      for (let e = el, up = 0; e && e !== document.body && up < 4; e = e.parentElement, up++) {
+        const role = (e.getAttribute && e.getAttribute('role')) || '';
+        if (!/^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL|SUMMARY)$/.test(e.tagName) && !/^(button|link|tab|menuitem|slider)$/.test(role)) continue;
+        const r = e.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.width <= 260 && r.height <= 90;
+      }
+      return false;
+    }
     function siteUiAt(x, y, w, hh) {
       const pts = [[x + 6, y + 6], [x + w - 6, y + 6], [x + 6, y + hh - 6], [x + w - 6, y + hh - 6], [x + w / 2, y + hh / 2]];
+      // 很寬的狀態列：中間那一排多看幾個點
+      for (let px = x + 30; w > 150 && px < x + w - 20; px += 48) pts.push([px, y + hh / 2]);
+      const hits = (b) => b.width > 0 && b.height > 0 && Math.min(x + w, b.right) > Math.max(x, b.left) && Math.min(y + hh, b.bottom) > Math.max(y, b.top);
+      const bars = new Set();
       for (const [px, py] of pts) {
         let list = [];
         try { list = document.elementsFromPoint(px, py); } catch (_) { continue; }
@@ -6750,6 +6801,18 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           if (ourHosts.has(el) || el.tagName === 'MAOBOO-MT') continue;
           if (el === document.body || el === document.documentElement) break;
           if (fixedUi(el)) return true;
+          if (!isTouch) continue;
+          if (smallControl(el)) return true;
+          // 一整排的按鈕列（像換頁列）：按鈕常常只有字那麼小，點不一定剛好點到，直接看列裡的按鈕有沒有被蓋到
+          if (bars.has(el)) continue;
+          bars.add(el);
+          const r = el.getBoundingClientRect();
+          if (r.height > 160 || r.width < 100) continue;
+          const ctl = el.querySelectorAll('a[href], button, [role="button"], input, select');
+          for (let i = 0; i < ctl.length && i < 60; i++) {
+            const b = ctl[i].getBoundingClientRect();
+            if (b.width <= 260 && b.height <= 90 && hits(b)) return true;
+          }
         }
       }
       return false;
@@ -7015,6 +7078,84 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // 網站的浮動按鈕常常捲動後才出現：捲動時偶爾重新選位置
     listen(PAGE, 'scroll', () => { if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); if (fab) placeCorner(fab, false); }, { capture: true, passive: true });
 
+    /* ---------- 回報問題：這一頁的翻譯狀況整理成一段文字（手機上看不到主控台，複製起來貼給開發者） ---------- */
+    function diagText() {
+      // 只留網域（數字換成 #）和檔名，不放完整網址
+      const name = (u) => { try { const x = new URL(u, location.href); return `${x.hostname.replace(/\d+/g, '#')}/…/${x.pathname.split('/').pop()}`; } catch (_) { return String(u || '').slice(0, 40); } };
+      const R = (r) => [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+      const desc = (e) => (e && e.tagName ? e.tagName.toLowerCase() + (e.id ? '#' + e.id : '')
+        + (typeof e.className === 'string' && e.className.trim() ? '.' + e.className.trim().split(/\s+/).slice(0, 2).join('.') : '') : '').slice(0, 60);
+      const sty = (e) => {
+        try {
+          const c = getComputedStyle(e);
+          return [c.display, c.position, c.zIndex === 'auto' ? '' : 'z' + c.zIndex, c.overflow === 'visible' ? '' : c.overflow, c.transform === 'none' ? '' : 'tf',
+            c.visibility === 'visible' ? '' : c.visibility, c.opacity === '1' ? '' : 'op' + c.opacity].filter(Boolean).join(' ');
+        } catch (_) { return ''; }
+      };
+      const imgs = [...document.images].filter((i) => views.has(i) || i.naturalWidth >= 200).slice(0, 8).map((img) => {
+        const V = views.get(img);
+        const r = img.getBoundingClientRect();
+        const o = { f: name(img.currentSrc || img.src), r: R(r), n: [img.naturalWidth, img.naturalHeight], ok: img.complete, s: sty(img) };
+        const src = img.getAttribute('src') || '';
+        if (src && img.currentSrc && mtAbs(src) !== img.currentSrc) o.src = name(src);
+        // 圖片看得到的部分中間，最上層是什麼（有沒有被別的東西蓋住）
+        if (r.bottom > 0 && r.top < innerHeight && r.width > 0) {
+          const cx = Math.min(innerWidth - 2, Math.max(1, r.left + r.width / 2));
+          const cy = Math.min(innerHeight - 2, Math.max(1, (Math.max(r.top, 0) + Math.min(r.bottom, innerHeight)) / 2));
+          try { o.top = document.elementsFromPoint(cx, cy).slice(0, 4).map(desc); } catch (_) { /* 舊瀏覽器 */ }
+        }
+        o.up = [];
+        for (let e = img.parentElement, k = 0; e && k < 4 && e !== document.body; e = e.parentElement, k++) o.up.push(desc(e) + ' ' + sty(e));
+        if (V) {
+          const P = V.P;
+          o.P = { st: P.state, b: P.blocks.length, shown: P.shown, guess: P.guess, keyOk: mtUrlKey(mtAbs(img.currentSrc || src)) === P.key, ready: ready(img, P), err: P.error || undefined };
+          const ov = V.overlay;
+          if (ov) {
+            const hs = ov.host;
+            const sr = hs.shadowRoot;
+            const layer = sr && sr.querySelector('.mt-layer');
+            const b0 = sr && sr.querySelector('.b');
+            o.ov = { alive: ov.alive(), conn: hs.isConnected, next: hs.previousSibling === img || hs.previousSibling === img.parentElement, r: R(hs.getBoundingClientRect()), s: sty(hs),
+              hid: !!(layer && layer.hidden), n: layer ? layer.childElementCount : -1, b0: b0 ? R(b0.getBoundingClientRect()) : null };
+          }
+        }
+        return o;
+      });
+      const vv = window.visualViewport;
+      return JSON.stringify({
+        v: VERSION, ed: EDITION, ua: navigator.userAgent.replace(/^Mozilla\/5\.0 /, '').slice(0, 160), site: HOST, path: location.pathname.replace(/\d+/g, '#'),
+        scr: [innerWidth, innerHeight, window.devicePixelRatio, vv ? Math.round(vv.scale * 100) / 100 : null, uiZ],
+        pg: { on: pg.on, hidden: pg.hidden, dirs: pg.dirs ? pg.dirs.size : 0 }, c: counts(), views: views.size,
+        pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => `${name(P.url)} ${P.state} b${P.blocks.length} e${P.els.size}${P.guess ? ' g' : ''}`),
+        imgs, err: DIAG_ERRS.slice(),
+      });
+    }
+    async function copyText(text) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (_) { /* 改用舊方法 */ }
+      try {
+        const r = ui();
+        const ta = h('textarea', { readonly: true, style: { position: 'fixed', top: '0', left: '0', width: '2px', height: '2px', opacity: '0' } });
+        ta.value = text;
+        r.root.append(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+      } catch (_) { return false; }
+    }
+    function diag() {
+      let text = '';
+      try { text = diagText(); } catch (e) { text = JSON.stringify({ v: VERSION, ed: EDITION, site: HOST, diagErr: String((e && e.message) || e), err: DIAG_ERRS.slice() }); }
+      console.log('[MAOBOO] 診斷資訊', text);
+      toast('按「複製」後貼上回報就可以了（只有網頁和圖片的狀態，不含金鑰）。', {
+        title: '診斷資訊準備好了',
+        sticky: true,
+        actions: [{ label: '複製', primary: true, run: () => { copyText(text).then((ok) => toast(ok ? '已複製診斷資訊。' : '沒辦法複製，請再按一次「複製診斷資訊」。')); } }],
+      });
+    }
+
     function toggleSite() {
       const list = (cfg().sites || []).slice();
       const hit = mtSiteMatch(list);
@@ -7057,6 +7198,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (String(hit).trim() !== '*') {
           items.push({ key: 'mt.site', label: hit ? '　這個網站不要顯示翻譯按鈕' : '　在這個網站顯示翻譯按鈕', run: () => toggleSite(), close: true });
         }
+        if (pg.on) items.push({ key: 'mt.diag', label: '　複製診斷資訊（回報問題用）', run: () => diag(), close: true });
         return items;
       },
       stop() {
