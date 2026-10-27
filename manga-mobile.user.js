@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.7
+// @version      1.5.8
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -40,6 +40,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.8  漫畫翻譯：修正 iPhone（Safari）上翻完卻一個字都沒有的問題：寬度超過 1000 的圖縮小切段時，
+ *        要畫的範圍超出圖片不到一個像素，Safari 就整塊不畫，切出來的圖是一片空白、認不到字（Chrome 會自動裁掉所以沒事）；
+ *        精準模式送給 Gemini 的圖也是同一個問題，一起修好
  * 1.5.7  漫畫翻譯：一個字都沒認到的結果不會再被記住，下次打開會重新辨識（之前 iPhone 上翻出空的結果後，那幾頁就一直沒有譯文）；
  *        新的文字辨識（PaddleOCR）載入後先認一張測試圖，認不出字就自動改用舊的辨識方式；
  *        選單的「複製診斷資訊」會實際測一次文字辨識和 Google 翻譯，找出手機上翻不出字的原因；
@@ -2618,6 +2621,23 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     return { W0, H0, W, H, k, cuts };
   }
 
+  /**
+   * 畫圖片的其中一塊：來源範圍超出圖片一點點（例如縮放後的小數）時，Safari 會整塊都不畫（Chrome 會自動裁掉），
+   * iPhone 上切出來的圖就變成一片空白、認不到字。先把來源範圍裁在圖片裡，畫的位置照比例跟著裁
+   */
+  function mtDrawClip(g, src, sx, sy, sw, sh, dx, dy, dw, dh) {
+    const W = src.naturalWidth || src.videoWidth || src.width;
+    const H = src.naturalHeight || src.videoHeight || src.height;
+    const x0 = Math.max(0, sx);
+    const y0 = Math.max(0, sy);
+    const x1 = Math.min(W, sx + sw);
+    const y1 = Math.min(H, sy + sh);
+    if (!(sw > 0 && sh > 0 && x1 > x0 && y1 > y0)) return;
+    const kx = dw / sw;
+    const ky = dh / sh;
+    g.drawImage(src, x0, y0, x1 - x0, y1 - y0, dx + (x0 - sx) * kx, dy + (y0 - sy) * ky, (x1 - x0) * kx, (y1 - y0) * ky);
+  }
+
   async function mtSliceImage(bmp, plan, i, lossless) {
     const [y0, y1] = plan.cuts[i];
     const hh = Math.max(1, y1 - y0);
@@ -2626,7 +2646,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     g.fillStyle = '#FFFFFF'; // 透明的地方補白底
     g.fillRect(0, 0, plan.W, hh);
     g.imageSmoothingQuality = 'high';
-    g.drawImage(bmp, 0, y0 / plan.k, plan.W0, hh / plan.k, 0, 0, plan.W, hh);
+    mtDrawClip(g, bmp, 0, y0 / plan.k, plan.W0, hh / plan.k, 0, 0, plan.W, hh);
     // 只留壓縮過的圖：整話先下載時不會吃掉太多記憶體。免費模式要辨識文字，用不失真的 PNG
     const blob = await mtToBlob(c, lossless ? 'image/png' : 'image/jpeg', 0.82);
     return { i, y0, y1, blob };
@@ -3506,6 +3526,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const S = { det: null, rec: {}, labels: {} };
     const post = (m) => self.postMessage(m);
     const canvas = (w, h) => new OffscreenCanvas(Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+    /** 來源範圍超出圖片時 Safari 整塊不畫：先裁在圖片裡，畫的位置照比例跟著裁 */
+    const drawClip = (g, src, sx, sy, sw, sh, dx, dy, dw, dh) => {
+      const x0 = Math.max(0, sx);
+      const y0 = Math.max(0, sy);
+      const x1 = Math.min(src.width, sx + sw);
+      const y1 = Math.min(src.height, sy + sh);
+      if (!(sw > 0 && sh > 0 && x1 > x0 && y1 > y0)) return;
+      const kx = dw / sw;
+      const ky = dh / sh;
+      g.drawImage(src, x0, y0, x1 - x0, y1 - y0, dx + (x0 - sx) * kx, dy + (y0 - sy) * ky, (x1 - x0) * kx, (y1 - y0) * ky);
+    };
 
     /** 字典對齊模型的類別數：0 是 CTC 的空白，最後一個是空格 */
     function makeLabels(list, classes) {
@@ -4059,7 +4090,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           g.imageSmoothingQuality = 'high';
           if (it.rot) g.setTransform(0, -HH / it.cw, it.tw / it.ch, 0, 0, HH);
           else g.setTransform(it.tw / it.cw, 0, 0, HH / it.ch, 0, 0);
-          g.drawImage(bmp, it.b.x0, it.b.y0, it.cw, it.ch, 0, 0, it.cw, it.ch);
+          drawClip(g, bmp, it.b.x0, it.b.y0, it.cw, it.ch, 0, 0, it.cw, it.ch);
           const px = g.getImageData(0, 0, it.tw, HH).data;
           const base = n * 3 * plane;
           for (let y = 0; y < HH; y++) {
@@ -5116,9 +5147,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         g.fillRect(0, 0, W, A + B);
         g.imageSmoothingQuality = 'high';
         if (su) g.drawImage(bu, 0, 0, bu.width, bu.height, 0, 0, W, A);
-        else { const ku = W / bu.width; g.drawImage(bu, 0, (HU - A) / ku, bu.width, A / ku, 0, 0, W, A); }
+        else { const ku = W / bu.width; mtDrawClip(g, bu, 0, (HU - A) / ku, bu.width, A / ku, 0, 0, W, A); }
         if (sl) g.drawImage(bl, 0, 0, bl.width, bl.height, 0, A, W, B);
-        else { const kl = W / bl.width; g.drawImage(bl, 0, 0, bl.width, B / kl, 0, A, W, B); }
+        else { const kl = W / bl.width; mtDrawClip(g, bl, 0, 0, bl.width, B / kl, 0, A, W, B); }
         blob = await mtToBlob(c, 'image/png');
       } finally {
         for (const b of [bu, bl]) if (b && typeof b.close === 'function') b.close();
