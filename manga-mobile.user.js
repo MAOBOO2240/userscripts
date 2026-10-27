@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.12
+// @version      1.5.13
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,7 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.13  「譯」按住可以拖到畫面上別的地方，每個網站各自記住位置；點一下照樣開始翻譯
  * 1.5.12  漫畫翻譯：沒有被當成對話框的字（例如外圍只有放射狀短線、沒有封閉外框的淺藍色對話框，或黑底白字的旁白），
  *         譯文框改用周圍的底色，不會再多出一塊白的；深色的底用白字。底下是花花的圖時照舊用白底；之前用「快速」翻過的圖會重新翻一次
  * 1.5.11  狀態列右邊的 × 改成只收起狀態列（翻譯照常進行、譯文留在圖上），按「譯」再叫出來；要關掉翻譯用選單的「關閉漫畫翻譯（恢復原文）」；
@@ -339,7 +340,9 @@ button, input, select, output { font: inherit; }
 .mt-chip button:focus-visible, .mt-fab:focus-visible { outline: 2px solid #9DBAFF; outline-offset: 2px; }
 .mt-fab { position: fixed; right: 16px; bottom: 16px; width: 44px; height: 44px; border: 0; border-radius: 50%;
   background: rgba(15, 22, 30, .82); color: #FFFFFF; font-family: var(--font); font-size: 16px; font-weight: 700; cursor: pointer;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .3); }
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .3); touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  transition: background-color .15s, box-shadow .15s; }
+.mt-fab.is-drag { background: rgba(15, 22, 30, .94); box-shadow: 0 0 0 3px rgba(157, 186, 255, .55), 0 12px 28px rgba(0, 0, 0, .42); cursor: grabbing; }
 @media (max-width: 640px) { .mb-toasts { bottom: 78px; } }
 
 /* ---------- 手機：手指好按、字不會太小 ---------- */
@@ -7336,7 +7339,83 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     /* ---------- 觸控裝置：「譯」按鈕 ---------- */
     let fab = null;
     let fabT = 0;
-    /** 手機沒有滑鼠：還沒開始時按「譯」開始翻譯；翻譯中狀態列收起後，按「譯」把狀態列叫出來 */
+    /** 使用者拖過的位置（每個網站各自記住）：按鈕中心在畫面寬、高的幾成，轉向或縮放後還是在差不多的地方 */
+    const fabSaved = () => {
+      const p = (store.get('mt.fabPos', {}) || {})[HOST];
+      return p && p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1 ? p : null;
+    };
+    function fabSave(p) {
+      const m = Object.assign({}, store.get('mt.fabPos', {}) || {});
+      delete m[HOST];
+      m[HOST] = p;
+      const keys = Object.keys(m);
+      if (keys.length > 200) keys.slice(0, keys.length - 200).forEach((k) => { delete m[k]; });
+      store.set('mt.fabPos', m);
+    }
+    /** 把「譯」的左上角放在畫面上的 (x, y)，不超出畫面 */
+    function fabMoveTo(x, y) {
+      const r = fab.getBoundingClientRect();
+      const m = 8 * uiZ;
+      const cx = Math.max(m, Math.min(innerWidth - (r.width || 52) - m, x));
+      const cy = Math.max(m, Math.min(innerHeight - (r.height || 52) - m, y));
+      const set = (L, T) => Object.assign(fab.style, { left: L + 'px', top: T + 'px', right: 'auto', bottom: 'auto' });
+      // 介面放大（zoom）時 left／top 也會跟著放大：除回去；實際位置對不上（各瀏覽器處理 zoom 的方式不同）就照量到的比例再修正一次
+      const L = cx / uiZ;
+      const T = cy / uiZ;
+      set(L, T);
+      const r2 = fab.getBoundingClientRect();
+      if (L > 1 && T > 1 && (Math.abs(r2.left - cx) > 1 || Math.abs(r2.top - cy) > 1)) {
+        const fx = r2.left / L;
+        const fy = r2.top / T;
+        if (fx > 0.2 && fy > 0.2) set(cx / fx, cy / fy);
+      }
+    }
+    let fabVp = '';
+    /** 有拖過就放在記住的位置，沒有就放在角落（避開網站自己的按鈕） */
+    function placeFab(force) {
+      if (!fab) return;
+      const p = fabSaved();
+      if (!p) { placeCorner(fab, force); return; }
+      const vp = `${innerWidth}x${innerHeight}x${uiZ}`;
+      if (!force && vp === fabVp) return;
+      fabVp = vp;
+      const r = fab.getBoundingClientRect();
+      fabMoveTo(p.x * innerWidth - r.width / 2, p.y * innerHeight - r.height / 2);
+    }
+    /** 按住「譯」拖曳：移動超過一點點才算拖曳，放開後記住位置；沒有移動就是一般的點一下 */
+    function fabDrag(el) {
+      let st = null;
+      el.addEventListener('pointerdown', (e) => {
+        if (e.button > 0) return;
+        const r = el.getBoundingClientRect();
+        st = { id: e.pointerId, x0: e.clientX, y0: e.clientY, l: r.left, t: r.top, moved: false };
+        try { el.setPointerCapture(e.pointerId); } catch (_) { /* 舊瀏覽器 */ }
+      });
+      el.addEventListener('pointermove', (e) => {
+        if (!st || e.pointerId !== st.id) return;
+        const dx = e.clientX - st.x0;
+        const dy = e.clientY - st.y0;
+        if (!st.moved && Math.hypot(dx, dy) < 8 * uiZ) return;
+        if (!st.moved) { st.moved = true; el.classList.add('is-drag'); }
+        e.preventDefault();
+        fabMoveTo(st.l + dx, st.t + dy);
+      });
+      const end = (e) => {
+        if (!st || e.pointerId !== st.id) return;
+        const moved = st.moved;
+        st = null;
+        el.classList.remove('is-drag');
+        if (!moved) return;
+        el.dragAt = Date.now(); // 放開時跟著來的 click 不算點一下
+        const r = el.getBoundingClientRect();
+        const k = (v) => Math.round(Math.max(0, Math.min(1, v)) * 1000) / 1000;
+        fabSave({ x: k((r.left + r.width / 2) / innerWidth), y: k((r.top + r.height / 2) / innerHeight) });
+        fabVp = `${innerWidth}x${innerHeight}x${uiZ}`;
+      };
+      el.addEventListener('pointerup', end);
+      el.addEventListener('pointercancel', end);
+    }
+    /** 手機沒有滑鼠：還沒開始時按「譯」開始翻譯；翻譯中狀態列收起後，按「譯」把狀態列叫出來。按住可以拖到別的地方 */
     function fabSync() {
       const chipHidden = pg.on && (!chipEl || !chipEl.classList.contains('is-on'));
       const want = isTouch && (pg.on ? chipHidden : siteOn() && [...document.images].some((img) => img.naturalWidth >= 200 && img.naturalHeight >= 200));
@@ -7344,14 +7423,16 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const r = ui();
         if (!r) return;
         fab = h('button', {
-          type: 'button', class: 'mt-fab', text: '譯', 'aria-label': '漫畫翻譯',
+          type: 'button', class: 'mt-fab', text: '譯', 'aria-label': '漫畫翻譯（按住可以拖曳）',
           onclick: (e) => {
             e.stopPropagation();
+            if (Date.now() - (fab.dragAt || 0) < 600) return;
             if (pg.on) { pg.chipOff = false; chip(true); fabSync(); } else { warmLocal(); pageToggle(true); }
           },
         });
+        fabDrag(fab);
         r.root.append(fab);
-        placeCorner(fab, true);
+        placeFab(true);
       } else if (!want && fab) { fab.remove(); fab = null; }
     }
     function fabWatch() {
@@ -7392,7 +7473,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       pageToggle();
     }, true);
     // 網站的浮動按鈕常常捲動後才出現：捲動時偶爾重新選位置
-    listen(PAGE, 'scroll', () => { if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); if (fab) placeCorner(fab, false); }, { capture: true, passive: true });
+    listen(PAGE, 'scroll', () => { if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); if (fab) placeFab(false); }, { capture: true, passive: true });
+    // 轉向、兩指縮放之後：拖過的「譯」放回記住的位置（介面大小也可能變了）
+    if (window.visualViewport) listen(window.visualViewport, 'resize', () => { if (fab && fabSaved()) placeFab(false); }, { passive: true });
+    listen(PAGE, 'resize', () => { if (fab && fabSaved()) placeFab(false); }, { passive: true });
 
     /* ---------- 回報問題：這一頁的翻譯狀況整理成一段文字（手機上看不到主控台，複製起來貼給開發者） ---------- */
     function diagText(test) {
