@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.8
+// @version      1.5.9
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -25,6 +25,8 @@
 // @connect      raw.githubusercontent.com
 // @connect      generativelanguage.googleapis.com
 // @connect      translate.googleapis.com
+// @connect      edge.microsoft.com
+// @connect      api-edge.cognitive.microsofttranslator.com
 // @connect      cdn.jsdelivr.net
 // @connect      unpkg.com
 // @connect      huggingface.co
@@ -40,6 +42,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.9  漫畫翻譯：Google 免費翻譯被暫時擋下（HTTP 429：手機網路常常很多人共用同一個網路位址，翻幾頁就容易被擋）時，
+ *        自動改用微軟翻譯（Edge 內建翻譯用的那一套），10 分鐘內不再一直找 Google；狀態列會顯示是誰翻的；
+ *        「複製診斷資訊」會分別測 Google 和微軟翻譯
  * 1.5.8  漫畫翻譯：修正 iPhone（Safari）上翻完卻一個字都沒有的問題：寬度超過 1000 的圖縮小切段時，
  *        要畫的範圍超出圖片不到一個像素，Safari 就整塊不畫，切出來的圖是一片空白、認不到字（Chrome 會自動裁掉所以沒事）；
  *        精準模式送給 Gemini 的圖也是同一個問題，一起修好
@@ -4725,7 +4730,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         url: `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=zh-TW&dt=t&q=${encodeURIComponent(q)}`,
         timeout: 20000,
         onload: (res) => {
-          if (res.status !== 200) { reject(new Error(`免費翻譯失敗（HTTP ${res.status}）`)); return; }
+          if (res.status !== 200) { reject(Object.assign(new Error(`免費翻譯失敗（HTTP ${res.status}）`), { status: res.status })); return; }
           try {
             const j = JSON.parse(res.responseText);
             resolve((j[0] || []).map((seg) => (seg && seg[0]) || '').join(''));
@@ -4741,8 +4746,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const out = new Array(texts.length).fill('');
     const run = async (idx) => {
       const joined = idx.map((i) => texts[i].replace(/\n/g, ' ')).join('\n');
-      // 一下子翻太多次被暫時擋下時，等一下再試一次
-      const res = await mtGtxOnce(joined, sl).catch(() => new Promise((r) => setTimeout(r, 1500)).then(() => mtGtxOnce(joined, sl)));
+      // 偶爾失敗時等一下再試一次；被擋下（429）的話再送也沒用，直接改用微軟翻譯
+      const res = await mtGtxOnce(joined, sl).catch((e) => (e && e.status === 429 ? Promise.reject(e)
+        : new Promise((r) => setTimeout(r, 1500)).then(() => mtGtxOnce(joined, sl))));
       const parts = res.split('\n');
       if (parts.length === idx.length) idx.forEach((i, k) => { out[i] = parts[k].trim(); });
       else for (const i of idx) out[i] = (await mtGtxOnce(texts[i], sl)).trim();
@@ -4759,6 +4765,54 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     return out;
   }
   let mtGtxFailed = false;
+  /**
+   * Google 免費翻譯回「HTTP 429」：同一個網路短時間翻太多次被暫時擋下（手機網路常常很多人共用同一個 IP，特別容易遇到）。
+   * 擋下後這段時間先改用微軟翻譯，不再一直去敲 Google
+   */
+  let mtGtxPauseUntil = 0;
+  const MT_GTX_PAUSE = 10 * 60 * 1000;
+  /** 微軟翻譯（Microsoft Edge 內建翻譯用的同一套）：先拿一個大約 10 分鐘有效的通行證 */
+  let mtMsTok = null;
+  async function mtMsToken(fresh) {
+    if (!fresh && mtMsTok && Date.now() < mtMsTok.exp) return mtMsTok.t;
+    const t = String(await mtGmText('https://edge.microsoft.com/translate/auth')).trim();
+    if (!/^[\w-]+\.[\w-]+\.[\w-]+$/.test(t)) throw new Error('微軟翻譯沒有回應');
+    mtMsTok = { t, exp: Date.now() + 8 * 60 * 1000 };
+    return t;
+  }
+  function mtMsOnce(texts, src, tok) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: `https://api-edge.cognitive.microsofttranslator.com/translate?from=${src}&to=zh-Hant&api-version=3.0`,
+        headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' },
+        data: JSON.stringify(texts.map((t) => ({ Text: t }))),
+        timeout: 20000,
+        onload: (res) => {
+          if (res.status !== 200) { reject(Object.assign(new Error(`微軟翻譯失敗（HTTP ${res.status}）`), { status: res.status })); return; }
+          try {
+            const j = JSON.parse(res.responseText);
+            resolve(texts.map((_, i) => String((j[i] && j[i].translations && j[i].translations[0] && j[i].translations[0].text) || '')));
+          } catch (_) { reject(new Error('微軟翻譯的回應無法讀取')); }
+        },
+        onerror: () => reject(new Error('微軟翻譯連線失敗')),
+        ontimeout: () => reject(new Error('微軟翻譯逾時')),
+      });
+    });
+  }
+  async function mtMsTranslate(texts, src) {
+    const out = [];
+    for (let i = 0; i < texts.length; i += 50) {
+      const part = texts.slice(i, i + 50);
+      let r;
+      try { r = await mtMsOnce(part, src, await mtMsToken()); } catch (e) {
+        if (!e || e.status !== 401) throw e;
+        r = await mtMsOnce(part, src, await mtMsToken(true)); // 通行證過期：換一張再試
+      }
+      out.push(...r.map((z) => z.trim()));
+    }
+    return out;
+  }
   /**
    * 英文的結巴（H-HOW、I-I'M、W-W-WHAT）：翻譯前拿掉（不然 Google 會把「H-」留在譯文裡）；
    * 結巴在句子開頭的話（lead），翻好後把中文的第一個字重複一次（你、你過得…）
@@ -4780,22 +4834,42 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     if (lead) t = t.replace(/^([\s「『"“(（]*)([\u3400-\u9FFF])(?!、)/, '$1$2、$2');
     return t;
   }
-  /** 免費翻譯：Google 翻譯（跟 Chrome 右鍵「翻譯成中文」同一套）；連不上時改用 Chrome 的離線翻譯 */
+  /**
+   * 免費翻譯：Google 翻譯（跟 Chrome 右鍵「翻譯成中文」同一套）；Google 不能用時改用微軟翻譯（Edge 內建翻譯那一套），
+   * 再不行才用 Chrome 的離線翻譯（只有電腦版 Chrome 有）
+   */
   async function mtFreeTranslate(texts, lang) {
     const src = MT_LANG[lang] || 'en';
     const prep = texts.map((t) => (src === 'en' ? mtStutter(t) : { text: t, lead: false }));
     const send = prep.map((p) => p.text);
-    let out;
-    try {
-      out = await mtGtx(send, src);
-    } catch (e) {
-      mtGtxFailed = true;
-      mtWarn('Google 翻譯失敗，改用 Chrome 離線翻譯', e);
-      const tr = await mtChromeTranslator(src);
-      if (!tr) throw e;
-      out = await mtTimeout(Promise.all(send.map((t) => tr.translate(t))), 20000);
+    let out = null;
+    let err = null;
+    let by = 'google';
+    if (Date.now() >= mtGtxPauseUntil) {
+      try {
+        out = await mtGtx(send, src);
+      } catch (e) {
+        err = e;
+        mtGtxFailed = true;
+        if (e && e.status === 429) mtGtxPauseUntil = Date.now() + MT_GTX_PAUSE;
+        mtWarn('Google 翻譯失敗，改用微軟翻譯', e);
+      }
     }
-    return out.map((z, i) => (src === 'en' && z ? mtZhFix(z, prep[i].lead) : z));
+    if (!out) {
+      try {
+        out = await mtMsTranslate(send, src);
+        by = 'microsoft';
+      } catch (e) {
+        mtWarn('微軟翻譯也失敗，改用 Chrome 離線翻譯', e);
+        const tr = await mtChromeTranslator(src);
+        if (!tr) throw err || e;
+        out = await mtTimeout(Promise.all(send.map((t) => tr.translate(t))), 20000);
+        by = 'chrome';
+      }
+    }
+    const res = out.map((z, i) => (src === 'en' && z ? mtZhFix(z, prep[i].lead) : z));
+    res.by = by; // 誰翻的（狀態列顯示用）
+    return res;
   }
   /** 依網站猜漫畫原文（免費模式的文字辨識要先指定語言） */
   function mtHostLang() {
@@ -6107,7 +6181,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (!groups.length) return [];
         const zh = await mtFreeTranslate(groups.map((g) => g.text), lang);
         const sh = s.y1 - s.y0;
-        P.engines.add('free');
+        P.engines.add(zh.by === 'microsoft' ? 'ms' : 'free');
         return groups.map((g, i) => ({
           x0: g.x0 / plan.W,
           x1: g.x1 / plan.W,
@@ -6436,7 +6510,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         P.step = '';
         P.error = failed ? mtErrText(lastErr) : '';
         // 免費模式一個字都沒認到的結果不記住：下次打開會再認一次（真的沒有字的頁也只是多花一點時間）
-        if (!failed && (allGemini || P.blocks.length)) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free') || 'gemini') : 'free', plan.W0, plan.H0, refused, false);
+        if (!failed && (allGemini || P.blocks.length)) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free' && m !== 'ms' && m !== 'fix') || 'gemini') : 'free', plan.W0, plan.H0, refused, false);
         // 被切在上下兩張圖中間的字接起來；快速模式再請 Gemini 依前後文修正（只送文字）
         const fixIt = fast && !allGemini && mtEngineState(cfg()).kind === 'gemini';
         stitchAround(P).finally(() => { if (fixIt && P.gen === gen) fixWhenReady(P); });
@@ -6910,7 +6984,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       el.style.bottom = pick[1] === 'bottom' ? (TOUCH ? 'calc(16px + env(safe-area-inset-bottom, 0px))' : '16px') : 'auto';
     }
     function counts() {
-      const c = { done: 0, busy: 0, total: 0, err: 0, frac: 0, free: false, gem: false, fixWait: 0, fixBusy: 0, fixDone: 0, seam: seamRun };
+      const c = { done: 0, busy: 0, total: 0, err: 0, frac: 0, free: false, gtx: false, ms: false, gem: false, fixWait: 0, fixBusy: 0, fixDone: 0, seam: seamRun };
       for (const P of pages.values()) {
         if (!P.queued || P.state === 'skip' || P.state === 'idle') continue;
         c.total++;
@@ -6919,7 +6993,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           c.frac += P.total ? Math.min(1, (P.done + ocrPart(P)) / P.total) * 0.97 : 0.02;
         }
         if (P.fix === 'wait') c.fixWait++; else if (P.fix === 'busy') c.fixBusy++; else if (P.fix === 'done') c.fixDone++;
-        for (const m of P.engines) { if (m === 'free') c.free = true; else if (m !== 'fix') c.gem = true; }
+        for (const m of P.engines) {
+          if (m === 'free') { c.free = true; c.gtx = true; } else if (m === 'ms') { c.free = true; c.ms = true; } else if (m !== 'fix') c.gem = true;
+        }
       }
       return c;
     }
@@ -6990,7 +7066,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       else if (c.err) text = `已翻譯 ${c.done} 張，${c.err} 張失敗`;
       else if (fixing) text = `已翻譯 ${c.done} 張 · ${act}`;
       else {
-        const how = c.gem && !c.free ? 'Gemini' : c.fixDone ? 'Google 翻譯＋Gemini 修正' : c.gem ? 'Gemini＋Google 翻譯' : 'Google 翻譯';
+        const tr = c.ms ? (c.gtx ? 'Google／微軟翻譯' : '微軟翻譯') : 'Google 翻譯';
+        const how = c.gem && !c.free ? 'Gemini' : c.fixDone ? `${tr}＋Gemini 修正` : c.gem ? `Gemini＋${tr}` : tr;
         text = `已翻譯 ${c.done} 張 · ${how}`;
       }
       // 手機畫面窄：不寫「漫畫翻譯」，留位置給進度
@@ -7246,6 +7323,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         pd: { ok: pd.ok, failed: pd.failed || '', langs: Object.keys(pd.langOk || {}), workers: pd.workers.length, checked: Object.keys(pd.checked || {}) },
         lang: { set: cfg().ocrLang || '', guess: mtHostLang(), series: langs[seriesKey()] || '', site: langs[HOST] || '' },
         gtxFailed: mtGtxFailed,
+        gtxPause: mtGtxPauseUntil > Date.now() ? Math.round((mtGtxPauseUntil - Date.now()) / 1000) : 0,
       };
       // 1) 合成的測試圖：白底黑字的 HELLO WORLD
       let t0 = Date.now();
@@ -7260,12 +7338,20 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const groups = await mtTimeout(ocrRun({ blob, y0: 0, y1: 150 }, 'eng', { W: 560, H: 150, W0: 560, H0: 150, k: 1, cuts: [[0, 150]] }, null), 120000);
         out.self.ocr = { ms: ms(t0), by: pd.failed ? 'tesseract' : 'paddle', n: groups.length, text: groups.map((x) => x.text).join(' / ').slice(0, 80) };
       } catch (e) { out.self = Object.assign(out.self || {}, { err: errOf(e), ms: ms(t0) }); }
-      // 2) Google 翻譯
+      // 2) Google 翻譯、微軟翻譯（分開測，看哪一個能用）
       t0 = Date.now();
       try {
-        const z = await mtTimeout(mtFreeTranslate(['HELLO WORLD'], 'eng'), 30000);
+        const z = await mtTimeout(mtGtx(['HELLO WORLD'], 'en'), 30000);
         out.gtx = { ms: ms(t0), zh: String(z[0] || '').slice(0, 20) };
-      } catch (e) { out.gtx = { err: errOf(e), ms: ms(t0) }; }
+      } catch (e) {
+        out.gtx = { err: errOf(e), ms: ms(t0) };
+        if (e && e.status === 429) mtGtxPauseUntil = Date.now() + MT_GTX_PAUSE;
+      }
+      t0 = Date.now();
+      try {
+        const z = await mtTimeout(mtMsTranslate(['HELLO WORLD'], 'en'), 30000);
+        out.ms = { ms: ms(t0), zh: String(z[0] || '').slice(0, 20) };
+      } catch (e) { out.ms = { err: errOf(e), ms: ms(t0) }; }
       // 3) 畫面上這一頁的圖
       const V = [...views.values()].find((v) => { const r = v.img.getBoundingClientRect(); return v.img.isConnected && r.width > 100 && r.bottom > 0 && r.top < innerHeight; });
       if (V) {
