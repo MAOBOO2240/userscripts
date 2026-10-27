@@ -3290,11 +3290,18 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const iw = w - inset * 2;
         const ih = hh - inset * 2;
         let lay = mtLayout(r.zh, iw, ih, { maxFont });
-        // 直排：原文是直排（日文漫畫），或對話框又高又窄。高窄的框橫排時一行只放得下兩三個字，直排比較好讀
+        // 直排：原文是直排（日文漫畫）時優先直排。原文是橫的（英文、韓文）：維持橫排，
+        // 只有框很窄、橫排一行只放得下一兩個字（讀起來斷斷續續），直排的字明顯大很多，或橫排放不下時才直排
         const tall = ih / Math.max(1, iw);
-        if ((r.vertical && hh > w) || tall >= 1.3) {
+        const perLine = (l) => {
+          if (!l || l.vertical || l.lines.length < 3) return 99;
+          const n = l.lines.slice(0, -1).map((t) => [...t.replace(/\s/g, '')].length);
+          return n.reduce((a, b) => a + b, 0) / n.length;
+        };
+        const choppy = !r.vertical && perLine(lay) <= 2.5;
+        if (r.vertical ? hh > w || tall >= 1.3 : tall >= 2.2 || choppy || (lay && lay.overflow)) {
           const v = mtLayout(r.zh, iw, ih, { maxFont, vertical: true });
-          const need = r.vertical ? 0.75 : tall >= 1.8 ? 0.8 : 1.1;
+          const need = r.vertical ? 0.75 : choppy ? 0.8 : 1.3;
           if (v && (!lay || (!v.overflow && (lay.overflow || v.s >= lay.s * need)))) lay = v;
         }
         return lay;
@@ -3936,8 +3943,23 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           if (parts.size === 1 && !cut && dirty <= pin * 0.02) {
             let rin = 0;
             for (let y = qy0; y <= qy1; y++) for (let x = qx0; x <= qx1; x++) if (pm[y * bw + x] !== 2) rin++;
-            if (rin >= (qx1 - qx0 + 1) * (qy1 - qy0 + 1) * 0.96) shape = { kind: 'rect', x0: qx0, y0: qy0, x1: qx1 + 1, y1: qy1 + 1 };
-            else {
+            const rw = qx1 - qx0 + 1;
+            const rh = qy1 - qy0 + 1;
+            // 方框：缺的地方只能在四個角（圓角）或邊上（鋸齒）；角上缺一大塊（另一個方框疊在上面）的不算，白底才不會蓋到別的方框
+            let odd = 0;
+            if (rin >= rw * rh * 0.96) {
+              const rc = Math.max(2, Math.min(rw, rh) * 0.12);
+              for (let y = qy0; y <= qy1; y++) {
+                const dy = Math.min(y - qy0, qy1 - y);
+                for (let x = qx0; x <= qx1; x++) {
+                  if (pm[y * bw + x] !== 2) continue;
+                  const dx = Math.min(x - qx0, qx1 - x);
+                  if (Math.min(dx, dy) > 1 && (dx > rc || dy > rc)) odd++;
+                }
+              }
+            }
+            if (rin >= rw * rh * 0.96 && odd <= Math.max(2, rw * rh * 0.003)) shape = { kind: 'rect', x0: qx0, y0: qy0, x1: qx1 + 1, y1: qy1 + 1 };
+            else if (rin < rw * rh * 0.9) { // 幾乎是方的（圓角方框、角上被別的方框蓋住）不當成橢圓：照實際形狀剪
               // 橢圓：用面積的分布（平均、變異數）估出中心和半徑
               let n0 = 0; let mx = 0; let my = 0; let vx = 0; let vy = 0;
               for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) if (pm[y * bw + x] !== 2) { n0++; mx += x; my += y; vx += x * x; vy += y * y; }
@@ -3948,7 +3970,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
               const inE = (x, y, ka, kb) => ((x - mx) / ka) ** 2 + ((y - my) / kb) ** 2 <= 1;
               const cores = L.map(coreOf);
               // 估出來的橢圓可能比對話框大一點（形狀不是正橢圓）：縮小到整個橢圓都在對話框裡（不會蓋到外框）
-              for (let t = 1; t >= 0.83 && !shape; t -= 0.03) {
+              for (let t = 1; t >= 0.8 && !shape; t -= 0.03) {
                 const ka = ra * t;
                 const kb = rb * t;
                 if (ka < 3 || kb < 3) break;
@@ -3961,7 +3983,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
                     if (inP(x, y)) ein++;
                   }
                 }
-                if (!etot || ein < etot * 0.995) continue;
+                if (!etot || ein < etot * 0.998) continue; // 幾乎整個在對話框裡：白底不會蓋到外框
                 // 字（往內縮過的範圍）都要在橢圓裡，白底才蓋得到
                 const coreIn = cores.every((c) => [[c[0], c[1]], [c[2] + 1, c[1]], [c[0], c[3] + 1], [c[2] + 1, c[3] + 1]]
                   .every(([x, y]) => inE(x - X0, y - Y0, ka * 1.04, kb * 1.04)));
@@ -4078,14 +4100,84 @@ ${NARROW_CSS(':host([data-narrow]) ')}
             if (best >= 0 && bv <= Math.min(widest(...runs[k]), widest(...runs[k + 1])) * 0.75) cuts.push(best);
           }
         }
-        if (!cuts.length) { emit(all, m, s.e[0] > 0, s.e[1] > 0); continue; }
+        /**
+         * 斜斜錯開、連在一起的兩個對話框，或疊在一起、中間沒有外框的旁白方框：上面橫的切法切不開（接起來的那幾列反而最寬）。
+         * 各種角度的直線都試試看，找一條穿過字和字之間、在對話框裡最短的線：比兩邊各自最寬的地方短很多，就是兩個框連在一起的腰
+         */
+        const lineCut = (pm, L) => {
+          const real = L.filter((b) => !extraSet.has(b));
+          if (real.length < 2) return null;
+          const cells = [];
+          for (let k = 0; k < pm.length; k++) if (pm[k] !== 2) cells.push(k);
+          const cx = new Float32Array(cells.length); // 格子中心
+          const cy = new Float32Array(cells.length);
+          cells.forEach((k, i) => { cx[i] = (k % bw) + 0.5; cy[i] = ((k / bw) | 0) + 0.5; });
+          const rects = real.map((b) => [b.x0 / f - X0, b.y0 / f - Y0, b.x1 / f - X0, b.y1 / f - Y0]);
+          let best = null;
+          for (let deg = 0; deg < 180; deg += 6) {
+            const ux = Math.cos((deg * Math.PI) / 180);
+            const uy = Math.sin((deg * Math.PI) / 180);
+            // 每個字框投影到這個方向的範圍；重疊的併成一群，群和群之間的空隙才能切
+            const iv = rects.map((r) => {
+              const ps = [r[0] * ux + r[1] * uy, r[2] * ux + r[1] * uy, r[0] * ux + r[3] * uy, r[2] * ux + r[3] * uy];
+              return [Math.min(...ps), Math.max(...ps)];
+            });
+            const order = iv.map((_, i) => i).sort((p, q) => iv[p][0] - iv[q][0]);
+            const groups = [];
+            for (const i of order) {
+              const g = groups[groups.length - 1];
+              if (g && iv[i][0] <= g.hi) g.hi = Math.max(g.hi, iv[i][1]);
+              else groups.push({ lo: iv[i][0], hi: iv[i][1] });
+            }
+            if (groups.length < 2) continue;
+            // 每一條線（寬一格）在對話框裡有多長
+            const tt = new Float32Array(cells.length);
+            let tmin = Infinity;
+            let tmax = -Infinity;
+            for (let i = 0; i < tt.length; i++) {
+              const t = cx[i] * ux + cy[i] * uy;
+              tt[i] = t;
+              if (t < tmin) tmin = t;
+              if (t > tmax) tmax = t;
+            }
+            const base = Math.floor(tmin);
+            const hist = new Int32Array(Math.ceil(tmax) - base + 2);
+            for (let i = 0; i < tt.length; i++) hist[Math.floor(tt[i]) - base]++;
+            const widest = (a, z) => { let v = 0; for (let j = Math.max(0, Math.floor(a) - base); j <= Math.min(hist.length - 1, Math.ceil(z) - base); j++) v = Math.max(v, hist[j]); return v; };
+            for (let g = 0; g + 1 < groups.length; g++) {
+              let bj = -1;
+              const jz = Math.min(hist.length - 1, Math.floor(groups[g + 1].lo) - base - 1);
+              for (let j = Math.max(0, Math.ceil(groups[g].hi) - base); j <= jz; j++) if (bj < 0 || hist[j] < hist[bj]) bj = j;
+              if (bj < 0) continue;
+              const wa = widest(groups[0].lo, groups[g].hi);
+              const wz = widest(groups[g + 1].lo, groups[groups.length - 1].hi);
+              const ratio = hist[bj] / Math.max(1, Math.min(wa, wz));
+              if (!best || ratio < best.ratio) best = { ratio, ux, uy, t: bj + base + 0.5 };
+            }
+          }
+          // 凸的形狀（一般的對話框）中間的線一定不會比兩邊最寬的地方短；短到 0.78 以下才是兩個框連在一起
+          if (!best || !(best.ratio <= 0.78)) return null;
+          const side = (x, y) => (x * best.ux + y * best.uy < best.t ? 0 : 1);
+          const pms = [new Uint8Array(pm.length).fill(2), new Uint8Array(pm.length).fill(2)];
+          cells.forEach((k, i) => { pms[side(cx[i], cy[i])][k] = pm[k]; });
+          const Ls = [[], []];
+          for (const b of L) Ls[side((b.x0 + b.x1) / 2 / f - X0, (b.y0 + b.y1) / 2 / f - Y0)].push(b);
+          return [[pms[0], Ls[0]], [pms[1], Ls[1]]];
+        };
+        const rowHas = (pm, y) => { for (let x = 0; x < bw; x++) if (pm[y * bw + x] !== 2) return true; return false; };
+        const place = (pm, L, et, eb, depth) => {
+          const sp = depth < 3 ? lineCut(pm, L) : null;
+          if (!sp) { emit(L, pm, et, eb); return; }
+          for (const [pm2, L2] of sp) if (L2.length) place(pm2, L2, et && rowHas(pm2, 0), eb && rowHas(pm2, bh - 1), depth + 1);
+        };
+        if (!cuts.length) { place(m, all, s.e[0] > 0, s.e[1] > 0, 0); continue; }
         const bounds = [0, ...cuts, bh];
         for (let p = 0; p + 1 < bounds.length; p++) {
           const pa = bounds[p];
           const pz = bounds[p + 1];
           const pm = m.map((v, k) => ((k / bw) | 0) >= pa && ((k / bw) | 0) < pz ? v : 2);
           const L = all.filter((b) => { const cy = (b.y0 + b.y1) / 2 / f - Y0; return cy >= pa && cy < pz; });
-          if (L.length) emit(L, pm, p === 0 && s.e[0] > 0, p === bounds.length - 2 && s.e[1] > 0);
+          if (L.length) place(pm, L, p === 0 && s.e[0] > 0, p === bounds.length - 2 && s.e[1] > 0, 1);
         }
       }
       return out;
@@ -4681,7 +4773,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     + 'boing ting ping clap clatter rattle scratch scrape screech skid slam slurp munch chomp crunch nom sip chew lick smooch poke pinch tickle '
     + 'nudge bonk bop wobble jiggle bounce hop leap flop slump stumble tiptoe twirl whirl step peer squint frown pout sulk smile laugh giggle '
     + 'chuckle snicker snort cough sneeze yawn hiccup wheeze groan moan whimper wail scream shriek snarl purr meow woof bark chirp tweet crackle '
-    + 'sizzle fizz gurgle trickle swirl lash zap zing whiz thrum hum brr grr grumble mumble mutter shf fsh sha').split(' ').map(mtSfxNorm));
+    + 'sizzle fizz gurgle trickle swirl lash zap zing whiz thrum hum brr grr grumble mumble mutter shf fsh sha '
+    // 韓漫、日漫翻譯組直接用拼音寫的狀聲詞（TAK、TUK、KWANG、SEUK、ZAWA…）
+    + 'tak ttak tuk ttuk tuck thak tud tsuk kung kwang kwak kwaang pak ppak puk pok chak hwik hwak shwak seuk sseuk suk sak shak shuk '
+    + 'kkuk jjik pik ppik tadak dadak deung ttang jjang bbang pung kwajik jjeok zawa gacha kacha biku piku gyu fuwa').split(' ').map(mtSfxNorm));
   /** 常見的狀聲詞、動作字（也認 NODS、NODDING、GRABBED 這種變化） */
   const mtSfxWord = (w) => MT_SFX_WORDS.has(w) || [w.replace(/e?s$/, ''), w.replace(/s$/, ''), w.replace(/ing$/, ''), w.replace(/ing$/, 'e'), w.replace(/e?d$/, ''), w.replace(/d$/, '')]
     .some((x) => x.length >= 2 && x !== w && MT_SFX_WORDS.has(x));
@@ -5411,7 +5506,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
 
     /* ---------- 快取：翻過的圖不再花額度 ---------- */
     // v5：免費模式的對話框（8 字形分開）、結巴、語氣詞改過了（舊版免費模式翻的重新翻一次；Gemini 看圖翻的沿用）
-    const MTC_VER = 5;
+    // v6：免費模式的對話框（斜斜錯開的連體對話框、疊在一起的旁白方框）、直排的條件、狀聲詞改過了
+    const MTC_VER = 6;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
     function cacheGet(P) {
       let v = store.get(cacheKeyOf(P), null);
@@ -6752,7 +6848,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
 
     /* ---------- 整頁翻譯：整話先下載、先翻好 ---------- */
-    const pg = { on: false, hidden: false, mo: null, scanT: 0, perf: null, dirs: new Set(), noRefDirs: new Set(), scriptsAt: 0, liveT: 0, minW: 0 };
+    const pg = { on: false, hidden: false, mo: null, scanT: 0, perf: null, dirs: new Set(), noRefDirs: new Set(), scriptsAt: 0, liveT: 0, minW: 0, chipOff: false };
     const LIVE_MS = 30 * 60 * 1000;
     const liveAt = () => ((store.get('mt.live', {}) || {})[HOST] || 0);
     function liveSet(on) {
@@ -6862,6 +6958,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (pg.on) return;
       pg.on = true;
       pg.hidden = false;
+      pg.chipOff = false;
       watchPage();
       pageScan();
       pg.mo = new MutationObserver(() => { if (!pg.scanT) pg.scanT = later(() => { pg.scanT = 0; pageScan(); }, 500); });
@@ -6875,6 +6972,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     function pageShow(show) {
       pg.hidden = !show;
+      pg.chipOff = false; // 使用者切換了原文／譯文：狀態列顯示現在是哪一個
       showAll();
       if (show) for (const P of pages.values()) queueP(P);
       afterPageChange();
@@ -6882,6 +6980,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     function pageStop() {
       pg.on = false;
       pg.hidden = false;
+      pg.chipOff = false;
       if (pg.mo) pg.mo.disconnect();
       if (pg.perf) { try { pg.perf.disconnect(); } catch (_) { /* 已停止 */ } }
       clearInterval(pg.liveT);
@@ -7070,7 +7169,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const textEl = h('span', { class: 'mt-chip-text' });
         const retry = h('button', { type: 'button', class: 'mt-retry', text: '重試', hidden: true, title: '重新開始卡住或失敗的圖', onclick: () => retryAll() });
         const toggle = h('button', { type: 'button', onclick: () => pageShow(pg.hidden) });
-        const close = h('button', { type: 'button', class: 'mt-x', 'aria-label': '關閉漫畫翻譯', title: '關閉漫畫翻譯，恢復原文', text: '×', onclick: () => pageStop() });
+        // 手機：× 只收起狀態列（翻譯照常、譯文留在圖上），按「譯」再叫出來；要關掉翻譯用選單。電腦沒有「譯」，× 是關閉翻譯
+        const close = isTouch
+          ? h('button', { type: 'button', class: 'mt-x', 'aria-label': '收起狀態列', title: '收起狀態列（翻譯不會關掉，按「譯」再叫出來）', text: '×', onclick: () => chipDismiss() })
+          : h('button', { type: 'button', class: 'mt-x', 'aria-label': '關閉漫畫翻譯', title: '關閉漫畫翻譯，恢復原文', text: '×', onclick: () => pageStop() });
         const settings = isTouch ? h('button', { type: 'button', class: 'mt-set', text: '設定', onclick: () => openPanel() }) : null;
         chipEl = h('div', { class: 'mt-chip', role: 'status' }, bar, textEl, retry, toggle, settings, close);
         ['pointerdown', 'mousedown', 'click'].forEach((t) => chipEl.addEventListener(t, stopEv));
@@ -7104,7 +7206,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       chipEl.v.fill.style.width = `${Math.round(Math.max(c.busy ? 0.03 : 0, pct) * 1000) / 10}%`;
       chipEl.classList.toggle('is-done', !c.busy);
       const active = c.busy || fixing || stuck || c.err;
-      if (active || pg.hidden || force) {
+      // 使用者按 × 收起來的：翻譯中、出錯都先不跳出來，等按「譯」
+      if ((active || pg.hidden || force) && !pg.chipOff) {
         unlater(chipHideT);
         chipHideT = 0;
         chipEl.classList.add('is-on');
@@ -7115,6 +7218,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       // 翻譯中每秒更新一次（倒數、卡住偵測）
       if (active && !tick) tick = setInterval(() => { if (!stopped) setStatus(); }, 1000);
       else if (!active && tick) { clearInterval(tick); tick = 0; }
+    }
+    /** 手機按狀態列的 ×：只收起狀態列，翻譯照常進行 */
+    function chipDismiss() {
+      pg.chipOff = true;
+      unlater(chipHideT);
+      chipHideT = 0;
+      if (chipEl) chipEl.classList.remove('is-on');
+      fabSync();
     }
     /** 沒在翻譯時收起狀態列；滑鼠停在上面時先不收 */
     function hideChipLater(ms) {
@@ -7134,7 +7245,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     let nearRaf = 0;
     let nearOn = false;
     function onNear(e) {
-      if (nearRaf || !chipEl || !pg.on) return;
+      if (nearRaf || !chipEl || !pg.on || pg.chipOff) return;
       const x = e.clientX;
       const y = e.clientY;
       nearRaf = requestAnimationFrame(() => {
@@ -7203,7 +7314,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           type: 'button', class: 'mt-fab', text: '譯', 'aria-label': '漫畫翻譯',
           onclick: (e) => {
             e.stopPropagation();
-            if (pg.on) { chip(true); fabSync(); } else { warmLocal(); pageToggle(true); }
+            if (pg.on) { pg.chipOff = false; chip(true); fabSync(); } else { warmLocal(); pageToggle(true); }
           },
         });
         r.root.append(fab);
