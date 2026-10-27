@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.9
+// @version      1.5.10
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -42,6 +42,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.10 漫畫翻譯：對話框外框很淡、沒被認出來時，和上面隔得比較開的最後一行（例如 BACK?）會接成同一句一起翻，不會漏翻；
+ *        單獨一句的問句不會被 Gemini 當成狀聲詞拿掉；Gemini 修正時一併送上一張圖最後幾句對話當前後文，
+ *        ME NEITHER 這類短短的回話照著前一句翻，不會亂猜；之前用「快速」翻過的圖會重新翻一次
  * 1.5.9  漫畫翻譯：按「顯示原文」（或 Alt+T）時翻譯先暫停，還沒翻完的圖不再認字、不再送 Google 或 Gemini（已經送出去的做完），
  *        按「顯示譯文」從暫停的地方接著翻；狀態列會寫「顯示原文中・翻譯暫停」
  * 1.5.8  漫畫翻譯：浮水印（翻譯組、網站的名字和網址，例如 RINKO COMICS.COM）不翻也不蓋，原圖保持原樣；壓在對話框邊上的浮水印
@@ -2377,6 +2380,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       'For every line, work out what the original text most likely says from the surrounding lines and the story, then translate it into natural, fluent Traditional Chinese as used in Taiwan (繁體中文，台灣用語) that fits the speaker and the tone.',
       'Each line is one text block, usually a whole speech bubble. Translate every line on its own: never move words from one line to another, and never leave a line empty just because its sentence continues in another line.',
       'Use full-width punctuation and Taiwanese wording. Keep names and terms consistent with the recent translations. Write Traditional Chinese characters only, never Simplified Chinese.',
+      'A short reply that leans on the line before it (Me neither, Me too, Same here, So do I, Why not?) must match what that line actually says (see "Lines just before these" and the numbered lines). If that line is not given, translate the reply as it is without inventing a verb (Me neither → 我也是。).',
+      'Never add content that the line does not say.',
       sfx ? 'Translate sound effects too, as natural Chinese onomatopoeia.'
         : 'Return an empty zh for lines that are only a sound effect, or an action word lettered as a sound effect (like BAM, THUD, DUN, TILT, NOD, GRAB, STARE, GASP, ドン, 쾅), even when it is a real English word. Lines marked [outside bubbles] are not inside any speech bubble; a very short one of those is usually a sound effect.',
       'Return an empty zh for lines that are not story text (OCR noise, watermarks, website names, scanlator or translator credits, page numbers) or that cannot be made sense of.',
@@ -4517,6 +4522,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
               const cxa = (a.x0 + a.x1) / 2;
               const cxb = (b.x0 + b.x1) / 2;
               join = ox >= Math.min(a.w, b.w) * 0.3 || Math.abs(cxa - cxb) < Math.max(a.w, b.w) * 0.25 || Math.abs(a.x0 - b.x0) < hm * 0.5;
+            } else if (-oy <= hm * 1.8 && Math.min(a.h, b.h) / hm >= 0.75) {
+              // 句子還沒結束（上一行後面沒有句點、問號），下面隔得比較開、置中的短短一兩個字（…IF YOU WENT ／ BACK?）：
+              // 多半是同一句話（對話框外框很淡沒被找到時常見），也接起來
+              const [u, w2] = a.y0 <= b.y0 ? [a, b] : [b, a];
+              join = !/[.!?…。！？」』”"'’)]\s*$/.test(u.text) && w2.text.split(' ').length <= 2
+                && Math.abs((u.x0 + u.x1) / 2 - (w2.x0 + w2.x1) / 2) <= Math.max(u.w, w2.w) * 0.15;
             }
           }
         }
@@ -5631,7 +5642,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // v6：免費模式的對話框（斜斜錯開的連體對話框、疊在一起的旁白方框）、直排的條件、狀聲詞改過了
     // v7：不在對話框裡的字，譯文框改用周圍的底色
     // v8：浮水印（翻譯組、網站的名字和網址）不翻，壓在對話框邊上的也不會混進對話
-    const MTC_VER = 8;
+    // v9：句子還沒結束、隔得比較開的最後一行（外框很淡的對話框裡的 BACK?）接成同一句
+    const MTC_VER = 9;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
     function cacheGet(P) {
       let v = store.get(cacheKeyOf(P), null);
@@ -6546,6 +6558,39 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (fq.again) { fq.again = false; fixSoon(0); }
       }
     }
+    /**
+     * 這一批最前面那張圖的上一張圖，最後幾句對話（原文 → 譯文）：
+     * 短短的回話（ME NEITHER、ME TOO）要看前一句才翻得對，前一句常常在上一張圖
+     */
+    function fixBefore(batch) {
+      const inBatch = new Set(batch.map((j) => j.P));
+      const first = [...inBatch].sort((a, b) => a.order - b.order)[0];
+      if (!first) return [];
+      const said = (Q) => Q.blocks.filter((b) => b.zh && !b.blank && (b.msrc || b.src));
+      let Q = stacked(first, -1);
+      if (!Q || inBatch.has(Q) || !said(Q).length) {
+        Q = null;
+        for (const R of pages.values()) if (R.order < first.order && !inBatch.has(R) && said(R).length && (!Q || R.order > Q.order)) Q = R;
+      }
+      if (!Q) return [];
+      return said(Q).sort((a, b) => (a.y0 - b.y0) || (a.x0 - b.x0)).slice(-3).map((b) => `- ${(b.msrc || b.src).replace(/\s+/g, ' ')} → ${b.zh}`);
+    }
+    /**
+     * Gemini 說不是故事文字（譯文空的）、但不在對話框裡的一段：看起來是對話就留著原本的翻譯，不拿掉。
+     * 問句（BACK?），或緊貼在別段字的上下、左右對得上（同一句話被分成兩塊，例如對話框沒被找到時的最後一行）
+     */
+    function fixKeep(b, P) {
+      const src = String(b.msrc || b.src || '').trim();
+      if (/[?？][”"'’)]*$/.test(src) && /\p{L}{2,}/u.test(src)) return true;
+      const k = (P.h0 || 1) / (P.w0 || 1); // 高度換成寬度的比例（lh 是以寬度算的）
+      const lh = Math.max(b.lh || 0, 0.01);
+      return P.blocks.some((o) => {
+        if (o === b || !o.zh || o.blank) return false;
+        const gap = Math.max(o.y0 - b.y1, b.y0 - o.y1) * k;
+        const ox = Math.min(o.x1, b.x1) - Math.max(o.x0, b.x0);
+        return gap <= lh * 1.2 && ox >= Math.min(o.x1 - o.x0, b.x1 - b.x0) * 0.5;
+      });
+    }
     async function runFix(model, batch) {
       const t0 = Date.now();
       const lines = [];
@@ -6556,9 +6601,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const LN = { en: 'English', ja: 'Japanese', ko: 'Korean' };
       const langs = [...new Set(lines.map((l) => LN[l.b.lang]).filter(Boolean))];
       const sfxOn = cfg().sfx === 'translate';
+      const before = fixBefore(batch);
       const text = [
         contextText(),
         langs.length ? `Original language: ${langs.join(', ')}` : '',
+        before.length ? 'Lines just before these, already translated (context only, do not output them):' : '',
+        ...before,
         'Lines:',
         ...lines.map((l, i) => `${i + 1}. ${!sfxOn && !l.b.bub ? '[outside bubbles] ' : ''}${l.src.replace(/\s+/g, ' ')}`),
       ].filter(Boolean).join('\n');
@@ -6594,7 +6642,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
               touched.add(l.b.twinP);
               if (l.b.twinP.w0) cachePut(l.b.twinP, 'free', l.b.twinP.w0, l.b.twinP.h0, false, !fixLines(l.b.twinP).length);
             }
-          } else if (!l.b.bub && !l.b.seam) l.j.P.blocks = l.j.P.blocks.filter((b) => b !== l.b); // 不是對話（雜訊、浮水印）：拿掉；對話框裡的一定是對話，留著原本的翻譯
+          } else if (!l.b.bub && !l.b.seam && !fixKeep(l.b, l.j.P)) l.j.P.blocks = l.j.P.blocks.filter((b) => b !== l.b); // 不是對話（雜訊、浮水印）：拿掉；對話框裡的一定是對話，留著原本的翻譯
           l.b.fixed = true;
           touched.add(l.j.P);
           if (left.get(l.j) <= 0) finish(l.j);
