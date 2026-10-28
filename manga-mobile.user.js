@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.16
+// @version      1.5.17
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,7 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.17  設定面板「顯示翻譯按鈕的網站」旁邊多了「新增這個網站」按鈕：在想加入的漫畫網站打開設定，按一下就加進清單，不用自己打網址
  * 1.5.16  漫畫翻譯：對話框外框很淡、沒被認出來時，和上面隔得比較開的最後一行（例如 BACK?）會接成同一句一起翻，不會漏翻；
  *         單獨一句的問句不會被 Gemini 當成狀聲詞拿掉；Gemini 修正時一併送上一張圖最後幾句對話當前後文，
  *         ME NEITHER 這類短短的回話照著前一句翻，不會亂猜；之前用「快速」翻過的圖，再打開時會重新翻一次
@@ -254,13 +255,14 @@ button, input, select, output { font: inherit; }
 .mb-field input[type=number], .mb-field input[type=text], .mb-field select { height: 30px; padding: 0 8px; border: 1px solid #CDD4DC;
   border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 13px; }
 .mb-field input.is-masked { -webkit-text-security: disc; text-security: disc; }
-.mb-secret { flex-wrap: wrap; }
-.mb-secret-in { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
-.mb-secret-foot { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.mb-secret, .mb-combo { flex-wrap: wrap; }
+.mb-secret-in, .mb-combo-in { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.mb-secret-foot, .mb-combo-foot { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
 .mb-mini { flex: none; height: 30px; padding: 0 10px; border: 1px solid #CDD4DC; border-radius: 7px; background: var(--paper);
   color: var(--ink); font-size: 12.5px; font-weight: 600; cursor: pointer; }
 .mb-mini:hover { border-color: var(--ink-2); }
 .mb-mini:disabled { cursor: progress; opacity: .6; }
+.mb-add:disabled { cursor: default; }
 .mb-mini:focus-visible, .mb-mini-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mb-mini-link { color: var(--accent); font-size: 12.5px; font-weight: 600; text-decoration: none; }
 .mb-mini-link:hover { text-decoration: underline; }
@@ -8539,13 +8541,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       name: '漫畫翻譯',
       site: '漫畫網站',
       desc: TOUCH
-        ? '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，點角落的「譯」就會翻譯這一話；其他網站可以在 Tampermonkey 選單按「翻譯這一話的漫畫」，或「在這個網站顯示翻譯按鈕」。'
-        : '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕；任何網站都可以按 Alt+T 翻譯整頁。',
+        ? '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，點角落的「譯」就會翻譯這一話；其他網站在下面按「新增這個網站」，或在 Tampermonkey 選單按「翻譯這一話的漫畫」。'
+        : '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕（其他網站在下面按「新增這個網站」）；任何網站都可以按 Alt+T 翻譯整頁。',
       defaults: { apiKey: '', mode: 'fast', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
       fields: [
         { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k) },
         { key: 'mode', label: '翻譯方式', type: 'select', options: [['fast', '快速：Google 翻譯＋Gemini 修正（省次數）'], ['accurate', '精準：Gemini 看圖翻譯（很耗次數）']] },
-        { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站' },
+        { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站', addHere: true },
         { key: 'auto', label: '在這些網站', type: 'select', options: [['off', '按了才翻譯'], ['on', '打開漫畫就自動翻譯整話']] },
         { key: 'sfx', label: '狀聲詞', type: 'select', options: [['skip', '不翻'], ['translate', '也翻']] },
         { key: 'ocrLang', label: '漫畫原文（辨識文字用）', type: 'select', options: [['auto', '自動判斷'], ['eng', '英文'], ['kor', '韓文'], ['jpn', '日文']] },
@@ -9007,12 +9009,43 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     if (f.type === 'list') {
       const input = h('input', { type: 'text', spellcheck: 'false', placeholder: f.placeholder || '' });
       const show = () => { input.value = (cfgVal() || []).join(', '); };
+      // 「新增這個網站」：按一下就把現在這個網站加進清單，不用自己打網址
+      const here = f.addHere ? HOST.replace(/^www\./, '') : '';
+      const note = here ? h('span', { class: 'mb-note', 'aria-live': 'polite' }) : null;
+      const add = here ? h('button', { type: 'button', class: 'mb-mini mb-add' }) : null;
+      const sync = () => {
+        if (!add) return;
+        const hit = !!mtSiteMatch(cfgVal() || []);
+        add.disabled = hit;
+        add.textContent = hit ? '已在清單裡' : '新增這個網站';
+        add.title = hit ? `${here} 已經在清單裡` : `把 ${here} 加進清單`;
+      };
       show();
+      sync();
       input.addEventListener('change', () => {
         const list = input.value.split(/[\s,，、;；]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
         saveCfg(m, f.key, Array.from(new Set(list)));
         show();
+        sync();
       });
+      if (add) {
+        add.addEventListener('click', () => {
+          const list = cfgVal() || [];
+          if (mtSiteMatch(list)) return;
+          saveCfg(m, f.key, Array.from(new Set(list.concat([here]))));
+          show();
+          sync();
+          note.className = 'mb-note is-ok';
+          note.textContent = `已新增 ${here}`;
+        });
+        return {
+          el: h('div', { class: 'mb-field mb-field-wide mb-combo' },
+            h('label', { class: 'mb-combo-in' }, h('span', { text: f.label }), input),
+            add,
+            h('div', { class: 'mb-combo-foot' }, note)),
+          refresh: () => { if (!input.matches(':focus')) show(); sync(); },
+        };
+      }
       return {
         el: h('label', { class: 'mb-field mb-field-wide' }, h('span', { text: f.label }), input),
         refresh: () => { if (!input.matches(':focus')) show(); },
