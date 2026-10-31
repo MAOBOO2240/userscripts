@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.17
+// @version      1.5.18
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.18  漫畫翻譯：英文改用大一點的認字模型（和日文同一個），手寫、麥克筆、描邊、歪斜這些奇怪的字形認得準很多；
+ *         每個網站第一次翻譯時要下載的檔案變大（約 25 MB，建議連 Wi-Fi；日文不用再另外下載），認字慢一點；之前用「快速」翻過的圖，再打開時會重新翻一次
  * 1.5.17  設定面板「顯示翻譯按鈕的網站」旁邊多了「新增這個網站」按鈕：在想加入的漫畫網站打開設定，按一下就加進清單，不用自己打網址
  * 1.5.16  漫畫翻譯：對話框外框很淡、沒被認出來時，和上面隔得比較開的最後一行（例如 BACK?）會接成同一句一起翻，不會漏翻；
  *         單獨一句的問句不會被 Gemini 當成狀聲詞拿掉；Gemini 修正時一併送上一張圖最後幾句對話當前後文，
@@ -1964,6 +1966,19 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   const MT_ORT = 'onnxruntime-web@1.30.0/dist/';
   const MT_PD_TINY = '@arcships/light-ocr-model-ppocrv6-tiny@0.1.0/bundle/';
   const MT_PD_SMALL = '@arcships/light-ocr-model-ppocrv6-small@0.3.4/bundle/';
+  // PP-OCRv6 small 認字模型：英文、日文共用（key 一樣，只下載、載入一次）
+  const MT_PD_REC_SMALL = {
+    key: 'small',
+    size: 21159378,
+    src: [...mtNpm(MT_PD_SMALL + 'rec/inference.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634'),
+      [MT_PD_HF + 'recognition/PP-OCRv6_small_rec.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634'],
+      [MT_PD_GH + 'recognition/PP-OCRv6_small_rec.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634']],
+    dict: {
+      size: 112408,
+      src: [...mtNpm(MT_PD_SMALL + 'rec/dictionary.json', '6e93cc028ff774c8bef0801ad08391f8284f7ef897013a9aeb9cbd515db3276d'),
+        [MT_PD_RAW + 'recognition/ppocrv6_dict.txt', '41557512862dfe31970cf22407742b629725461dd84c0d8771bde9c87c2202c8']],
+    },
+  };
   /** 每個檔案：大小（進度條用）、下載來源和 SHA-256（依序試，下載後核對內容） */
   const MT_PD = {
     ort: { size: 73054, src: mtNpm(MT_ORT + 'ort.wasm.bundle.min.mjs', '11e64bd8ffe11bd1a2a2f0d6275fdfbbba7262f0b76b99b53d228a8a22ef3d90') },
@@ -1974,30 +1989,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         [MT_PD_HF + 'detection/PP-OCRv6_tiny_det.onnx', '193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8'],
         [MT_PD_GH + 'detection/PP-OCRv6_tiny_det.onnx', '193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8']],
     },
-    // 英文（和其他拉丁字母）：PP-OCRv6 tiny，小又快
-    eng: {
-      size: 4462639,
-      src: [...mtNpm(MT_PD_TINY + 'rec/inference.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6'),
-        [MT_PD_HF + 'recognition/PP-OCRv6_tiny_rec.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6'],
-        [MT_PD_GH + 'recognition/PP-OCRv6_tiny_rec.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6']],
-      dict: {
-        size: 41009,
-        src: [...mtNpm(MT_PD_TINY + 'rec/dictionary.json', '7db82ee59f535f27cedd9f5893e24bf5ed141ef51f5cb076d88053968102c1d1'),
-          [MT_PD_RAW + 'recognition/ppocrv6_tiny_dict.txt', '2f3717bbd530b681b6db3be35cc485e8a41a932b9558b833986bf0894eb21f2d']],
-      },
-    },
-    // 日文：PP-OCRv6 small（tiny 沒有假名）
-    jpn: {
-      size: 21159378,
-      src: [...mtNpm(MT_PD_SMALL + 'rec/inference.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634'),
-        [MT_PD_HF + 'recognition/PP-OCRv6_small_rec.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634'],
-        [MT_PD_GH + 'recognition/PP-OCRv6_small_rec.onnx', '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634']],
-      dict: {
-        size: 112408,
-        src: [...mtNpm(MT_PD_SMALL + 'rec/dictionary.json', '6e93cc028ff774c8bef0801ad08391f8284f7ef897013a9aeb9cbd515db3276d'),
-          [MT_PD_RAW + 'recognition/ppocrv6_dict.txt', '41557512862dfe31970cf22407742b629725461dd84c0d8771bde9c87c2202c8']],
-      },
-    },
+    // 英文（和其他拉丁字母）、日文：PP-OCRv6 small。tiny 小又快，但沒有假名，手寫、描邊、歪斜這些奇怪的英文字形也常認錯
+    eng: MT_PD_REC_SMALL,
+    jpn: MT_PD_REC_SMALL,
     // 韓文：PP-OCRv5 韓文模型（v6 沒有韓文）
     kor: {
       size: 13443278,
@@ -2010,6 +2004,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       },
     },
   };
+  /** 這個語言用哪個認字模型（共用同一個模型的語言，key 一樣） */
+  const mtPdKey = (lang) => (MT_PD[lang] && MT_PD[lang].key) || lang;
   // PaddleOCR 同時開幾個（手機一個就好，比較省記憶體）
   const MT_PD_N = (() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })() ? 1 : Math.min(2, MT_TESS_N);
   const MT_LANG = { eng: 'en', kor: 'ko', jpn: 'ja' };
@@ -3584,7 +3580,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       return L;
     }
 
-    async function load(key, bytes, dict) {
+    async function load(key, bytes, dict, langs) {
       const sess = await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
       if (key === 'det') { S.det = sess; return; }
       // 用一次很小的輸入問出模型有幾個字，對齊字典
@@ -3593,8 +3589,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const out = await sess.run(feeds);
       const C = out[sess.outputNames[0]].dims[2];
       const list = Array.isArray(dict) ? dict : String(dict || '').replace(/\r/g, '').split('\n');
-      S.rec[key] = sess;
-      S.labels[key] = makeLabels(list, C);
+      const labels = makeLabels(list, C);
+      // 幾個語言共用一個模型（英文、日文）：每個語言都指向同一個，認字時照語言找
+      for (const l of langs && langs.length ? langs : [key]) {
+        S.rec[l] = sess;
+        S.labels[l] = labels;
+      }
     }
 
     /* ---------- 找字：機率圖 → 一塊一塊的字框 ---------- */
@@ -4299,7 +4299,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           ort.env.logLevel = 'error';
           post({ type: 'ok', id: m.id });
         } else if (m.type === 'model') {
-          await load(m.key, m.bytes, m.dict);
+          await load(m.key, m.bytes, m.dict, m.langs);
           post({ type: 'ok', id: m.id });
         } else if (m.type === 'ocr') {
           const bmp = await createImageBitmap(m.blob);
@@ -4342,8 +4342,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     return n / s.length >= 0.7;
   }
 
-  /** 英文的常見認錯：重音符號（Í → I）、字中間的 0／1（AG0 → AGO）、混進來的中日文、全大寫字裡的小寫 */
+  /** 英文的常見認錯：重音符號（Í → I）、全形的標點（！ → !）、字中間的 0／1（AG0 → AGO）、混進來的中日文、全大寫字裡的小寫 */
   function mtPaddleEnFix(t) {
+    t = t.replace(/[\uFF01-\uFF5E]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/。/g, '.').replace(/、/g, ',');
     t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     t = t.replace(/[^\x20-\x7E\u00A0-\u024F\u2010-\u2027]/g, ' ').replace(/\s+/g, ' ').trim();
     return t.replace(/[A-Za-z0-9']+/g, (w) => {
@@ -5627,7 +5628,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // v7：不在對話框裡的字，譯文框改用周圍的底色
     // v8：浮水印（翻譯組、網站的名字和網址）不翻，壓在對話框邊上的也不會混進對話
     // v9：句子還沒結束、隔得比較開的最後一行（外框很淡的對話框裡的 BACK?）接成同一句
-    const MTC_VER = 9;
+    // v10：英文改用大一點的認字模型（PP-OCRv6 small），奇怪的字形認得比較準
+    const MTC_VER = 10;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
     function cacheGet(P) {
       let v = store.get(cacheKeyOf(P), null);
@@ -6160,12 +6162,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     /** 認字程式和這個語言的模型準備好（第一次要下載，之後從 IndexedDB 讀；要下載的檔案一起下載） */
     function pdReady(lang, P) {
-      if (pd.ok && pd.langOk[lang]) return Promise.resolve();
+      const key = mtPdKey(lang); // 英文、日文共用一個模型
+      if (pd.ok && pd.langOk[key]) return Promise.resolve();
       const gen = pd.gen;
       const a = MT_PD[lang];
       const need = [];
       if (!pd.ready) need.push(MT_PD.ort, MT_PD.wasm, MT_PD.det);
-      if (!pd.langP[lang]) need.push(a, a.dict);
+      if (!pd.langP[key]) need.push(a, a.dict);
       if (need.length) {
         Object.assign(loc, { status: '準備文字辨識', prog: 0 });
         // 進度：幾個檔案合起來算
@@ -6199,21 +6202,23 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           })();
           pd.ready.then(() => { if (gen === pd.gen) pd.ok = true; }, () => { if (gen === pd.gen) pd.ready = null; });
         }
-        if (!pd.langP[lang]) {
+        if (!pd.langP[key]) {
           const files = Promise.all([get(a), get(a.dict)]);
-          pd.langP[lang] = (async () => {
+          pd.langP[key] = (async () => {
             const [m, d] = await files;
             await pd.ready;
             if (gen !== pd.gen) throw mtErr('cancel');
             preparing();
             const txt = new TextDecoder().decode(d.buf);
             const dict = /\.json$/.test(d.url) ? JSON.parse(txt).characters : txt;
-            await Promise.all(pd.workers.map((wk) => wk.call({ type: 'model', key: lang, bytes: m.buf, dict }, null, 60000)));
+            // 共用這個模型的語言（英文、日文）都指向同一個載入好的模型
+            const langs = Object.keys(MT_LANG).filter((l) => mtPdKey(l) === key);
+            await Promise.all(pd.workers.map((wk) => wk.call({ type: 'model', key, langs, bytes: m.buf, dict }, null, 60000)));
           })();
-          pd.langP[lang].then(() => { if (gen === pd.gen) pd.langOk[lang] = true; }, () => { if (gen === pd.gen) delete pd.langP[lang]; });
+          pd.langP[key].then(() => { if (gen === pd.gen) pd.langOk[key] = true; }, () => { if (gen === pd.gen) delete pd.langP[key]; });
         }
       }
-      const p = Promise.all([pd.ready, pd.langP[lang]]);
+      const p = Promise.all([pd.ready, pd.langP[key]]);
       // 下載、準備中：狀態列和圖上顯示進度
       if (P) step(P, '準備文字辨識');
       if (!loc.making) {
