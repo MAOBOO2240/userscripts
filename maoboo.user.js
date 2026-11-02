@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.13
+// @version      1.5.14
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -42,6 +42,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.14 漫畫翻譯：iPhone、iPad 的英文認字改回小一點的模型（大模型在 Safari 載入時記憶體不足，之前會退回舊的 Tesseract、認得很差）；
+ *        其他裝置大模型載入不了時也改用小模型再試，不會直接退回 Tesseract
  * 1.5.13 漫畫翻譯：設定面板的網站清單下面多了「貼上漫畫網址」的格子，貼上任何一話的網址（例如 https://mgread.io/manga/…/chapter-4/）
  *        會自動取出網站加進清單；預設清單加上 mgread.io（改過清單的也會幫忙加上一次）；
  *        浮水印網址前面的引導句（例如 Read Early on LunaToons.Org 的 Read Early on）也不翻
@@ -119,6 +121,8 @@
   const MT_TOKEN = `${EDITION}-${Math.random().toString(36).slice(2, 8)}`;
   /** 觸控裝置（手機、平板）：沒有「滑鼠移上去」這件事 */
   const TOUCH = (() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })();
+  // iPhone、iPad（iPad 的 Safari 會說自己是 Mac，用觸控點數分辨）
+  const IOS = (() => { try { return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); } catch (_) { return false; } })();
   /** 最近的錯誤（「複製診斷資訊」會一起附上；手機上看不到主控台） */
   const DIAG_ERRS = [];
   function mtWarn(msg, ...args) {
@@ -2003,6 +2007,19 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         [MT_PD_RAW + 'recognition/ppocrv6_dict.txt', '41557512862dfe31970cf22407742b629725461dd84c0d8771bde9c87c2202c8']],
     },
   };
+  // PP-OCRv6 tiny：只有英文（沒有假名），小又省記憶體。iPhone 的 Safari 載入 small 會記憶體不足，英文改用這個
+  const MT_PD_REC_TINY = {
+    key: 'tiny',
+    size: 4462639,
+    src: [...mtNpm(MT_PD_TINY + 'rec/inference.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6'),
+      [MT_PD_HF + 'recognition/PP-OCRv6_tiny_rec.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6'],
+      [MT_PD_GH + 'recognition/PP-OCRv6_tiny_rec.onnx', '9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6']],
+    dict: {
+      size: 41009,
+      src: [...mtNpm(MT_PD_TINY + 'rec/dictionary.json', '7db82ee59f535f27cedd9f5893e24bf5ed141ef51f5cb076d88053968102c1d1'),
+        [MT_PD_RAW + 'recognition/ppocrv6_tiny_dict.txt', '2f3717bbd530b681b6db3be35cc485e8a41a932b9558b833986bf0894eb21f2d']],
+    },
+  };
   /** 每個檔案：大小（進度條用）、下載來源和 SHA-256（依序試，下載後核對內容） */
   const MT_PD = {
     ort: { size: 73054, src: mtNpm(MT_ORT + 'ort.wasm.bundle.min.mjs', '11e64bd8ffe11bd1a2a2f0d6275fdfbbba7262f0b76b99b53d228a8a22ef3d90') },
@@ -2028,8 +2045,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       },
     },
   };
-  /** 這個語言用哪個認字模型（共用同一個模型的語言，key 一樣） */
-  const mtPdKey = (lang) => (MT_PD[lang] && MT_PD[lang].key) || lang;
+  // 省記憶體的模型（iPhone，或 small 載入時記憶體不足的裝置）：只有英文有
+  const MT_PD_LITE = { eng: MT_PD_REC_TINY };
   // PaddleOCR 同時開幾個（手機一個就好，比較省記憶體）
   const MT_PD_N = (() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })() ? 1 : Math.min(2, MT_TESS_N);
   const MT_LANG = { eng: 'en', kor: 'ko', jpn: 'ja' };
@@ -3473,7 +3490,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }));
   }
   const mtIdbGet = (k) => mtIdbDo('readonly', (st) => st.get(k));
-  const mtPdAll = () => ['ort', 'wasm', 'det', 'eng', 'jpn', 'kor'].flatMap((k) => [MT_PD[k], MT_PD[k].dict].filter(Boolean));
+  const mtPdAll = () => ['ort', 'wasm', 'det', 'eng', 'jpn', 'kor'].map((k) => MT_PD[k]).concat(Object.values(MT_PD_LITE)).flatMap((a) => [a, a.dict].filter(Boolean));
   /** 換了模型版本後，舊的用不到了：刪掉 */
   async function mtIdbPrune() {
     const keep = new Set(mtPdAll().flatMap((a) => a.src.map((s) => s[1])));
@@ -6169,7 +6186,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const ocrPart = (P) => Math.min(0.99, loc.workers.concat(pd.workers).reduce((n, w) => n + (w.busy && w.page === P ? w.prog : 0), 0));
 
     /* ---------- 免費模式的認字：PaddleOCR（背景執行緒，同時開幾個；載入失敗才用 Tesseract） ---------- */
-    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [], checked: {} };
+    // lite：英文用省記憶體的 tiny 模型（iPhone 一開始就用；其他裝置載入 small 記憶體不足時改用，並記住）
+    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [], checked: {}, lite: IOS || !!store.get('mt.pdLite', false) };
+    /** 這個語言用哪個認字模型，和它的 key（共用同一個模型的語言 key 一樣） */
+    const pdEntry = (lang) => (pd.lite && MT_PD_LITE[lang]) || MT_PD[lang];
+    const pdKey = (lang) => pdEntry(lang).key || lang;
     /** 開一個背景執行緒（網站不允許時改用網頁自己的 Worker） */
     function pdWorker(code) {
       let w = null;
@@ -6209,10 +6230,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     /** 認字程式和這個語言的模型準備好（第一次要下載，之後從 IndexedDB 讀；要下載的檔案一起下載） */
     function pdReady(lang, P) {
-      const key = mtPdKey(lang); // 英文、日文共用一個模型
+      const key = pdKey(lang); // 英文、日文共用一個模型
       if (pd.ok && pd.langOk[key]) return Promise.resolve();
       const gen = pd.gen;
-      const a = MT_PD[lang];
+      const a = pdEntry(lang);
       const need = [];
       if (!pd.ready) need.push(MT_PD.ort, MT_PD.wasm, MT_PD.det);
       if (!pd.langP[key]) need.push(a, a.dict);
@@ -6251,16 +6272,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         }
         if (!pd.langP[key]) {
           const files = Promise.all([get(a), get(a.dict)]);
+          const tag = (e) => { throw Object.assign(e instanceof Error ? e : new Error(String(e)), { model: key }); }; // 這個模型本身下載不到、載入不了
           pd.langP[key] = (async () => {
-            const [m, d] = await files;
+            const [m, d] = await files.catch(tag);
             await pd.ready;
             if (gen !== pd.gen) throw mtErr('cancel');
             preparing();
             const txt = new TextDecoder().decode(d.buf);
             const dict = /\.json$/.test(d.url) ? JSON.parse(txt).characters : txt;
             // 共用這個模型的語言（英文、日文）都指向同一個載入好的模型
-            const langs = Object.keys(MT_LANG).filter((l) => mtPdKey(l) === key);
-            await Promise.all(pd.workers.map((wk) => wk.call({ type: 'model', key, langs, bytes: m.buf, dict }, null, 60000)));
+            const langs = Object.keys(MT_LANG).filter((l) => pdEntry(l) === a);
+            await Promise.all(pd.workers.map((wk) => wk.call({ type: 'model', key, langs, bytes: m.buf, dict }, null, 60000))).catch(tag);
           })();
           pd.langP[key].then(() => { if (gen === pd.gen) pd.langOk[key] = true; }, () => { if (gen === pd.gen) delete pd.langP[key]; });
         }
@@ -6346,6 +6368,19 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         ? '新的文字辨識（PaddleOCR）在這個瀏覽器認不出測試用的字，先改用舊的辨識方式，準確度會差一些。'
         : '新的文字辨識（PaddleOCR）在這個網站載入失敗，先改用舊的辨識方式，準確度會差一些。可以按狀態列的「重試」再試一次。', { title: '漫畫翻譯' });
     }
+    /**
+     * 載入英文的 small 模型失敗（iPhone 等記憶體不足、下載不到）：改用省記憶體的 tiny 再試一次（記憶體不足的話記住，下次直接用 tiny）；
+     * 還是不行才改用 Tesseract
+     */
+    function pdLiteFallback(e, lang) {
+      const key = e && e.model;
+      if (!key || !MT_PD_LITE[lang] || MT_PD_LITE[lang].key === key || pdEntry(lang).key !== key) return false;
+      pd.lite = true;
+      if (/memory/i.test(String((e && e.message) || e))) store.set('mt.pdLite', true);
+      mtWarn('PaddleOCR 的 small 模型載入失敗，英文改用 tiny 模型', e);
+      delete pd.checked.eng;
+      return true;
+    }
     function pdReset() {
       pd.gen++;
       mtPdLoading.clear(); // 卡住的下載不要再等，重新下載
@@ -6358,7 +6393,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       s.ocr = s.ocr || {};
       if (s.ocr[lang]) return s.ocr[lang]; // 判斷語言時已經辨識過
       // 先用 PaddleOCR；網站不允許、下載不到時才用 Tesseract
-      if (!pd.failed && s.blob) {
+      for (let again = true; !pd.failed && s.blob;) {
         try {
           const groups = await pdRun(s, lang, P);
           s.ocr[lang] = groups;
@@ -6366,7 +6401,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           return groups;
         } catch (e) {
           if (e && e.kind === 'cancel') throw e;
-          if (e && e.setup) pdFail(e); else mtWarn('PaddleOCR 這一段失敗，改用 Tesseract', e);
+          if (e && e.setup) {
+            // 英文的 small 模型載入不了：換成 tiny 再試一次（只試一次）
+            if (again && pdLiteFallback(e, lang)) { again = false; continue; }
+            pdFail(e);
+          } else mtWarn('PaddleOCR 這一段失敗，改用 Tesseract', e);
+          break;
         }
       }
       const scale = plan.W < 800 ? 1.5 : 1;
@@ -7759,7 +7799,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const langs = store.get('mt.lang', {}) || {};
       const out = {
         env: { coi: !!self.crossOriginIsolated, oc: typeof OffscreenCanvas === 'function', cores: navigator.hardwareConcurrency || 0 },
-        pd: { ok: pd.ok, failed: pd.failed || '', langs: Object.keys(pd.langOk || {}), workers: pd.workers.length, checked: Object.keys(pd.checked || {}) },
+        pd: { ok: pd.ok, lite: pd.lite, failed: pd.failed || '', langs: Object.keys(pd.langOk || {}), workers: pd.workers.length, checked: Object.keys(pd.checked || {}) },
         lang: { set: cfg().ocrLang || '', guess: mtHostLang(), series: langs[seriesKey()] || '', site: langs[HOST] || '' },
         gtxFailed: mtGtxFailed,
         gtxPause: mtGtxPauseUntil > Date.now() ? Math.round((mtGtxPauseUntil - Date.now()) / 1000) : 0,
