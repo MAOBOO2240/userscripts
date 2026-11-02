@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.18
+// @version      1.5.19
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -41,6 +41,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.19  設定面板的網站清單下面多了「貼上漫畫網址」的格子：貼上任何一話的網址（例如 https://mgread.io/manga/…/chapter-4/），
+ *         會自動取出網站加進清單；預設清單加上 mgread.io（改過清單的也會幫忙加上）；
+ *         浮水印網址前面的引導句（例如 Read Early on LunaToons.Org 的 Read Early on）也不翻
  * 1.5.18  漫畫翻譯：英文改用大一點的認字模型（和日文同一個），手寫、麥克筆、描邊、歪斜這些奇怪的字形認得準很多；
  *         每個網站第一次翻譯時要下載的檔案變大（約 25 MB，建議連 Wi-Fi；日文不用再另外下載），認字慢一點；之前用「快速」翻過的圖，再打開時會重新翻一次
  * 1.5.17  設定面板「顯示翻譯按鈕的網站」旁邊多了「新增這個網站」按鈕：在想加入的漫畫網站打開設定，按一下就加進清單，不用自己打網址
@@ -273,6 +276,7 @@ button, input, select, output { font: inherit; }
 .mb-note.is-bad { color: #B42318; }
 .mb-field input[type=number] { width: 76px; font-variant-numeric: tabular-nums; }
 .mb-field input[type=text] { flex: 1; min-width: 0; }
+.mb-field input.mb-paste { flex: 1 1 220px; }
 .mb-field input[type=range] { width: 168px; margin: 0; accent-color: var(--accent); }
 .mb-field input.mb-pct { width: 60px; padding: 0 4px 0 8px; font-weight: 650; text-align: right; }
 .mb-pct-unit { margin-left: -4px; color: var(--ink); font-weight: 650; }
@@ -1943,8 +1947,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    * → 白底蓋在原文上
    * ==================================================================== */
 
-  const MT_SITES = ['kingofshojo.com', 'ezmanga.org', 'comix.to', 'telltome.net', 'g-mh.org', 'baozimh.org', 'bzmh.org', 'baozimh.com',
+  const MT_SITES = ['kingofshojo.com', 'ezmanga.org', 'comix.to', 'telltome.net', 'mgread.io', 'g-mh.org', 'baozimh.org', 'bzmh.org', 'baozimh.com',
     'comic.naver.com', 'webtoon.kakao.com', 'page.kakao.com', 'webtoons.com', 'lezhin.com', 'toptoon.com', 'bomtoon.com', 'nhentai.net'];
+  // 後來才加進預設清單的網站：改過網站清單的人（清單存在設定裡，不會自己多出新的預設網站），啟動時幫忙加一次
+  const MT_SITES_ADDED = ['mgread.io'];
   const MT_FONT = '"Microsoft JhengHei", "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", "Source Han Sans TC", "Heiti TC", sans-serif';
   const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
   // 拿不到模型清單時用這份；順序就是優先順序
@@ -4397,6 +4403,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   const MT_WM_LOOSE = /(?<![\p{L}\p{N}])[\p{L}\p{N}][\p{L}\p{N}-]{2,40}(?:\s?\.\s?|\s)com(?![\p{L}\p{N}-])/iu;
   // 像英文單字的網域結尾（.to、.me…）：整行只有網址、而且有小寫字母或數字才算（全大寫的 WHAT.TO 多半是句點後面少了空格）
   const MT_WM_WEAK = /^(?:www\.)?[\p{L}\p{N}][\p{L}\p{N}-]{2,40}\.(?:to|me|co|gg|moe|top|live|in|so|ac|app|fun|one|pro|art|ink|life|link|store|space|tech|world|cloud|lol)(?:\/\S*)?$/iu;
+  // 浮水印網址前面那一句（Read early on ／ Read more at ／ Read first at ／ Available on…）：要跟網址排在一起才算。
+  // 比對時拿掉空格和標點（認字常常漏掉空格：ReadEarly on）
+  const MT_WM_LEAD = /^(?:(?:youcan)?read(?:it|this|more|ahead|early|earlier|first|faster|now|free|online|forfree|the(?:latest|next|new|full)(?:chapters?|episodes?)?|(?:new|latest|more)chapters?|chapters?)*|reading|continuereading|keepreading|visit(?:us)?|findus|joinus|followus|supportus|available|exclusively|only)(?:on|at|in)?$/i;
   /** 這一行是不是浮水印：有網址，旁邊頂多再幾個字（網站的名字、READ AT 之類） */
   function mtIsWatermark(text) {
     const s = String(text || '').replace(/\s+/g, ' ').trim();
@@ -4411,11 +4420,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     return [MT_WM_URL, MT_WM_COM, MT_WM_TLD].some((re) => few(rest(re), 3)) || few(rest(MT_WM_LOOSE), 1);
   }
   /**
-   * 和浮水印網址排在一起的短字（網站的名字，例如 COMICS.COM 上面的 RINKO）：也是浮水印。
+   * 和浮水印網址排在一起的短字（網站的名字，例如 COMICS.COM 上面的 RINKO），或前面的引導句（Read early on）：也是浮水印。
    * 對話框裡的字只有壓在對話框邊上、超出去的才算（對話不會跑到對話框外面）
    */
   function mtWmNear(l, marks, B) {
-    if (l.text.split(' ').length > 2 || l.text.replace(/[^\p{L}\p{N}]/gu, '').length > 16) return false;
+    const lead = MT_WM_LEAD.test(l.text.replace(/[^\p{L}\p{N}]/gu, ''));
+    if (!lead && (l.text.split(' ').length > 2 || l.text.replace(/[^\p{L}\p{N}]/gu, '').length > 16)) return false;
     const b = l.bub >= 0 ? B[l.bub] : null;
     if (b) {
       const cy = (l.y0 + l.y1) / 2;
@@ -4424,12 +4434,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     return marks.some((k) => {
       const r = l.h / Math.max(1, k.h);
-      if (r < 0.55 || r > 2.4) return false;
+      // 「Read early on」這種引導句常常比網址小很多（網址用大字）：大小差多一點也算
+      if (lead ? r < 0.25 || r > 4 : r < 0.55 || r > 2.4) return false;
       const hm = Math.max(l.h, k.h);
       const oy = Math.min(l.y1, k.y1) - Math.max(l.y0, k.y0);
       if (oy >= Math.min(l.h, k.h) * 0.5) return Math.max(l.x0 - k.x1, k.x0 - l.x1) <= hm * 0.8; // 同一行、左右接著
-      if (-oy > hm * 0.9) return false; // 上下隔太遠
-      return Math.abs((l.x0 + l.x1) / 2 - (k.x0 + k.x1) / 2) <= Math.max(l.w, k.w) * 0.35 || Math.abs(l.x0 - k.x0) <= hm * 0.6 || Math.abs(l.x1 - k.x1) <= hm * 0.6;
+      if (-oy > hm * (lead ? 1.2 : 0.9)) return false; // 上下隔太遠
+      return Math.abs((l.x0 + l.x1) / 2 - (k.x0 + k.x1) / 2) <= Math.max(l.w, k.w) * (lead ? 0.6 : 0.35) || Math.abs(l.x0 - k.x0) <= hm * 0.6 || Math.abs(l.x1 - k.x1) <= hm * 0.6;
     });
   }
 
@@ -5102,19 +5113,37 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   }
 
   const mtEscRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  /** 這個網站在不在「顯示翻譯按鈕」清單裡，回傳符合的那一項 */
-  function mtSiteMatch(list) {
+  /** 這個網站（不給的話是現在這個網站）在不在「顯示翻譯按鈕」清單裡，回傳符合的那一項 */
+  function mtSiteMatch(list, host = HOST) {
     for (const raw of list || []) {
       const e = String(raw || '').trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/?#].*$/, '');
       if (!e) continue;
       if (e === '*') return raw;
       if (e.includes('*')) {
-        if (new RegExp('^' + e.split('*').map(mtEscRe).join('.*') + '$').test(HOST)) return raw;
+        if (new RegExp('^' + e.split('*').map(mtEscRe).join('.*') + '$').test(host)) return raw;
         continue;
       }
-      if (HOST === e || HOST.endsWith('.' + e)) return raw;
+      if (host === e || host.endsWith('.' + e)) return raw;
     }
     return '';
+  }
+  /**
+   * 一段網址或網站名字 → 清單裡的一項：只留網站（https://mgread.io/manga/xxx/chapter-4/ → mgread.io，www. 拿掉）；
+   * 看不出是網站的（一般的字、沒有網域結尾的）回傳空字串
+   */
+  function mtSiteOf(raw) {
+    let s = String(raw || '').trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/[/?#\\].*$/, '').replace(/:\d*$/, '');
+    if (s === '*') return s;
+    if (s.includes('*')) return /^[a-z0-9*.-]+$/.test(s) ? s.replace(/\.+$/, '') : '';
+    // 中文網域、全形的字：換成瀏覽器用的寫法（punycode）
+    if (/[^\x00-\x7f]/.test(s)) { try { s = new URL('http://' + s).hostname; } catch (_) { return ''; } }
+    s = s.replace(/\.+$/, '').replace(/^www\./, '');
+    const ip = /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
+    return ip || /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,63}|xn--[a-z0-9-]{2,59})$/.test(s) ? s : '';
+  }
+  /** 貼上的一段文字裡所有的網站（網址前後有說明文字、一次貼好幾個都可以） */
+  function mtSitesIn(text) {
+    return Array.from(new Set(String(text || '').split(/[\s,，、;；：|<>"'`「」『』()（）\[\]]+/).map(mtSiteOf).filter(Boolean)));
   }
   function mtTyping(e) {
     const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
@@ -8546,13 +8575,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       name: '漫畫翻譯',
       site: '漫畫網站',
       desc: TOUCH
-        ? '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，點角落的「譯」就會翻譯這一話；其他網站在下面按「新增這個網站」，或在 Tampermonkey 選單按「翻譯這一話的漫畫」。'
-        : '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕（其他網站在下面按「新增這個網站」）；任何網站都可以按 Alt+T 翻譯整頁。',
+        ? '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，點角落的「譯」就會翻譯這一話；其他網站在下面按「新增這個網站」或貼上漫畫網址，也可以在 Tampermonkey 選單按「翻譯這一話的漫畫」。'
+        : '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕（其他網站在下面按「新增這個網站」或貼上漫畫網址）；任何網站都可以按 Alt+T 翻譯整頁。',
       defaults: { apiKey: '', mode: 'fast', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
       fields: [
         { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k) },
         { key: 'mode', label: '翻譯方式', type: 'select', options: [['fast', '快速：Google 翻譯＋Gemini 修正（省次數）'], ['accurate', '精準：Gemini 看圖翻譯（很耗次數）']] },
-        { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站', addHere: true },
+        { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站', addHere: true, paste: true },
         { key: 'auto', label: '在這些網站', type: 'select', options: [['off', '按了才翻譯'], ['on', '打開漫畫就自動翻譯整話']] },
         { key: 'sfx', label: '狀聲詞', type: 'select', options: [['skip', '不翻'], ['translate', '也翻']] },
         { key: 'ocrLang', label: '漫畫原文（辨識文字用）', type: 'select', options: [['auto', '自動判斷'], ['eng', '英文'], ['kor', '韓文'], ['jpn', '日文']] },
@@ -9014,10 +9043,18 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     if (f.type === 'list') {
       const input = h('input', { type: 'text', spellcheck: 'false', placeholder: f.placeholder || '' });
       const show = () => { input.value = (cfgVal() || []).join(', '); };
+      // 網站清單：打進去、貼進去的網址只留網站（https://mgread.io/manga/… → mgread.io）
+      const parse = (text) => Array.from(new Set(text.split(/[\s,，、;；]+/).map((x) => (f.paste ? mtSiteOf(x) : '') || x.trim().toLowerCase()).filter(Boolean)));
       // 「新增這個網站」：按一下就把現在這個網站加進清單，不用自己打網址
       const here = f.addHere ? HOST.replace(/^www\./, '') : '';
-      const note = here ? h('span', { class: 'mb-note', 'aria-live': 'polite' }) : null;
+      const note = here || f.paste ? h('span', { class: 'mb-note', 'aria-live': 'polite' }) : null;
+      const tell = (text, ok) => { note.className = 'mb-note ' + (ok ? 'is-ok' : 'is-bad'); note.textContent = text; };
       const add = here ? h('button', { type: 'button', class: 'mb-mini mb-add' }) : null;
+      // 貼上漫畫網址的格子：貼上（或打好按 Enter）就取出網站加進清單，不用自己找網域、打逗號
+      const paste = f.paste ? h('input', {
+        type: 'text', class: 'mb-paste', spellcheck: 'false', autocomplete: 'off', inputmode: 'url', enterkeyhint: 'done',
+        placeholder: '貼上漫畫網址，自動加進清單', 'aria-label': '貼上漫畫網址，自動加進清單',
+      }) : null;
       const sync = () => {
         if (!add) return;
         const hit = !!mtSiteMatch(cfgVal() || []);
@@ -9028,8 +9065,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       show();
       sync();
       input.addEventListener('change', () => {
-        const list = input.value.split(/[\s,，、;；]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
-        saveCfg(m, f.key, Array.from(new Set(list)));
+        saveCfg(m, f.key, parse(input.value));
         show();
         sync();
       });
@@ -9040,14 +9076,33 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           saveCfg(m, f.key, Array.from(new Set(list.concat([here]))));
           show();
           sync();
-          note.className = 'mb-note is-ok';
-          note.textContent = `已新增 ${here}`;
+          tell(`已新增 ${here}`, true);
         });
+      }
+      if (paste) {
+        const take = () => {
+          const text = paste.value.trim();
+          if (!text) return;
+          const sites = mtSitesIn(text);
+          if (!sites.length) { tell('看不出是哪個網站，請貼上完整的漫畫網址', false); return; }
+          const list = cfgVal() || [];
+          const fresh = sites.filter((x) => !mtSiteMatch(list, x));
+          paste.value = '';
+          if (fresh.length) saveCfg(m, f.key, Array.from(new Set(list.concat(fresh))));
+          show();
+          sync();
+          tell(fresh.length ? `已新增 ${fresh.join('、')}` : `${sites.join('、')} 已經在清單裡`, true);
+        };
+        paste.addEventListener('paste', () => setTimeout(take, 0)); // 等貼上的字放進格子再處理
+        paste.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); take(); } });
+        paste.addEventListener('change', take); // 手機鍵盤的剪貼簿直接插入文字（沒有貼上事件）：離開格子時處理
+      }
+      if (note) {
         return {
           el: h('div', { class: 'mb-field mb-field-wide mb-combo' },
             h('label', { class: 'mb-combo-in' }, h('span', { text: f.label }), input),
             add,
-            h('div', { class: 'mb-combo-foot' }, note)),
+            h('div', { class: 'mb-combo-foot' }, paste, note)),
           refresh: () => { if (!input.matches(':focus')) show(); sync(); },
         };
       }
@@ -9252,6 +9307,19 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     if (t.bar) merged.bar = t.bar;
     if (x.direct !== undefined) merged.direct = x.direct;
     if (Object.keys(merged).length) store.set('cfg.videoVolume', merged);
+  })();
+  // 1.5.13：預設的漫畫網站多了 mgread.io。改過網站清單的人，清單是存在設定裡的那一份，新的預設網站不會自己出現：
+  // 每個新加的預設網站幫忙加一次（記在 mt.sitesAdded，之後自己拿掉的不會再加回來）
+  (() => {
+    const done = store.get('mt.sitesAdded', []) || [];
+    const fresh = MT_SITES_ADDED.filter((x) => !done.includes(x));
+    if (!fresh.length) return;
+    const cur = store.get('cfg.mangaTranslate', null);
+    if (cur && Array.isArray(cur.sites)) {
+      const add = fresh.filter((x) => !mtSiteMatch(cur.sites, x));
+      if (add.length) store.set('cfg.mangaTranslate', Object.assign({}, cur, { sites: cur.sites.concat(add) }));
+    }
+    store.set('mt.sitesAdded', done.concat(fresh));
   })();
   installUiGuard();
   MODULES.forEach(syncModule);
