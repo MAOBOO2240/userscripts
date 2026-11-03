@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.14
+// @version      1.5.15
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -42,6 +42,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.15 漫畫翻譯：記錯的原文語言會自己修正（之前退到 Tesseract 時常把英文漫畫記成韓文，之後整個網站都認不到字）：
+ *        記住的語言認不到字、卻找得到對話的字框時，換其他語言試，認得順就改記，沒認到字的圖重新翻；用 Tesseract 判斷的語言不再記住；
+ *        只有某個語言的模型載入不了（例如日文的大模型在 iPhone 記憶體不足）時，只有那個語言改用 Tesseract，其他語言照常
  * 1.5.14 漫畫翻譯：iPhone、iPad 的英文認字改回小一點的模型（大模型在 Safari 載入時記憶體不足，之前會退回舊的 Tesseract、認得很差）；
  *        其他裝置大模型載入不了時也改用小模型再試，不會直接退回 Tesseract
  * 1.5.13 漫畫翻譯：設定面板的網站清單下面多了「貼上漫畫網址」的格子，貼上任何一話的網址（例如 https://mgread.io/manga/…/chapter-4/）
@@ -6187,7 +6190,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
 
     /* ---------- 免費模式的認字：PaddleOCR（背景執行緒，同時開幾個；載入失敗才用 Tesseract） ---------- */
     // lite：英文用省記憶體的 tiny 模型（iPhone 一開始就用；其他裝置載入 small 記憶體不足時改用，並記住）
-    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [], checked: {}, lite: IOS || !!store.get('mt.pdLite', false) };
+    // bad：這個模型載入不了（例如日文的大模型在 iPhone 記憶體不足）：只有那個語言改用 Tesseract，其他語言照常用 PaddleOCR
+    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [], checked: {}, bad: {}, lite: IOS || !!store.get('mt.pdLite', false) };
     /** 這個語言用哪個認字模型，和它的 key（共用同一個模型的語言 key 一樣） */
     const pdEntry = (lang) => (pd.lite && MT_PD_LITE[lang]) || MT_PD[lang];
     const pdKey = (lang) => pdEntry(lang).key || lang;
@@ -6232,6 +6236,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     function pdReady(lang, P) {
       const key = pdKey(lang); // 英文、日文共用一個模型
       if (pd.ok && pd.langOk[key]) return Promise.resolve();
+      if (pd.bad[key]) return Promise.reject(Object.assign(new Error(pd.bad[key]), { model: key }));
       const gen = pd.gen;
       const a = pdEntry(lang);
       const need = [];
@@ -6385,11 +6390,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       pd.gen++;
       mtPdLoading.clear(); // 卡住的下載不要再等，重新下載
       pd.workers.forEach((wk) => wk.die(mtErr('cancel')));
-      Object.assign(pd, { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', checked: {} });
+      Object.assign(pd, { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', checked: {}, bad: {} });
       pd.queue.splice(0).forEach((r) => r());
     }
 
-    async function ocrRun(s, lang, plan, P) {
+    /** probe：只是在判斷語言。這個語言的模型載入不了時直接放棄這個語言（不用 Tesseract 猜），判斷語言的才不會被亂猜的字帶偏 */
+    async function ocrRun(s, lang, plan, P, probe) {
       s.ocr = s.ocr || {};
       if (s.ocr[lang]) return s.ocr[lang]; // 判斷語言時已經辨識過
       // 先用 PaddleOCR；網站不允許、下載不到時才用 Tesseract
@@ -6404,7 +6410,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           if (e && e.setup) {
             // 英文的 small 模型載入不了：換成 tiny 再試一次（只試一次）
             if (again && pdLiteFallback(e, lang)) { again = false; continue; }
-            pdFail(e);
+            if (e.model) {
+              // 只有這個語言的模型載入不了（例如日文的大模型在 iPhone 記憶體不足）：這個語言改用 Tesseract，其他語言照常
+              if (!pd.bad[e.model]) { pd.bad[e.model] = String(e.message || e); mtWarn(`PaddleOCR 的 ${e.model} 模型載入失敗，${lang} 改用 Tesseract`, e); }
+              if (probe) throw e;
+            } else pdFail(e);
           } else mtWarn('PaddleOCR 這一段失敗，改用 Tesseract', e);
           break;
         }
@@ -6473,7 +6483,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           for (let k = 0; k < order.length; k++) {
             const lang = order[k];
             let groups = [];
-            try { groups = await ocrRun(s, lang, plan, P); } catch (e) { if (lang === 'eng') throw e; continue; }
+            try { groups = await ocrRun(s, lang, plan, P, true); } catch (e) { if (lang === 'eng') throw e; continue; }
             // 找到的字框大多是直的（多半是日文漫畫）：接下來先試日文
             const bx = s.boxes || [];
             if (k === 0 && bx.length >= 2 && bx.filter((b) => b.y1 - b.y0 >= (b.x1 - b.x0) * 1.5).length * 2 >= bx.length && order.indexOf('jpn') > 1) {
@@ -6486,28 +6496,67 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           }
           if (bestScore >= 16) break;
         }
-        if (bestScore >= 8) {
-          const map = Object.assign({}, store.get('mt.lang', {}) || {});
-          const sk = seriesKey();
-          delete map[sk];
-          map[sk] = best;
-          map[HOST] = best;
-          const keys = Object.keys(map);
-          if (keys.length > 300) keys.slice(0, keys.length - 300).forEach((k) => { if (k !== HOST) delete map[k]; });
-          store.set('mt.lang', map);
-        }
+        // 用 Tesseract 判斷的不記住（Tesseract 常把英文認成一堆韓文、日文亂碼，記錯了之後整個網站都認不到字）
+        if (bestScore >= 8 && !pd.failed) rememberLang(best);
         return bestScore >= 4 ? best : null;
       });
     }
+    /** 記住這部作品（和這個網站）的原文語言 */
+    function rememberLang(lang) {
+      const map = Object.assign({}, store.get('mt.lang', {}) || {});
+      const sk = seriesKey();
+      delete map[sk];
+      map[sk] = lang;
+      map[HOST] = lang;
+      const keys = Object.keys(map);
+      if (keys.length > 300) keys.slice(0, keys.length - 300).forEach((k) => { if (k !== HOST) delete map[k]; });
+      store.set('mt.lang', map);
+    }
+    /**
+     * 記住的語言認不到字、但找字找到不少字框（記錯了：例如之前用 Tesseract 把英文漫畫記成韓文）：
+     * 拿這一段試試其他語言，有一個認得很順就改記那個，一個字都沒認到的圖重新翻。一部作品一個工作階段只試一次
+     */
+    const relangDone = new Set();
+    async function relang(P, s, plan) {
+      const sk = seriesKey();
+      if (relangDone.has(sk)) return null;
+      relangDone.add(sk);
+      const cur = P.lang;
+      let best = null;
+      let bestScore = 0;
+      for (const lang of ['eng', 'kor', 'jpn'].filter((l) => l !== cur && MT_LANG[l])) {
+        let groups = [];
+        try { groups = await ocrRun(s, lang, plan, P, true); } catch (e) { if (e && e.kind === 'cancel') throw e; continue; }
+        const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
+        if (score > bestScore) { best = lang; bestScore = score; }
+        if (score >= 16) break;
+      }
+      if (bestScore < 16) return null;
+      rememberLang(best);
+      const name = { eng: '英文', kor: '韓文', jpn: '日文' };
+      tell('relang', `這部漫畫的原文看起來是${name[best]}（之前記成${name[cur] || cur}），改用${name[best]}重新辨識。`, { title: '漫畫翻譯' });
+      pg.langVer++;
+      for (const Q of pages.values()) {
+        if (Q !== P && Q.state === 'done' && !Q.blocks.length && Q.lang === cur) { resetPage(Q); queueP(Q); }
+      }
+      return best;
+    }
     /** 一段圖：辨識文字，再用 Google 翻譯（馬上就能顯示） */
     async function localSlice(P, s, plan, alive, slices) {
-      const lang = await imageLang(P, slices, plan);
+      let lang = await imageLang(P, slices, plan);
       if (!lang) return [];
       P.lang = lang;
       return ocrQ(P, async () => {
         if (!alive()) throw mtErr('cancel');
         step(P, `辨識文字 ${Math.min(P.done + 1, P.total)}/${P.total} 段`);
         let groups = await ocrRun(s, lang, plan, P);
+        // 記住的語言一個字都沒認到、但找到好幾個橫的字框（對話的樣子）：可能記錯語言了，換其他語言試試
+        const set = cfg().ocrLang;
+        const liney = (b) => b.x1 - b.x0 >= (b.y1 - b.y0) * 2.5 && b.y1 - b.y0 >= 10;
+        if (!groups.length && !(set && set !== 'auto') && !mtHostLang() && !pd.failed && (s.boxes || []).filter(liney).length >= 3) {
+          const better = await relang(P, s, plan);
+          if (better) { lang = better; P.lang = lang; groups = await ocrRun(s, lang, plan, P); }
+        }
         // 狀聲詞設定「不翻」：狀聲詞直接跳過（原圖保持原樣）
         if (cfg().sfx !== 'translate') groups = groups.filter((g) => !mtIsSfx(g, groups, lang, plan.W));
         if (!groups.length) return [];
@@ -6777,6 +6826,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       bump();
       setStatus();
       const alive = () => !stopped && P.gen === gen;
+      const langVer = pg.langVer;
       try {
         const st0 = mtEngineState(cfg());
         const fast = mode() === 'fast';
@@ -6874,6 +6924,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         try { await keepStrips(P, slices, plan, gen); } catch (e) { mtWarn('漫畫翻譯（留下接縫）', e); }
         for (const s of slices) s.blob = null;
         if (!alive()) return;
+        // 翻到一半原文語言改了（記錯的語言被換掉）：前面幾段是用錯的語言認的，整張重新翻
+        if (langVer !== pg.langVer && !allGemini && !failed) { resetPage(P); queueP(P); return; }
         P.state = 'done';
         P.step = '';
         P.error = failed ? mtErrText(lastErr) : '';
@@ -7096,7 +7148,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
 
     /* ---------- 整頁翻譯：整話先下載、先翻好 ---------- */
-    const pg = { on: false, hidden: false, mo: null, scanT: 0, perf: null, dirs: new Set(), noRefDirs: new Set(), scriptsAt: 0, liveT: 0, minW: 0, chipOff: false };
+    const pg = { on: false, hidden: false, mo: null, scanT: 0, perf: null, dirs: new Set(), noRefDirs: new Set(), scriptsAt: 0, liveT: 0, minW: 0, chipOff: false, langVer: 0 };
     const LIVE_MS = 30 * 60 * 1000;
     const liveAt = () => ((store.get('mt.live', {}) || {})[HOST] || 0);
     function liveSet(on) {
