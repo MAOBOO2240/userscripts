@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.18
+// @version      1.5.19
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -43,6 +43,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.19 漫畫翻譯：修正整話翻完卻少幾句（漏網之魚）：免費翻譯一時被擋（Google 回 HTTP 429、微軟也失敗）或漏回某一句時，
+ *        之前那幾段就直接沒了、整張還被當成翻完記住。現在漏回的句子會再翻一次，失敗的圖（整張或只缺幾句）不記住、20 秒後自動重翻（最多兩次），
+ *        「重試」也會重翻只缺幾句的圖；之前用快速模式翻過的圖會重翻一次（把缺的句子補回來）
  * 1.5.18 漫畫翻譯：修正英文漫畫被誤判成韓文（之後整話一個字都不翻、要手動切回英文）：判斷原文語言時韓文、日文只算認得有把握的字，
  *        用錯語言的模型吐出的亂碼不算；記住的語言要連兩段都認不到字、而且另一個語言認得很順才改記，原本的語言認得好的作品不會被改掉；
  *        記錯的語言在下次打開時會自己換回來，用錯語言翻出來的亂碼也會重新翻；診斷報告的每張圖多了語言和認字信心
@@ -5279,9 +5282,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       } catch (e) {
         mtWarn('微軟翻譯也失敗，改用 Chrome 離線翻譯', e);
         const tr = await mtChromeTranslator(src);
-        if (!tr) throw err || e;
-        out = await mtTimeout(Promise.all(send.map((t) => tr.translate(t))), 20000);
-        by = 'chrome';
+        if (tr) {
+          out = await mtTimeout(Promise.all(send.map((t) => tr.translate(t))), 20000);
+          by = 'chrome';
+        } else {
+          // 沒有離線翻譯（手機）：等一下再試一次微軟（多半是一時的網路問題），再不行才放棄（這一段之後會自動重試）
+          await new Promise((r) => setTimeout(r, 2500));
+          try { out = await mtMsTranslate(send, src); by = 'microsoft'; } catch (e2) { throw err || e2; }
+        }
       }
     }
     const res = out.map((z, i) => (src === 'en' && z ? mtZhFix(z, prep[i].lead) : z));
@@ -5845,7 +5853,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // v8：浮水印（翻譯組、網站的名字和網址）不翻，壓在對話框邊上的也不會混進對話
     // v9：句子還沒結束、隔得比較開的最後一行（外框很淡的對話框裡的 BACK?）接成同一句
     // v10：英文改用大一點的認字模型（PP-OCRv6 small），奇怪的字形認得比較準
-    const MTC_VER = 10;
+    // v11：免費翻譯一時被擋（HTTP 429）時，漏翻的那幾段之前會被當成翻完記住（整張少幾句）：免費模式翻過的重翻一次
+    const MTC_VER = 11;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
     function cacheGet(P) {
       let v = store.get(cacheKeyOf(P), null);
@@ -6842,6 +6851,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (cfg().sfx !== 'translate') groups = groups.filter((g) => !mtIsSfx(g, groups, lang, plan.W));
         if (!groups.length) return [];
         const zh = await mtFreeTranslate(groups.map((g) => g.text), lang);
+        // 翻譯服務偶爾會漏回幾段（回空字串）：那幾段再翻一次；還是空的就當這一段沒翻完（不記住，等一下自動重翻）
+        const miss = groups.map((g, i) => (!zh[i] && /\p{L}/u.test(g.text) ? i : -1)).filter((i) => i >= 0);
+        if (miss.length) {
+          try {
+            const again = await mtFreeTranslate(miss.map((i) => groups[i].text), lang);
+            miss.forEach((i, k) => { if (again[k]) zh[i] = again[k]; });
+          } catch (e) { mtWarn('漏翻的幾段再翻一次也失敗', e); }
+          if (miss.some((i) => !zh[i])) s.err = '翻譯服務沒有回傳譯文';
+        }
         const sh = s.y1 - s.y0;
         P.engines.add(zh.by === 'microsoft' ? 'ms' : 'free');
         return groups.map((g, i) => ({
@@ -7029,7 +7047,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (j.gen !== j.P.gen) return;
         j.P.fix = fq.jobs.some((q) => q.P === j.P) ? 'wait' : 'done'; // 這張圖又排了一次修正（接上別張圖的字）
         j.P.engines.add('fix');
-        if (j.P.w0) cachePut(j.P, 'free', j.P.w0, j.P.h0, false, !fixLines(j.P).length);
+        if (j.P.w0 && !j.P.error) cachePut(j.P, 'free', j.P.w0, j.P.h0, false, !fixLines(j.P).length); // 有一段翻譯失敗的不記住（會重翻）
       };
       const apply = (got) => {
         for (const it of got) {
@@ -7047,7 +7065,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
             if (tw && l.b.twinP && l.b.twinP.blocks.includes(tw)) {
               tw.zh = zh;
               touched.add(l.b.twinP);
-              if (l.b.twinP.w0) cachePut(l.b.twinP, 'free', l.b.twinP.w0, l.b.twinP.h0, false, !fixLines(l.b.twinP).length);
+              if (l.b.twinP.w0 && !l.b.twinP.error) cachePut(l.b.twinP, 'free', l.b.twinP.w0, l.b.twinP.h0, false, !fixLines(l.b.twinP).length);
             }
           } else if (!l.b.bub && !l.b.seam && !fixKeep(l.b, l.j.P)) l.j.P.blocks = l.j.P.blocks.filter((b) => b !== l.b); // 不是對話（雜訊、浮水印）：拿掉；對話框裡的一定是對話，留著原本的翻譯
           l.b.fixed = true;
@@ -7161,6 +7179,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         let allGemini = useGemini;
         let refused = false;
         let failed = 0;
+        let partial = ''; // 有一段的譯文沒回來（翻譯服務漏回）：這張不記住、等一下重翻
         let lastErr = null;
         let jobs = null;
         if (useGemini) {
@@ -7197,6 +7216,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           s.cleanInv = null;
           if (!alive()) return;
           if (blocks && blocks.length) addBlocks(P, blocks);
+          if (s.err) { partial = s.err; allGemini = false; }
           P.done++;
           step(P, `${useGemini ? `${aiName()} 翻譯` : '辨識文字'} ${P.done}/${P.total} 段`);
         }));
@@ -7215,9 +7235,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (langVer !== pg.langVer && !allGemini && !failed) { resetPage(P); queueP(P); return; }
         P.state = 'done';
         P.step = '';
-        P.error = failed ? mtErrText(lastErr) : '';
-        // 免費模式一個字都沒認到的結果不記住：下次打開會再認一次（真的沒有字的頁也只是多花一點時間）
-        if (!failed && (allGemini || P.blocks.length)) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free' && m !== 'ms' && m !== 'fix') || 'gemini') : 'free', plan.W0, plan.H0, refused, false);
+        P.error = failed ? mtErrText(lastErr) : partial;
+        // 免費模式一個字都沒認到的結果不記住：下次打開會再認一次（真的沒有字的頁也只是多花一點時間）；
+        // 有一段失敗（免費翻譯一時被擋）的也不記住，而且等一下自動重翻一次
+        if (!P.error && (allGemini || P.blocks.length)) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free' && m !== 'ms' && m !== 'fix') || 'gemini') : 'free', plan.W0, plan.H0, refused, false);
+        if (P.error) autoRetry(P);
         // 被切在上下兩張圖中間的字接起來；快速模式再請 Gemini 依前後文修正（只送文字）
         const fixIt = fast && !allGemini && mtEngineState(cfg()).kind === 'ai';
         stitchAround(P).finally(() => { if (fixIt && P.gen === gen) fixWhenReady(P); });
@@ -7228,6 +7250,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         P.step = '';
         P.error = mtErrText(e);
         mtWarn('漫畫翻譯失敗', e);
+        autoRetry(P);
       }
       P.note = '';
       bump();
@@ -7879,12 +7902,24 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       }
     }
     /** 卡住或失敗時重來：中斷進行中的請求、重開文字辨識，沒翻完的圖重新排隊 */
+    /** 翻譯失敗（整張，或只有幾段：免費翻譯一時被擋、漏回譯文）：等一下自動重翻這張（最多兩次），不用等使用者按「重試」 */
+    function autoRetry(P) {
+      P.retries = (P.retries || 0) + 1;
+      if (P.retries > 2) return;
+      const gen = P.gen;
+      later(() => {
+        if (P.gen !== gen || P.userCancel || (pg.on && pg.hidden)) return;
+        if (!(P.state === 'error' || (P.state === 'done' && P.error))) return;
+        resetPage(P);
+        if (pg.on) queueP(P); else translateP(P);
+      }, 20000 * P.retries);
+    }
     function retryAll() {
       mtAbortAll();
       if (loc.making || loc.failed || Date.now() - lastProgress > 30000) resetWorkers();
       loc.failed = '';
       for (const P of pages.values()) {
-        if (P.state === 'busy' || P.state === 'error') {
+        if (P.state === 'busy' || P.state === 'error' || (P.state === 'done' && P.error)) {
           resetPage(P);
           P.userCancel = false;
           if (pg.on) queueP(P); else translateP(P);
