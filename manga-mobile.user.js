@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.21
+// @version      1.5.22
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -24,6 +24,7 @@
 // @grant        unsafeWindow
 // @connect      raw.githubusercontent.com
 // @connect      generativelanguage.googleapis.com
+// @connect      api.anthropic.com
 // @connect      translate.googleapis.com
 // @connect      edge.microsoft.com
 // @connect      cdn.jsdelivr.net
@@ -41,6 +42,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.22  設定面板多了「AI 服務」：除了免費的 Gemini，也可以選付費的 Claude（貼上 Claude Console 的金鑰、選模型，預設 Opus 5.5），
+ *         快速模式的修正和精準模式的看圖都改用 Claude，沒有每天的次數限制；額度用完或金鑰無效時自動改用免費模式；選了哪個服務，面板只顯示那個服務的金鑰
  * 1.5.21  記錯的原文語言會自己修正：之前認字退到 Tesseract 時，常把英文漫畫記成韓文，之後這個網站整話都認不到字（一個字都沒翻）。
  *         現在記住的語言認不到字、卻找得到對話的字框時，會換其他語言試，認得順就改記，沒認到字的圖重新翻；用 Tesseract 判斷的語言不再記住；
  *         只有某個語言的模型載入不了（例如日文的大模型在 iPhone 記憶體不足）時，只有那個語言改用 Tesseract，其他語言照常
@@ -262,6 +265,7 @@ button, input, select, output { font: inherit; }
 .mb-row.is-off .mb-fields, .mb-row.is-off .mb-hint { opacity: .5; }
 .mb-field { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
 .mb-field-wide { flex-basis: 100%; }
+.mb-field[hidden] { display: none; }
 .mb-field-range { flex-basis: 100%; }
 .mb-field-range > span:first-child { min-width: 5.6em; }
 .mb-field input[type=number], .mb-field input[type=text], .mb-field select { height: 30px; padding: 0 8px; border: 1px solid #CDD4DC;
@@ -1963,6 +1967,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   // 拿不到模型清單時用這份；順序就是優先順序
   const GEMINI_DEFAULT_CHAIN = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
   const GEMINI_KEY_URL = 'https://aistudio.google.com/apikey';
+  // Claude API（付費，用帳號裡的額度）：沒有每天的免費次數限制
+  const CLAUDE_API = 'https://api.anthropic.com/v1';
+  const CLAUDE_VERSION = '2023-06-01';
+  const CLAUDE_KEY_URL = 'https://platform.claude.com/settings/keys';
+  // 設定面板的模型選項（品質由高到低）；第一個是預設
+  const CLAUDE_MODELS = [['claude-opus-5-5', 'Opus 5.5（最準，建議）'], ['claude-fable-5-1', 'Fable 5.1（最強，貴 2.5 倍）'], ['claude-sonnet-5-5', 'Sonnet 5.5（便宜一半）'], ['claude-haiku-5-5', 'Haiku 5.5（最快、最省）']];
+  const mtIsClaude = (model) => /^claude-/.test(String(model || ''));
+  /** 大概的費用（美金，一話約 11 張長圖）：[快速模式只送文字修正, 精準模式看圖]，設定面板的說明用 */
+  const mtClaudeCost = (model) => ({ opus: ['0.2', '2'], fable: ['0.5', '4'], sonnet: ['0.1', '1'], haiku: ['0.01', '0.05'] })[(/^claude-([a-z]+)/.exec(String(model || '')) || [])[1]] || ['0.2', '2'];
   const TESS_JS = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
   const TESS_WORKER = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js';
   const TESS_CORE = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0';
@@ -2053,6 +2066,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
 
   function modelLabel(id) {
     let s = String(id || '');
+    if (mtIsClaude(s)) return s.replace(/^claude-([a-z]+)-(\d+)-(\d+)$/, (_m, n, a, b) => `Claude ${n[0].toUpperCase()}${n.slice(1)} ${a}.${b}`);
     const pre = /-preview$/.test(s);
     s = s.replace(/-preview$/, '').replace(/^gemini-/, 'Gemini ').replace(/-flash-lite$/, ' Flash-Lite').replace(/-flash$/, ' Flash');
     return pre ? s + ' Preview' : s;
@@ -2106,33 +2120,54 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     cur[model] = { until, why };
     store.set('mt.block', { k: kh, m: cur });
   }
-  /** 目前可以用的模型：沒被擋的第一個；全部只是每分鐘次數用完 → 等一下；全部今天用完 → 沒有 */
-  function mtPick(kh) {
+  /** 目前可以用的模型：沒被擋的第一個；全部只是每分鐘次數用完 → 等一下；全部今天用完（或額度沒了）→ 沒有 */
+  function mtPick(kh, chain) {
     const blocks = mtBlocks(kh);
     const now = Date.now();
     let soonest = Infinity;
+    let why = '';
     let rate = null;
-    for (const m of mtChain(kh)) {
+    for (const m of chain || mtChain(kh)) {
       const b = blocks[m];
       if (!b || b.until <= now) return { model: m };
       if (b.why === 'rate') { if (!rate || b.until < rate.until) rate = { model: m, until: b.until }; continue; }
-      soonest = Math.min(soonest, b.until);
+      if (b.until < soonest) { soonest = b.until; why = b.why; }
     }
     if (rate) return { wait: rate.until - now, model: rate.model };
-    return { none: true, until: soonest };
+    return { none: true, until: soonest, why };
   }
+  /** 設定裡選的 AI 服務：gemini（免費）或 claude（付費，用帳號裡的額度）；和它的金鑰 */
+  const mtAiOf = (c) => (c.engine === 'claude' ? 'claude' : 'gemini');
+  const mtAiKey = (c) => String((mtAiOf(c) === 'claude' ? c.claudeKey : c.apiKey) || '').trim();
+  const mtAiName = (ai) => (ai === 'claude' ? 'Claude' : 'Gemini');
+  const mtClaudeModel = (c) => (CLAUDE_MODELS.some(([id]) => id === c.claudeModel) ? c.claudeModel : CLAUDE_MODELS[0][0]);
+  /**
+   * 現在能不能用 AI 翻譯：ai（可以，model 是要用的模型）、nokey、badkey、quota（Gemini 今天的免費額度用完）、
+   * credit（Claude 帳號的額度用完）、model（選的 Claude 模型帳號不能用）
+   */
   function mtEngineState(c) {
-    const key = String(c.apiKey || '').trim();
-    if (!key) return { kind: 'nokey' };
+    const ai = mtAiOf(c);
+    const key = mtAiKey(c);
+    if (!key) return { kind: 'nokey', ai };
     const kh = mtKeyHash(key);
-    if (store.get('mt.badkey', '') === kh) return { kind: 'badkey' };
-    const p = mtPick(kh);
-    if (p.none) return { kind: 'quota', until: p.until };
-    return { kind: 'gemini', model: p.model, wait: p.wait || 0 };
+    if (store.get('mt.badkey', '') === kh) return { kind: 'badkey', ai };
+    const p = mtPick(kh, ai === 'claude' ? [mtClaudeModel(c)] : null);
+    if (p.none) return { kind: ai === 'claude' ? (p.why === 'missing' ? 'model' : 'credit') : 'quota', ai, until: p.until };
+    return { kind: 'ai', ai, model: p.model, wait: p.wait || 0 };
   }
   function mtHint(c) {
     const s = mtEngineState(c);
     const fast = c.mode !== 'accurate';
+    if (s.ai === 'claude') {
+      if (s.kind === 'nokey') return '還沒填 Claude 金鑰：目前只用免費模式（瀏覽器辨識文字＋Google 翻譯）。到 Claude Console 取得金鑰，貼上後按「測試」。';
+      if (s.kind === 'badkey') return 'Claude 金鑰無效或沒有權限，目前只用免費模式。請重新貼上金鑰再按「測試」。';
+      if (s.kind === 'credit') return 'Claude 帳號的額度用完了（請到 Claude Console 加值），目前只用免費模式；加值後按狀態列的「重試」或重新整理。';
+      if (s.kind === 'model') return `帳號不能用 ${modelLabel(mtClaudeModel(c))}，目前只用免費模式。請換一個模型再試。`;
+      const cost = mtClaudeCost(s.model);
+      return fast
+        ? `快速模式：瀏覽器辨識文字＋Google 翻譯，畫面上很快就有譯文；再用 ${modelLabel(s.model)} 依前後文修正，只送文字，很省（一話約 US$${cost[0]}）。每次都會用到帳號裡的額度；額度用完會自動改用免費模式。`
+        : `精準模式：${modelLabel(s.model)} 直接看圖翻譯，最準，但每張圖都要付費（一話約 US$${cost[1]}）；額度用完會自動改用免費模式。`;
+    }
     if (s.kind === 'nokey') {
       return fast ? '還沒填金鑰：目前只用瀏覽器辨識文字＋Google 翻譯。填了 Gemini 金鑰（可以免費申請）會再幫忙修正認錯的字、翻得不順的地方，只送文字、很省次數；免費額度用完也不會收費。'
         : '還沒填金鑰，目前用免費模式（瀏覽器辨識文字＋Google 翻譯，品質較普通）。Gemini 金鑰可以免費申請；免費額度用完只會改回免費模式，不會收費。';
@@ -2151,7 +2186,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     for (const r of [...mtLiveReqs]) { try { r.abort(); } catch (_) { /* 已結束 */ } }
   }
 
-  function mtRequest(method, url, key, body, timeout) {
+  /** 認證的標頭：給字串就是 Gemini 的金鑰；給物件就照用（Claude） */
+  const mtAuthHeaders = (auth) => (typeof auth === 'string' ? { 'x-goog-api-key': auth } : Object.assign({}, auth || {}));
+  function mtRequest(method, url, auth, body, timeout) {
     return new Promise((resolve) => {
       let req = null;
       const done = (v) => { mtLiveReqs.delete(req); resolve(v); };
@@ -2159,7 +2196,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         method,
         url,
         timeout,
-        headers: Object.assign({ 'x-goog-api-key': key }, body ? { 'Content-Type': 'application/json' } : {}),
+        headers: Object.assign(mtAuthHeaders(auth), body ? { 'Content-Type': 'application/json' } : {}),
         data: body ? JSON.stringify(body) : undefined,
         onload: (res) => done({ status: res.status, text: res.responseText || '' }),
         onerror: () => done({ status: 0, text: '' }),
@@ -2174,7 +2211,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    * 送出請求；有 onRaw 時用串流（Gemini 邊產生邊回傳），每收到一段就把目前收到的全部文字交給 onRaw。
    * 不支援串流的管理器會在最後一次給完整回應。idle 毫秒內都沒收到資料就中斷（避免一直卡著）。
    */
-  function mtPost(url, key, body, timeout, onRaw, idle) {
+  function mtPost(url, auth, body, timeout, onRaw, idle) {
     return new Promise((resolve) => {
       let raw = '';
       let status = 0;
@@ -2214,7 +2251,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         method: 'POST',
         url,
         timeout,
-        headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+        headers: Object.assign(mtAuthHeaders(auth), { 'Content-Type': 'application/json' }),
         data: JSON.stringify(body),
         responseType: onRaw ? 'stream' : undefined,
         onloadstart: onRaw ? (r) => {
@@ -2273,6 +2310,46 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     return mtErr('other', msg);
   }
 
+  /** Claude API 的標頭 */
+  const mtClaudeHeaders = (key) => ({ 'x-api-key': key, 'anthropic-version': CLAUDE_VERSION });
+  /** 把 Claude 的錯誤分類：金鑰問題、額度用完、每分鐘次數、模型不存在、忙碌… */
+  function mtClassifyClaude(status, text) {
+    if (status === 0) return mtErr('net', '連不到 Claude');
+    if (status === -1) return mtErr('net', 'Claude 回應逾時');
+    let err = null;
+    try { const j = JSON.parse(text); err = (j && j.error) || (j && j.type === 'error' ? j : null); } catch (_) { /* 不是 JSON */ }
+    const type = String((err && err.type) || '');
+    const msg = String((err && err.message) || `HTTP ${status}`);
+    if (status === 401 || status === 403 || /authentication_error|permission_error/.test(type)) return mtErr('key', msg);
+    if (status === 404 || type === 'not_found_error') return mtErr('model', msg);
+    if (status === 429 || type === 'rate_limit_error') return mtErr('rate', msg, { delay: 15000 });
+    if (/credit balance|billing|insufficient/i.test(msg)) return mtErr('credit', msg);
+    if (status === 400 || status === 413 || type === 'invalid_request_error') return mtErr('bad', msg);
+    if (status >= 500 || type === 'overloaded_error' || type === 'api_error') return mtErr('busy', msg);
+    return mtErr('other', msg);
+  }
+  async function mtListClaudeModels(key) {
+    const res = await mtRequest('GET', `${CLAUDE_API}/models?limit=100`, mtClaudeHeaders(key), null, 15000);
+    if (res.status !== 200) throw mtClassifyClaude(res.status, res.text);
+    let json = null;
+    try { json = JSON.parse(res.text); } catch (_) { throw mtErr('parse', '模型清單無法讀取'); }
+    return (json.data || []).map((m) => String((m && m.id) || '')).filter(Boolean);
+  }
+  /** Claude 的結構化輸出只收一部分的 JSON Schema：每個物件要有 additionalProperties: false，陣列不能限制長度 */
+  function mtClaudeSchema(schema) {
+    const walk = (x) => {
+      if (Array.isArray(x)) return x.map(walk);
+      if (!x || typeof x !== 'object') return x;
+      const out = {};
+      for (const k of Object.keys(x)) {
+        if (k === 'maxItems' || k === 'minItems' || k === 'minimum' || k === 'maximum') continue;
+        out[k] = walk(x[k]);
+      }
+      if (out.type === 'object' && out.properties) out.additionalProperties = false;
+      return out;
+    };
+    return walk(schema);
+  }
   async function mtListModels(key) {
     const res = await mtRequest('GET', `${GEMINI_API}/models?pageSize=200`, key, null, 15000);
     if (res.status !== 200) throw mtClassify(res.status, res.text);
@@ -5183,8 +5260,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   /** 漫畫翻譯（每個分頁一份） */
   function createMangaTranslator(ctx) {
     const cfg = () => ctx.cfg();
-    const key = () => String(cfg().apiKey || '').trim();
+    const ai = () => mtAiOf(cfg()); // gemini 或 claude
+    const key = () => mtAiKey(cfg());
     const kh = () => mtKeyHash(key());
+    const aiName = () => mtAiName(ai());
     const siteOn = () => !!mtSiteMatch(cfg().sites);
     const isTouch = TOUCH;
     let stopped = false;
@@ -5549,7 +5628,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     /** 這張圖翻好了：跟上下相鄰、也翻好的圖接起被切開的字；等著接的那張圖可以送修正了 */
     async function stitchAround(P) {
       await untilResumed(); // 接縫重新認字、接起來的句子也要送翻譯：顯示原文時先等
-      const fixOn = () => mode() === 'fast' && mtEngineState(cfg()).kind === 'gemini';
+      const fixOn = () => mode() === 'fast' && mtEngineState(cfg()).kind === 'ai';
       for (const [U, L] of [[stacked(P, -1), P], [P, stacked(P, 1)]]) {
         if (!U || !L) continue;
         let changed = false;
@@ -5719,6 +5798,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     let chainP = null;
     let chainFail = 0;
     function ensureChain() {
+      if (ai() !== 'gemini' || !key()) return Promise.resolve(); // Claude 只用設定裡選的那一個模型
       const c = store.get('mt.chain', null);
       if ((c && c.k === kh() && Date.now() - c.t < 24 * 3600 * 1000) || Date.now() - chainFail < 10 * 60 * 1000) return Promise.resolve();
       if (chainP) return chainP;
@@ -5736,15 +5816,20 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     function markBad(h, e) {
       store.set('mt.badkey', h);
-      const msg = e.kind === 'region' ? '你所在的地區不能使用 Gemini API，先用免費模式翻譯。' : 'Gemini 金鑰無效或沒有權限，先用免費模式翻譯。';
+      const msg = e.kind === 'region' ? `你所在的地區不能使用 ${aiName()} API，先用免費模式翻譯。` : `${aiName()} 金鑰無效或沒有權限，先用免費模式翻譯。`;
       tell('bad:' + h, msg, { actions: [keyAction] });
-      mtWarn('Gemini 金鑰無法使用：', e.message);
+      mtWarn(`${aiName()} 金鑰無法使用：`, e.message);
     }
     function onFallback(st) {
       const fast = cfg().mode !== 'accurate';
+      const name = mtAiName(st.ai);
       if (st.kind === 'nokey') {
-        tell('nokey', fast ? '還沒設定 Gemini 金鑰：先只用 Google 翻譯（認錯的字不會修正）。' : '還沒設定 Gemini 金鑰，先用免費模式翻譯（品質較普通）。',
+        tell('nokey:' + st.ai, fast ? `還沒設定 ${name} 金鑰：先只用 Google 翻譯（認錯的字不會修正）。` : `還沒設定 ${name} 金鑰，先用免費模式翻譯（品質較普通）。`,
           { title: '漫畫翻譯', actions: [keyAction] });
+      } else if (st.kind === 'credit') {
+        tell('credit:' + new Date().toDateString(), 'Claude 帳號的額度用完了，先用免費模式翻譯；到 Claude Console 加值後按狀態列的「重試」。', { title: '漫畫翻譯' });
+      } else if (st.kind === 'model') {
+        tell('model:' + mtClaudeModel(cfg()), `帳號不能用 ${modelLabel(mtClaudeModel(cfg()))}，先用免費模式翻譯；請到設定換一個模型。`, { title: '漫畫翻譯', actions: [keyAction] });
       } else if (st.kind === 'quota') {
         tell('quota:' + new Date().toDateString(), fast
           ? `Gemini 今天的次數用完了，先只用 Google 翻譯；${mtWhen(st.until)} 後自動恢復修正。`
@@ -5775,6 +5860,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const blocks = mtBlocks(h);
       const now = Date.now();
       let soonest = Infinity;
+      if (ai() === 'claude') {
+        // Claude：只用設定裡選的那一個模型，每分鐘次數很夠，同時最多 4 個請求
+        const m = mtClaudeModel(cfg());
+        const b = blocks[m];
+        if (b && b.until > now) return { wait: Math.max(200, b.until - now) };
+        return ms(m).active >= 4 ? { wait: 800 } : { model: m };
+      }
       const avail = [];
       for (const m of mtChain(h)) {
         const b = blocks[m];
@@ -5827,7 +5919,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           });
           if (!gq.jobs.length) break;
           const st = mtEngineState(cfg());
-          if (st.kind !== 'gemini') { rejectAll(mtErr(st.kind, '改用免費模式')); onFallback(st); break; }
+          if (st.kind !== 'ai') { rejectAll(mtErr(st.kind, '改用免費模式')); onFallback(st); break; }
           const pr = new Map();
           const pOf = (P) => { if (!pr.has(P)) pr.set(P, prioOf(P)); return pr.get(P); };
           gq.jobs.sort((a, b) => (pOf(a.P) - pOf(b.P)) || (a.P.order - b.P.order) || (a.slice.i - b.slice.i));
@@ -5987,6 +6079,92 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (streaming && !sawSse && !json) f.noStream = true; // 看不懂串流的格式：之後改用一般請求
       throw mtErr('parse', 'Gemini 沒有回傳結果');
     }
+    /**
+     * 呼叫 Claude（Messages API，串流）：input 和 geminiCall 一樣（text／image 的陣列），翻好一個就交給 onItems。
+     * 用結構化輸出拿 JSON；模型不支援時拿掉再試
+     */
+    async function claudeCall(model, input, onItems, opts = {}) {
+      const f = flags[model] || (flags[model] = {});
+      const content = input.map((x) => (x.type === 'image'
+        ? { type: 'image', source: { type: 'base64', media_type: x.mime_type || 'image/jpeg', data: x.data } }
+        : { type: 'text', text: x.text }));
+      const body = {
+        model,
+        max_tokens: opts.maxTokens || 8192,
+        system: opts.system || (mtSystemPrompt(cfg().sfx === 'translate')
+          + '\nAnswer with JSON only, in the form {"items":[{"image":1,"box_2d":[ymin,xmin,ymax,xmax],"lang":"en","vertical":false,"zh":"..."}]}.'),
+        messages: [{ role: 'user', content }],
+      };
+      if (!f.noSchema) body.output_config = { format: { type: 'json_schema', schema: mtClaudeSchema(opts.schema || MT_SCHEMA) } };
+      const streaming = !f.noStream;
+      if (streaming) body.stream = true;
+      let modelText = '';
+      let done = false;
+      let stopReason = '';
+      let evErr = null;
+      let sawSse = false;
+      const scan = mtItemScanner();
+      let buf = '';
+      let seen = 0;
+      const onRaw = (raw) => {
+        buf += raw.slice(seen).replace(/\r/g, '');
+        seen = raw.length;
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const data = block.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n');
+          if (!data) continue;
+          sawSse = true;
+          let ev = null;
+          try { ev = JSON.parse(data); } catch (_) { continue; }
+          bump();
+          const t = String(ev.type || '');
+          if (t === 'content_block_delta' && ev.delta && typeof ev.delta.text === 'string') {
+            modelText += ev.delta.text;
+            const got = scan(modelText);
+            if (got.length && onItems) onItems(got);
+          } else if (t === 'message_delta' && ev.delta && ev.delta.stop_reason) stopReason = String(ev.delta.stop_reason);
+          else if (t === 'message_stop') done = true;
+          else if (t === 'error') evErr = ev.error || ev;
+        }
+      };
+      const res = await mtPost(`${CLAUDE_API}/messages`, mtClaudeHeaders(key()), body, opts.timeout || 180000, streaming ? onRaw : null, streaming ? 60000 : 0);
+      if (streaming && buf.trim()) onRaw(res.text + '\n\n');
+      const text = String(res.text || '').trim();
+      let json = null;
+      if (!sawSse && text.startsWith('{')) { try { json = JSON.parse(text); } catch (_) { /* 不是 JSON */ } }
+      const retry = (e) => {
+        if (e.kind !== 'bad') return null;
+        if (!f.noSchema && /output_config|output_format|schema|format/i.test(e.message)) { f.noSchema = true; return claudeCall(model, input, onItems, opts); }
+        if (!f.noStream && /stream/i.test(e.message)) { f.noStream = true; return claudeCall(model, input, onItems, opts); }
+        return null;
+      };
+      if ((json && json.type === 'error') || (!sawSse && res.status !== 200)) {
+        const e = mtClassifyClaude(res.status > 299 ? res.status : 400, text);
+        const again = retry(e);
+        if (again) return again;
+        throw e;
+      }
+      if (evErr) throw mtClassifyClaude(/rate_limit/.test(String(evErr.type)) ? 429 : /overloaded|api_error/.test(String(evErr.type)) ? 529 : 400, JSON.stringify({ type: 'error', error: evErr }));
+      if (json && Array.isArray(json.content)) {
+        modelText = json.content.filter((c) => c && c.type === 'text').map((c) => c.text).join('');
+        stopReason = String(json.stop_reason || '');
+        done = true;
+      }
+      const items = modelText ? mtParseItems(modelText) : null;
+      if (items) return items;
+      const partial = modelText ? mtItemScanner()(modelText) : [];
+      if (partial.length && (done || stopReason === 'max_tokens')) return partial; // 字太多被截斷：用已經翻好的部分
+      if (stopReason === 'refusal') throw mtErr('blocked', 'Claude 拒絕翻譯這張圖');
+      if (res.status === 0 || res.status === -1) throw mtClassifyClaude(res.status, '');
+      if (sawSse && !modelText && !done && !f.noStream && !res.cut) { f.noStream = true; return claudeCall(model, input, onItems, opts); }
+      if (sawSse && !done) throw mtErr('net', 'Claude 連線中斷');
+      if (streaming && !sawSse && !json) f.noStream = true;
+      throw mtErr('parse', 'Claude 沒有回傳結果');
+    }
+    /** 照設定呼叫 Gemini 或 Claude（看模型名字） */
+    const aiCall = (model, input, onItems, opts) => (mtIsClaude(model) ? claudeCall(model, input, onItems, opts) : geminiCall(model, input, onItems, opts));
     async function runBatch(model, batch) {
       const t0 = Date.now();
       const input = [];
@@ -6003,7 +6181,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       };
       let items;
       try {
-        items = await geminiCall(model, input, (got) => {
+        items = await aiCall(model, input, (got) => {
           const touched = new Set();
           for (const it of got) { const j = jobOf(it); if (j) { j.items.push(it); touched.add(j); } }
           touched.forEach((j) => j.notify());
@@ -6038,6 +6216,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       } else if (e.kind === 'model') {
         mtSetBlock(h, model, now + 3 * 86400000, 'missing');
         back(batch);
+      } else if (e.kind === 'credit') {
+        mtSetBlock(h, model, now + 3600000, 'credit'); // 額度用完：一小時後再試（加值後按「重試」馬上恢復）
+        back(batch);
       } else if (e.kind === 'key' || e.kind === 'region') {
         markBad(h, e);
         back(batch);
@@ -6047,7 +6228,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const keep = [];
         for (const j of batch) { j.tries++; if (j.tries <= limit) keep.push(j); else j.reject(e); }
         if (keep.length) { back(keep); mtSetBlock(h, model, now + 3000 * keep[0].tries, 'rate'); }
-        mtWarn('Gemini 錯誤', model, e.kind, e.message);
+        mtWarn(`${aiName()} 錯誤`, model, e.kind, e.message);
       }
       setStatus();
     }
@@ -6618,7 +6799,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           // 同時送出的修正：畫面上的圖最多 4 個（分給不同模型，一起跑），預先翻好的圖 2 個
           if (fq.active >= (hp < 1 ? 4 : 2)) break;
           const st = mtEngineState(cfg());
-          if (st.kind !== 'gemini') {
+          if (st.kind !== 'ai') {
             for (const j of fq.jobs.splice(0)) j.P.fix = '';
             onFallback(st);
             setStatus();
@@ -6761,7 +6942,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       };
       let items;
       try {
-        items = await geminiCall(model, [{ type: 'text', text }], apply, { system: mtFixPrompt(cfg().sfx === 'translate'), schema: MT_FIX_SCHEMA, timeout: 90000, think: 'minimal' });
+        items = await aiCall(model, [{ type: 'text', text }], apply, { system: mtFixPrompt(cfg().sfx === 'translate'), schema: MT_FIX_SCHEMA, timeout: 90000, think: 'minimal', maxTokens: 4096 });
       } catch (e) { onFixError(model, batch.filter((j) => !finished.has(j)), e); return; }
       apply(items);
       remember(items);
@@ -6785,6 +6966,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       } else if (e.kind === 'model') {
         mtSetBlock(h, model, now + 3 * 86400000, 'missing');
         back();
+      } else if (e.kind === 'credit') {
+        mtSetBlock(h, model, now + 3600000, 'credit');
+        back();
       } else if (e.kind === 'key' || e.kind === 'region') {
         markBad(h, e);
         batch.forEach((j) => { j.P.fix = ''; });
@@ -6793,7 +6977,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const keep = e.kind === 'blocked' ? [] : batch.filter((j) => ++j.tries <= 1);
         batch.filter((j) => !keep.includes(j)).forEach((j) => { j.P.fix = 'fail'; });
         if (keep.length) { keep.forEach((j) => { j.P.fix = 'wait'; }); fq.jobs.unshift(...keep); mtSetBlock(h, model, now + 3000, 'rate'); }
-        mtWarn('Gemini 修正失敗', model, e.kind, e.message);
+        mtWarn(`${aiName()} 修正失敗`, model, e.kind, e.message);
       }
       setStatus();
     }
@@ -6816,17 +7000,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         // 免費模式一個字都沒認到的舊結果不沿用（可能是那時候認字出了問題），重新辨識一次
         if (hit && hit.m === 'free' && !hit.blocks.length) hit = null;
         // 快速模式：有翻過就用；精準模式：免費模式翻的只在 Gemini 不能用（或 Gemini 拒絕這張圖）時沿用
-        if (hit && (fast || hit.m !== 'free' || hit.blk || st0.kind !== 'gemini')) {
+        if (hit && (fast || hit.m !== 'free' || hit.blk || st0.kind !== 'ai')) {
           if (hit.m) P.engines.add(hit.m);
           if (hit.fx) P.engines.add('fix');
           Object.assign(P, { blocks: hit.blocks, state: 'done', done: 1, total: 1, step: '', w0: hit.w, h0: hit.h, fix: hit.fx ? 'done' : '', cutT: hit.ct, cutB: hit.cb, seamExt: hit.ex });
           render(P);
-          const fixIt = fast && hit.m === 'free' && !hit.fx && st0.kind === 'gemini'; // 上次還沒修正完
+          const fixIt = fast && hit.m === 'free' && !hit.fx && st0.kind === 'ai'; // 上次還沒修正完
           stitchAround(P).finally(() => { if (fixIt && P.gen === gen) fixWhenReady(P); });
           setStatus();
           return;
         }
-        const useImage = !fast && st0.kind === 'gemini';
+        const useImage = !fast && st0.kind === 'ai';
         const job = await prepQ(P, async () => {
           if (!alive()) return null;
           step(P, '讀取圖片');
@@ -6849,10 +7033,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         P.w0 = plan.W0;
         P.h0 = plan.H0;
         const st = mtEngineState(cfg());
-        const useGemini = useImage && st.kind === 'gemini';
-        if (!useGemini && (!fast || st.kind !== 'gemini')) onFallback(st);
+        const useGemini = useImage && st.kind === 'ai';
+        if (!useGemini && (!fast || st.kind !== 'ai')) onFallback(st);
         P.total = slices.length;
-        step(P, useGemini ? `Gemini 翻譯 0/${P.total} 段` : `辨識文字 0/${P.total} 段`);
+        step(P, useGemini ? `${aiName()} 翻譯 0/${P.total} 段` : `辨識文字 0/${P.total} 段`);
         let allGemini = useGemini;
         let refused = false;
         let failed = 0;
@@ -6893,7 +7077,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           if (!alive()) return;
           if (blocks && blocks.length) addBlocks(P, blocks);
           P.done++;
-          step(P, `${useGemini ? 'Gemini 翻譯' : '辨識文字'} ${P.done}/${P.total} 段`);
+          step(P, `${useGemini ? `${aiName()} 翻譯` : '辨識文字'} ${P.done}/${P.total} 段`);
         }));
         if (!alive()) return;
         if (failed === slices.length) throw lastErr || new Error('翻譯失敗');
@@ -6914,7 +7098,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         // 免費模式一個字都沒認到的結果不記住：下次打開會再認一次（真的沒有字的頁也只是多花一點時間）
         if (!failed && (allGemini || P.blocks.length)) cachePut(P, allGemini ? ([...P.engines].find((m) => m !== 'free' && m !== 'ms' && m !== 'fix') || 'gemini') : 'free', plan.W0, plan.H0, refused, false);
         // 被切在上下兩張圖中間的字接起來；快速模式再請 Gemini 依前後文修正（只送文字）
-        const fixIt = fast && !allGemini && mtEngineState(cfg()).kind === 'gemini';
+        const fixIt = fast && !allGemini && mtEngineState(cfg()).kind === 'ai';
         stitchAround(P).finally(() => { if (fixIt && P.gen === gen) fixWhenReady(P); });
       } catch (e) {
         if (!alive() || (e && e.kind === 'cancel')) return;
@@ -7404,7 +7588,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         }
         if (P.fix === 'wait') c.fixWait++; else if (P.fix === 'busy') c.fixBusy++; else if (P.fix === 'done') c.fixDone++;
         for (const m of P.engines) {
-          if (m === 'free') { c.free = true; c.gtx = true; } else if (m === 'ms') { c.free = true; c.ms = true; } else if (m !== 'fix') c.gem = true;
+          if (m === 'free') { c.free = true; c.gtx = true; } else if (m === 'ms') { c.free = true; c.ms = true; } else if (m !== 'fix') { c.gem = true; if (mtIsClaude(m)) c.claude = true; }
         }
       }
       return c;
@@ -7428,13 +7612,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       }
       if (cur) {
         let t = `第 ${pageNo(cur)} 張：${cur.step || '翻譯中'}`;
-        if (gq.waitUntil > Date.now() && /Gemini/.test(cur.step || '')) t += `（等 Gemini ${secs(gq.waitUntil)} 秒）`;
+        if (gq.waitUntil > Date.now() && /Gemini|Claude/.test(cur.step || '')) t += `（等 ${aiName()} ${secs(gq.waitUntil)} 秒）`;
         return t;
       }
       if (c.seam) return '接起切在兩張圖中間的字';
       if (c.fixBusy || c.fixWait) {
-        if (fq.waitUntil > Date.now() && !c.fixBusy) return `等 Gemini 修正（${secs(fq.waitUntil)} 秒）`;
-        return `Gemini 修正中 ${c.fixDone}/${c.fixDone + c.fixBusy + c.fixWait} 張`;
+        if (fq.waitUntil > Date.now() && !c.fixBusy) return `等 ${aiName()} 修正（${secs(fq.waitUntil)} 秒）`;
+        return `${aiName()} 修正中 ${c.fixDone}/${c.fixDone + c.fixBusy + c.fixWait} 張`;
       }
       return '';
     }
@@ -7480,7 +7664,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       else if (fixing) text = `已翻譯 ${c.done} 張 · ${act}`;
       else {
         const tr = c.ms ? (c.gtx ? 'Google／微軟翻譯' : '微軟翻譯') : 'Google 翻譯';
-        const how = c.gem && !c.free ? 'Gemini' : c.fixDone ? `${tr}＋Gemini 修正` : c.gem ? `Gemini＋${tr}` : tr;
+        const an = c.claude ? 'Claude' : c.gem ? 'Gemini' : aiName();
+        const how = c.gem && !c.free ? an : c.fixDone ? `${tr}＋${an} 修正` : c.gem ? `${an}＋${tr}` : tr;
         text = `已翻譯 ${c.done} 張 · ${how}`;
       }
       // 手機畫面窄：不寫「漫畫翻譯」，留位置給進度
@@ -7569,7 +7754,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (busy) {
           const t = loc.making && loc.status && /文字辨識/.test(P.step || '') ? `${loc.status}${loc.prog > 0 && loc.prog < 1 ? ` ${Math.round(loc.prog * 100)}%` : '…'}` : (P.step || '翻譯中');
           ov.setBadge(t, P.total ? (P.done + ocrPart(P)) / P.total : 0.03, false);
-        } else ov.setBadge(P.fix === 'busy' ? 'Gemini 修正中…' : '等 Gemini 修正', null, true);
+        } else ov.setBadge(P.fix === 'busy' ? `${aiName()} 修正中…` : `等 ${aiName()} 修正`, null, true);
       }
     }
     /** 卡住或失敗時重來：中斷進行中的請求、重開文字辨識，沒翻完的圖重新排隊 */
@@ -8010,6 +8195,21 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     };
   }
 
+  async function mtTestClaudeKey(key, model) {
+    key = String(key || '').trim();
+    if (!key) return { ok: false, text: '請先貼上金鑰' };
+    const h = mtKeyHash(key);
+    try {
+      const ids = await mtListClaudeModels(key);
+      if (store.get('mt.badkey', '') === h) store.set('mt.badkey', '');
+      const want = CLAUDE_MODELS.some(([id]) => id === model) ? model : CLAUDE_MODELS[0][0];
+      if (ids.length && !ids.includes(want)) return { ok: false, text: `金鑰可以用，但帳號裡沒有 ${modelLabel(want)}，請換一個模型` };
+      return { ok: true, text: `金鑰可以用，會用 ${modelLabel(want)}（付費，用帳號裡的額度）` };
+    } catch (e) {
+      if (e && e.kind === 'key') { store.set('mt.badkey', h); return { ok: false, text: '金鑰無效，請確認有完整複製' }; }
+      return { ok: false, text: `連不到 Claude（${(e && e.message) || '未知錯誤'}），請稍後再試` };
+    }
+  }
   async function mtTestKey(key) {
     key = String(key || '').trim();
     if (!key) return { ok: false, text: '請先貼上金鑰' };
@@ -8669,10 +8869,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       desc: TOUCH
         ? '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，點角落的「譯」就會翻譯這一話；其他網站在下面按「新增這個網站」或貼上漫畫網址，也可以在 Tampermonkey 選單按「翻譯這一話的漫畫」。'
         : '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕（其他網站在下面按「新增這個網站」或貼上漫畫網址）；任何網站都可以按 Alt+T 翻譯整頁。',
-      defaults: { apiKey: '', mode: 'fast', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
+      defaults: { engine: 'gemini', apiKey: '', claudeKey: '', claudeModel: CLAUDE_MODELS[0][0], mode: 'fast', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
       fields: [
-        { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k) },
-        { key: 'mode', label: '翻譯方式', type: 'select', options: [['fast', '快速：Google 翻譯＋Gemini 修正（省次數）'], ['accurate', '精準：Gemini 看圖翻譯（很耗次數）']] },
+        { key: 'engine', label: 'AI 服務', type: 'select', options: [['gemini', 'Gemini（免費）'], ['claude', 'Claude（付費，用帳號裡的額度）']] },
+        { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k), when: (c) => mtAiOf(c) === 'gemini' },
+        { key: 'claudeKey', label: 'Claude 金鑰', type: 'secret', placeholder: '貼上 sk-ant- 開頭的金鑰', link: { href: CLAUDE_KEY_URL, text: '到 Claude Console 取得金鑰' }, test: (k, c) => mtTestClaudeKey(k, c.claudeModel), when: (c) => mtAiOf(c) === 'claude' },
+        { key: 'claudeModel', label: 'Claude 模型', type: 'select', options: CLAUDE_MODELS, when: (c) => mtAiOf(c) === 'claude' },
+        { key: 'mode', label: '翻譯方式', type: 'select', options: [['fast', '快速：Google 翻譯＋AI 修正（省錢、省次數）'], ['accurate', '精準：AI 看圖翻譯（最準，很耗次數）']] },
         { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站', addHere: true, paste: true },
         { key: 'auto', label: '在這些網站', type: 'select', options: [['off', '按了才翻譯'], ['on', '打開漫畫就自動翻譯整話']] },
         { key: 'sfx', label: '狀聲詞', type: 'select', options: [['skip', '不翻'], ['translate', '也翻']] },
@@ -9058,6 +9261,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     store.set('cfg.' + m.id, cur);
     notifyConfig(m);
     renderMenu();
+    if (panel) panel.refresh(); // 有些欄位要看別的設定才決定顯不顯示
   }
 
   function buildField(m, f) {
@@ -9113,7 +9317,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           note.textContent = '測試中…';
           test.disabled = true;
           try {
-            const r = await f.test(input.value.trim());
+            const r = await f.test(input.value.trim(), getCfg(m));
             note.textContent = r.text;
             note.className = 'mb-note ' + (r.ok ? 'is-ok' : 'is-bad');
           } finally {
@@ -9251,7 +9455,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   function buildRow(m) {
     const sw = h('input', { type: 'checkbox', role: 'switch', 'aria-label': `${m.name}：開關` });
     sw.checked = isOn(m);
-    const fields = (m.fields || []).map((f) => buildField(m, f));
+    // 有 when 的欄位只在條件成立時顯示（例如選了 Claude 才顯示 Claude 的金鑰）
+    const fields = (m.fields || []).map((f) => {
+      const built = buildField(m, f);
+      if (typeof f.when !== 'function') return built;
+      const sync = () => { built.el.hidden = !f.when(getCfg(m)); };
+      sync();
+      const refresh = built.refresh;
+      return { el: built.el, refresh: () => { refresh(); sync(); } };
+    });
     const hintText = () => (typeof m.hint === 'function' ? m.hint(getCfg(m)) : m.hint);
     const hint = m.hint ? h('p', { class: 'mb-hint', text: hintText() }) : null;
     const el = h('article', { class: 'mb-row' + (sw.checked ? '' : ' is-off') },
