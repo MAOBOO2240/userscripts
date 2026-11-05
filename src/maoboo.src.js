@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.17
+// @version      1.5.18
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -43,6 +43,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.18 漫畫翻譯：修正英文漫畫被誤判成韓文（之後整話一個字都不翻、要手動切回英文）：判斷原文語言時韓文、日文只算認得有把握的字，
+ *        用錯語言的模型吐出的亂碼不算；記住的語言要連兩段都認不到字、而且另一個語言認得很順才改記，原本的語言認得好的作品不會被改掉；
+ *        記錯的語言在下次打開時會自己換回來，用錯語言翻出來的亂碼也會重新翻；診斷報告的每張圖多了語言和認字信心
  * 1.5.17 漫畫翻譯：修正 Claude 翻譯時跳「金鑰無效」（瀏覽器送的請求要多帶 anthropic-dangerous-direct-browser-access 標頭），
  *        更新後自動把被誤記成無效的金鑰解除；選 Claude 時 Gemini 金鑰留著當備援：Claude 額度用完、金鑰無效或模型不能用時自動換 Gemini 接著翻（會提示一次），
  *        加值後按「重試」換回 Claude；兩個都不能用才改用免費模式。兩把金鑰的狀態（壞掉、被擋的模型）分開記
@@ -4485,6 +4488,31 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     };
   }
 
+  /**
+   * 判斷原文語言的證據：一個語言的模型在一段圖上認出來的字數、行數，和其中「有把握」的部分（認字信心 85 以上）。
+   * 用錯語言的模型（例如用韓文模型認英文）也會吐出一堆字，但信心多半只有 60 左右；真的韓文、日文通常 90 以上
+   */
+  const MT_LANG_SURE = 0.85;
+  function mtLangEv(groups, lang, into) {
+    const ev = into || { ch: 0, n: 0, sure: 0, sn: 0, w: 0, c: 0 };
+    for (const g of groups || []) {
+      const k = g.text.replace(/\s/g, '').length;
+      const conf = typeof g.conf === 'number' ? g.conf : 1;
+      const n = g.lines || 1;
+      ev.ch += k;
+      ev.n += n;
+      ev.w += k;
+      ev.c += conf * k;
+      if (conf >= MT_LANG_SURE) { ev.sure += k; ev.sn += n; }
+    }
+    ev.conf = ev.w ? ev.c / ev.w : 0;
+    // 分數：英文一個字一分；韓文、日文只算有把握的字、一個字兩分（原本的規則：16 分以上算認得很順）
+    ev.score = lang === 'eng' ? ev.ch : ev.sure * 2;
+    // 認得很順：英文 16 個字以上；韓文、日文 8 個有把握的字以上、而且至少兩行（亂碼多半是零星的一行）
+    ev.ok = lang === 'eng' ? ev.ch >= 16 : ev.sure >= 8 && ev.sn >= 2;
+    return ev;
+  }
+
   /** 英文、韓文、日文的字有沒有對（沒有的多半是圖上的雜訊） */
   // 沒有母音的英文，只認常見的語氣詞（MM-HMM、HMM、SHH、TSK、PSST、GRR）
   const MT_EN_NOVOWEL = /^(?:m+h*m+|h+m+(?:p+h+)?|s+h+|t+s+k+|t+c+h+|p+f+t*|p+s+t+|g+r+|b+r+|z{2,}|n{2,})+$/i;
@@ -4621,7 +4649,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const letters = text.replace(/[^\p{L}]/gu, '').length;
       // 很短又不太確定的（例如兩個字母）：單獨出現時多半是圖上的雜訊，跟別的行在一起才算
       const shaky = bub < 0 && (lang === 'eng' ? letters <= 2 : letters <= 1) && l.conf < 0.85;
-      lines.push({ x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, w, h, text, shaky, bub, vertical: h >= w * 1.5, square: Math.max(w, h) < Math.min(w, h) * 1.5, bgc: l.bgc || '' });
+      lines.push({ x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, w, h, text, conf: +l.conf || 0, shaky, bub, vertical: h >= w * 1.5, square: Math.max(w, h) < Math.min(w, h) * 1.5, bgc: l.bgc || '' });
     }
     // 日文旁邊的小字（假名注音）：緊貼著一行粗很多的直排字，拿掉
     if (cjk) {
@@ -4720,6 +4748,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         text = mtSentenceCase(text);
       }
       const t = g.reduce((m, l) => m + Math.min(l.w, l.h), 0) / g.length;
+      // 認字的信心（每行依字數加權）：判斷原文語言時用，認得很沒把握的多半是用錯語言的模型算出來的亂碼
+      const nch = g.reduce((m, l) => m + Math.max(1, l.text.replace(/\s/g, '').length), 0);
       const o = {
         x0: Math.min(...g.map((l) => l.x0)) - t * 0.1,
         y0: Math.min(...g.map((l) => l.y0)) - t * 0.1,
@@ -4728,6 +4758,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         text,
         vertical,
         lh: t, // 原文一行的粗細：譯文的字不要比它大太多
+        lines: g.length,
+        conf: g.reduce((m, l) => m + l.conf * Math.max(1, l.text.replace(/\s/g, '').length), 0) / nch,
       };
       const b = g[0].bub >= 0 ? B[g[0].bub] : null;
       if (b) {
@@ -5020,6 +5052,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         y1: Math.max(...g.map((l) => l.y1)) + t * (vertical ? 0.6 : 0.15),
         text,
         vertical,
+        lines: g.length, // 沒有 conf：Tesseract 的信心算法不一樣，判斷語言時不拿它的信心篩（用 Tesseract 時本來就不記語言）
       });
     }
     return out;
@@ -6560,13 +6593,18 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         throw Object.assign(e instanceof Error ? e : new Error(String(e)), { setup: true });
       }
       if (P && prev && P.step === '準備文字辨識') step(P, prev);
+      // 共用同一個模型的語言（英文、日文）認出來的字一樣，只差在留哪些字：這一段用這個模型認過就不用再算
+      const key = pdKey(lang);
+      s.raw = s.raw || {};
+      if (s.raw[key]) return mtPaddleGroups(s.raw[key], lang, s.bubbles || []);
       const wk = await pdTake();
       wk.page = P;
       try {
         const r = await orCancel(wk.call({ type: 'ocr', blob: s.blob, rec: lang, boxes: s.boxes || null, opts: {} }, (f) => { wk.prog = f; bump(); }));
         s.boxes = r.boxes;
         s.bubbles = r.bubbles || [];
-        return mtPaddleGroups(r.lines, lang, s.bubbles);
+        s.raw[key] = r.lines || [];
+        return mtPaddleGroups(s.raw[key], lang, s.bubbles);
       } finally { pdRelease(wk); }
     }
     /**
@@ -6708,11 +6746,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         step(P, '判斷原文語言');
         let best = null;
         let bestScore = 0;
+        let sure = null; // 認得很順的語言
         // 先試這個網站上次的語言：猜對的話，這次辨識的結果直接拿來用，不多花時間
         const last = (store.get('mt.lang', {}) || {})[HOST];
         const order = [...new Set([last, 'eng', 'kor', 'jpn'].filter((l) => MT_LANG[l]))];
         for (const s of slices) {
-          for (let k = 0; k < order.length; k++) {
+          for (let k = 0; k < order.length && !sure; k++) {
             const lang = order[k];
             let groups = [];
             try { groups = await ocrRun(s, lang, plan, P, true); } catch (e) { if (lang === 'eng') throw e; continue; }
@@ -6722,15 +6761,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
               order.splice(order.indexOf('jpn'), 1);
               order.splice(1, 0, 'jpn');
             }
-            const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
-            if (score > bestScore) { best = lang; bestScore = score; }
-            if (score >= 16) break; // 這個語言辨識得很順，就不用再試其他語言
+            // 韓文、日文只算有把握的字：用錯模型認英文會吐出一堆信心很低的亂碼，不能因此把英文漫畫當成韓文
+            const ev = mtLangEv(groups, lang);
+            if (ev.score > bestScore) { best = lang; bestScore = ev.score; }
+            if (ev.ok) sure = lang; // 這個語言辨識得很順，就不用再試其他語言
           }
-          if (bestScore >= 16) break;
+          if (sure) break;
         }
         // 用 Tesseract 判斷的不記住（Tesseract 常把英文認成一堆韓文、日文亂碼，記錯了之後整個網站都認不到字）
-        if (bestScore >= 8 && !pd.failed) rememberLang(best);
-        return bestScore >= 4 ? best : null;
+        // 韓文、日文要認得很順才記（記錯了之後整部作品都認不到字）；英文認到 8 個字就記
+        if (!pd.failed && (sure || (best === 'eng' && bestScore >= 8))) rememberLang(sure || best);
+        return sure || (bestScore >= 4 ? best : null);
       });
     }
     /** 記住這部作品（和這個網站）的原文語言 */
@@ -6745,31 +6786,35 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       store.set('mt.lang', map);
     }
     /**
-     * 記住的語言認不到字、但找字找到不少字框（記錯了：例如之前用 Tesseract 把英文漫畫記成韓文）：
-     * 拿這一段試試其他語言，有一個認得很順就改記那個，一個字都沒認到的圖重新翻。一部作品一個工作階段只試一次
+     * 記住的語言認不到字、但找字找到不少字框（記錯了：例如之前把英文漫畫記成韓文）：拿這一段試試其他語言。
+     * 證據跨段累積：記住的語言至少在兩段上都認不到字，而且有一個語言認得很順（英文 16 個字以上；韓文、日文 8 個有把握的字、至少兩行），
+     * 才改記那個語言，一個字都沒認到的圖重新翻。記住的語言在這部作品上已經有兩段認得很順就不試（韓漫裡偶爾出現的英文標題不會把語言改掉）；
+     * 一部作品一個工作階段最多試 6 段
      */
-    const relangDone = new Set();
+    const relangEv = new Map(); // 作品 → { tries: 試過幾段, good: 記住的語言認得很順的段數, ev: { 語言: 累積的證據 } }
+    const relangOf = () => { const sk = seriesKey(); let R = relangEv.get(sk); if (!R) { R = { tries: 0, good: 0, ev: {} }; relangEv.set(sk, R); } return R; };
     async function relang(P, s, plan) {
-      const sk = seriesKey();
-      if (relangDone.has(sk)) return null;
-      relangDone.add(sk);
+      const R = relangOf();
+      if (R.good >= 2 || R.tries >= 6) return null;
+      R.tries++;
       const cur = P.lang;
       let best = null;
-      let bestScore = 0;
       for (const lang of ['eng', 'kor', 'jpn'].filter((l) => l !== cur && MT_LANG[l])) {
         let groups = [];
         try { groups = await ocrRun(s, lang, plan, P, true); } catch (e) { if (e && e.kind === 'cancel') throw e; continue; }
-        const score = groups.reduce((n, g) => n + g.text.replace(/\s/g, '').length, 0) * (lang === 'eng' ? 1 : 2);
-        if (score > bestScore) { best = lang; bestScore = score; }
-        if (score >= 16) break;
+        R.ev[lang] = mtLangEv(groups, lang, R.ev[lang]);
+        if (R.ev[lang].ok && R.tries >= 2) { best = lang; break; }
       }
-      if (bestScore < 16) return null;
+      if (!best) return null;
+      relangEv.set(seriesKey(), { tries: 0, good: 0, ev: {} });
       rememberLang(best);
       const name = { eng: '英文', kor: '韓文', jpn: '日文' };
       tell('relang', `這部漫畫的原文看起來是${name[best]}（之前記成${name[cur] || cur}），改用${name[best]}重新辨識。`, { title: '漫畫翻譯' });
       pg.langVer++;
+      // 用記錯的語言翻過的圖：一個字都沒認到的、認出來的全都沒把握的（亂碼）重新翻；有把握的句子（韓漫裡的英文標題）保留
+      const unsure = (Q) => !Q.blocks.some((b) => typeof b.conf !== 'number' || b.conf >= MT_LANG_SURE);
       for (const Q of pages.values()) {
-        if (Q !== P && Q.state === 'done' && !Q.blocks.length && Q.lang === cur) { resetPage(Q); queueP(Q); }
+        if (Q !== P && Q.state === 'done' && Q.lang === cur && unsure(Q)) { resetPage(Q); queueP(Q); }
       }
       return best;
     }
@@ -6782,12 +6827,16 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (!alive()) throw mtErr('cancel');
         step(P, `辨識文字 ${Math.min(P.done + 1, P.total)}/${P.total} 段`);
         let groups = await ocrRun(s, lang, plan, P);
-        // 記住的語言一個字都沒認到、但找到好幾個橫的字框（對話的樣子）：可能記錯語言了，換其他語言試試
         const set = cfg().ocrLang;
-        const liney = (b) => b.x1 - b.x0 >= (b.y1 - b.y0) * 2.5 && b.y1 - b.y0 >= 10;
-        if (!groups.length && !(set && set !== 'auto') && !mtHostLang() && !pd.failed && (s.boxes || []).filter(liney).length >= 3) {
-          const better = await relang(P, s, plan);
-          if (better) { lang = better; P.lang = lang; groups = await ocrRun(s, lang, plan, P); }
+        if (!(set && set !== 'auto') && !mtHostLang() && !pd.failed) {
+          const ev = mtLangEv(groups, lang);
+          if (ev.ok) relangOf().good++; // 這一段用記住的語言認得很順（英翻韓漫裡零星留著的韓文狀聲詞不算）
+          // 記住的語言一個字都沒認到（韓文、日文：沒有一個有把握的字）、但找到好幾個橫的字框（對話的樣子）：可能記錯語言了，換其他語言試試
+          const liney = (b) => b.x1 - b.x0 >= (b.y1 - b.y0) * 2.5 && b.y1 - b.y0 >= 10;
+          if ((lang === 'eng' ? !groups.length : !ev.sure) && (s.boxes || []).filter(liney).length >= 3) {
+            const better = await relang(P, s, plan);
+            if (better) { lang = better; P.lang = lang; groups = await ocrRun(s, lang, plan, P); }
+          }
         }
         // 狀聲詞設定「不翻」：狀聲詞直接跳過（原圖保持原樣）
         if (cfg().sfx !== 'translate') groups = groups.filter((g) => !mtIsSfx(g, groups, lang, plan.W));
@@ -6809,6 +6858,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           shape: g.shape || '',
           rows: g.rows || null,
           lh: g.lh > 0 ? g.lh / plan.W : 0,
+          conf: typeof g.conf === 'number' ? Math.round(g.conf * 100) / 100 : null, // 認字的信心（PaddleOCR 才有）：改記語言時，沒有一句有把握的圖重新辨識
           edge: (s.y0 > 0 && g.y0 < 6) || (s.y1 < plan.H && g.y1 > sh - 6),
           // 字（或它的對話框）碰到整張圖的上緣、下緣：可能是被切在兩張圖中間的一句話
           ct: s.y0 === 0 && (g.et || g.y0 < Math.max(6, (g.lh || 20) * 0.5)),
@@ -8043,7 +8093,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         v: VERSION, ed: EDITION, ua: navigator.userAgent.replace(/^Mozilla\/5\.0 /, '').slice(0, 160), site: HOST, path: location.pathname.replace(/\d+/g, '#'),
         scr: [innerWidth, innerHeight, window.devicePixelRatio, vv ? Math.round(vv.scale * 100) / 100 : null, uiZ],
         pg: { on: pg.on, hidden: pg.hidden, dirs: pg.dirs ? pg.dirs.size : 0 }, c: counts(), views: views.size,
-        pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => `${name(P.url)} ${P.state} b${P.blocks.length} e${P.els.size}${P.guess ? ' g' : ''}`),
+        // 每張圖：狀態、幾句、幾個圖片元素、g = 猜的、語言和認字信心（c92 = 平均 92）
+        pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => {
+          const cs = P.blocks.map((b) => b.conf).filter((c) => typeof c === 'number');
+          const conf = cs.length ? ` c${Math.round((cs.reduce((n, c) => n + c, 0) / cs.length) * 100)}` : '';
+          return `${name(P.url)} ${P.state} b${P.blocks.length} e${P.els.size}${P.guess ? ' g' : ''}${P.lang ? ' ' + P.lang : ''}${conf}`;
+        }),
         imgs, test: test || undefined, err: DIAG_ERRS.slice(),
       });
     }
