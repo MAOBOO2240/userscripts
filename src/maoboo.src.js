@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.16
+// @version      1.5.17
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -43,6 +43,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.17 漫畫翻譯：修正 Claude 翻譯時跳「金鑰無效」（瀏覽器送的請求要多帶 anthropic-dangerous-direct-browser-access 標頭），
+ *        更新後自動把被誤記成無效的金鑰解除；選 Claude 時 Gemini 金鑰留著當備援：Claude 額度用完、金鑰無效或模型不能用時自動換 Gemini 接著翻（會提示一次），
+ *        加值後按「重試」換回 Claude；兩個都不能用才改用免費模式。兩把金鑰的狀態（壞掉、被擋的模型）分開記
  * 1.5.16 漫畫翻譯：設定面板多了「AI 服務」：除了免費的 Gemini，也可以選付費的 Claude（Claude Console 的金鑰、選模型，預設 Opus 5.5），
  *        快速模式的修正和精準模式的看圖都改用 Claude，沒有每天的次數限制；額度用完或金鑰無效時自動改用免費模式；面板只顯示選到的服務的金鑰
  * 1.5.15 漫畫翻譯：記錯的原文語言會自己修正（之前退到 Tesseract 時常把英文漫畫記成韓文，之後整個網站都認不到字）：
@@ -2127,8 +2130,19 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const c = store.get('mt.chain', null);
     return c && c.k === kh && Array.isArray(c.list) && c.list.length ? c.list : GEMINI_DEFAULT_CHAIN;
   }
+  /** 壞掉的金鑰（Gemini、Claude 各自記；舊版只記一把） */
+  const mtBadKeys = () => { const b = store.get('mt.badkeys', null); const one = store.get('mt.badkey', ''); return (Array.isArray(b) ? b : []).concat(one ? [one] : []); };
+  const mtKeyBad = (kh) => mtBadKeys().includes(kh);
+  function mtMarkKey(kh, bad) {
+    const list = mtBadKeys().filter((x) => x !== kh);
+    if (bad) list.push(kh);
+    store.set('mt.badkeys', list.slice(-8));
+    if (store.get('mt.badkey', '')) store.set('mt.badkey', '');
+  }
+  /** 被擋的模型：每把金鑰各自記（Claude 和 Gemini 的分開；舊版格式 {k, m} 也讀得到） */
   function mtBlocks(kh) {
     const b = store.get('mt.block', null);
+    if (b && b.by && b.by[kh]) return b.by[kh];
     return b && b.k === kh && b.m ? b.m : {};
   }
   function mtSetBlock(kh, model, until, why) {
@@ -2136,7 +2150,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const now = Date.now();
     for (const k of Object.keys(cur)) if (!cur[k] || cur[k].until <= now) delete cur[k];
     cur[model] = { until, why };
-    store.set('mt.block', { k: kh, m: cur });
+    const b = store.get('mt.block', null);
+    const by = Object.assign({}, (b && b.by) || {});
+    if (b && b.k && b.m && !by[b.k]) by[b.k] = b.m;
+    delete by[kh];
+    by[kh] = cur;
+    const keys = Object.keys(by);
+    if (keys.length > 4) keys.slice(0, keys.length - 4).forEach((k) => { delete by[k]; });
+    store.set('mt.block', { by });
   }
   /** 目前可以用的模型：沒被擋的第一個；全部只是每分鐘次數用完 → 等一下；全部今天用完（或額度沒了）→ 沒有 */
   function mtPick(kh, chain) {
@@ -2154,37 +2175,50 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     if (rate) return { wait: rate.until - now, model: rate.model };
     return { none: true, until: soonest, why };
   }
-  /** 設定裡選的 AI 服務：gemini（免費）或 claude（付費，用帳號裡的額度）；和它的金鑰 */
+  /** 設定裡選的 AI 服務：gemini（免費）或 claude（付費，用帳號裡的額度）；和各自的金鑰 */
   const mtAiOf = (c) => (c.engine === 'claude' ? 'claude' : 'gemini');
-  const mtAiKey = (c) => String((mtAiOf(c) === 'claude' ? c.claudeKey : c.apiKey) || '').trim();
+  const mtKeyFor = (c, ai) => String((ai === 'claude' ? c.claudeKey : c.apiKey) || '').trim();
   const mtAiName = (ai) => (ai === 'claude' ? 'Claude' : 'Gemini');
   const mtClaudeModel = (c) => (CLAUDE_MODELS.some(([id]) => id === c.claudeModel) ? c.claudeModel : CLAUDE_MODELS[0][0]);
-  /**
-   * 現在能不能用 AI 翻譯：ai（可以，model 是要用的模型）、nokey、badkey、quota（Gemini 今天的免費額度用完）、
-   * credit（Claude 帳號的額度用完）、model（選的 Claude 模型帳號不能用）
-   */
-  function mtEngineState(c) {
-    const ai = mtAiOf(c);
-    const key = mtAiKey(c);
+  /** 一個 AI 服務現在能不能用（看金鑰、被擋的模型） */
+  function mtAiState(c, ai) {
+    const key = mtKeyFor(c, ai);
     if (!key) return { kind: 'nokey', ai };
     const kh = mtKeyHash(key);
-    if (store.get('mt.badkey', '') === kh) return { kind: 'badkey', ai };
+    if (mtKeyBad(kh)) return { kind: 'badkey', ai };
     const p = mtPick(kh, ai === 'claude' ? [mtClaudeModel(c)] : null);
-    if (p.none) return { kind: ai === 'claude' ? (p.why === 'missing' ? 'model' : 'credit') : 'quota', ai, until: p.until };
+    if (p.none) return { kind: ai === 'claude' ? (p.why === 'missing' ? 'model' : p.why === 'cors' ? 'cors' : 'credit') : 'quota', ai, until: p.until };
     return { kind: 'ai', ai, model: p.model, wait: p.wait || 0 };
   }
+  /**
+   * 現在能不能用 AI 翻譯：ai（可以，model 是要用的模型）、nokey、badkey、quota（Gemini 今天的免費額度用完）、
+   * credit（Claude 帳號的額度用完）、model（選的 Claude 模型帳號不能用）。
+   * 選 Claude 時，Claude 不能用就看 Gemini 能不能接手（fallback 記著 Claude 的狀況），都不能才回報 Claude 的狀況
+   */
+  function mtEngineState(c) {
+    const st = mtAiState(c, mtAiOf(c));
+    if (st.kind === 'ai' || st.ai !== 'claude' || !mtKeyFor(c, 'gemini')) return st;
+    const g = mtAiState(c, 'gemini');
+    return g.kind === 'ai' ? Object.assign(g, { fallback: st.kind }) : st;
+  }
+  /** Claude 不能用的原因，給提示用 */
+  const mtClaudeWhy = (c, kind) => (kind === 'credit' ? 'Claude 帳號的額度用完了' : kind === 'badkey' ? 'Claude 金鑰無效' : kind === 'model' ? `帳號不能用 ${modelLabel(mtClaudeModel(c))}`
+    : kind === 'cors' ? 'Claude 的組織設定不允許從瀏覽器直接呼叫 API' : '還沒填 Claude 金鑰');
   function mtHint(c) {
     const s = mtEngineState(c);
     const fast = c.mode !== 'accurate';
+    if (s.fallback) return `${mtClaudeWhy(c, s.fallback)}，目前由 Gemini（${modelLabel(s.model)}）接手${s.fallback === 'credit' ? '；加值後按狀態列的「重試」換回 Claude' : ''}。`;
     if (s.ai === 'claude') {
       if (s.kind === 'nokey') return '還沒填 Claude 金鑰：目前只用免費模式（瀏覽器辨識文字＋Google 翻譯）。到 Claude Console 取得金鑰，貼上後按「測試」。';
       if (s.kind === 'badkey') return 'Claude 金鑰無效或沒有權限，目前只用免費模式。請重新貼上金鑰再按「測試」。';
       if (s.kind === 'credit') return 'Claude 帳號的額度用完了（請到 Claude Console 加值），目前只用免費模式；加值後按狀態列的「重試」或重新整理。';
       if (s.kind === 'model') return `帳號不能用 ${modelLabel(mtClaudeModel(c))}，目前只用免費模式。請換一個模型再試。`;
+      if (s.kind === 'cors') return 'Claude 的組織設定不允許從瀏覽器直接呼叫 API，目前只用免費模式。請到 Claude Console 的組織設定允許，或改選 Gemini。';
       const cost = mtClaudeCost(s.model);
+      const out = mtKeyFor(c, 'gemini') ? '額度用完會自動換 Gemini 接手。' : '額度用完會自動改用免費模式（填了 Gemini 金鑰的話會換 Gemini 接手）。';
       return fast
-        ? `快速模式：瀏覽器辨識文字＋Google 翻譯，畫面上很快就有譯文；再用 ${modelLabel(s.model)} 依前後文修正，只送文字，很省（一話約 US$${cost[0]}）。每次都會用到帳號裡的額度；額度用完會自動改用免費模式。`
-        : `精準模式：${modelLabel(s.model)} 直接看圖翻譯，最準，但每張圖都要付費（一話約 US$${cost[1]}）；額度用完會自動改用免費模式。`;
+        ? `快速模式：瀏覽器辨識文字＋Google 翻譯，畫面上很快就有譯文；再用 ${modelLabel(s.model)} 依前後文修正，只送文字，很省（一話約 US$${cost[0]}）。每次都會用到帳號裡的額度；${out}`
+        : `精準模式：${modelLabel(s.model)} 直接看圖翻譯，最準，但每張圖都要付費（一話約 US$${cost[1]}）；${out}`;
     }
     if (s.kind === 'nokey') {
       return fast ? '還沒填金鑰：目前只用瀏覽器辨識文字＋Google 翻譯。填了 Gemini 金鑰（可以免費申請）會再幫忙修正認錯的字、翻得不順的地方，只送文字、很省次數；免費額度用完也不會收費。'
@@ -2328,8 +2362,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     return mtErr('other', msg);
   }
 
-  /** Claude API 的標頭 */
-  const mtClaudeHeaders = (key) => ({ 'x-api-key': key, 'anthropic-version': CLAUDE_VERSION });
+  /** Claude API 的標頭：從瀏覽器（有 Origin）送的請求要加 anthropic-dangerous-direct-browser-access，不然會被當成跨站攻擊擋下（401） */
+  const mtClaudeHeaders = (key) => ({ 'x-api-key': key, 'anthropic-version': CLAUDE_VERSION, 'anthropic-dangerous-direct-browser-access': 'true' });
   /** 把 Claude 的錯誤分類：金鑰問題、額度用完、每分鐘次數、模型不存在、忙碌… */
   function mtClassifyClaude(status, text) {
     if (status === 0) return mtErr('net', '連不到 Claude');
@@ -2338,6 +2372,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     try { const j = JSON.parse(text); err = (j && j.error) || (j && j.type === 'error' ? j : null); } catch (_) { /* 不是 JSON */ }
     const type = String((err && err.type) || '');
     const msg = String((err && err.message) || `HTTP ${status}`);
+    if (/\bCORS\b|browser/i.test(msg)) return mtErr('cors', msg); // 組織設定不允許從瀏覽器直接呼叫
     if (status === 401 || status === 403 || /authentication_error|permission_error/.test(type)) return mtErr('key', msg);
     if (status === 404 || type === 'not_found_error') return mtErr('model', msg);
     if (status === 429 || type === 'rate_limit_error') return mtErr('rate', msg, { delay: 15000 });
@@ -5278,10 +5313,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   /** 漫畫翻譯（每個分頁一份） */
   function createMangaTranslator(ctx) {
     const cfg = () => ctx.cfg();
-    const ai = () => mtAiOf(cfg()); // gemini 或 claude
-    const key = () => mtAiKey(cfg());
-    const kh = () => mtKeyHash(key());
-    const aiName = () => mtAiName(ai());
+    const gkey = () => mtKeyFor(cfg(), 'gemini');
+    const ckey = () => mtKeyFor(cfg(), 'claude');
+    const gkh = () => mtKeyHash(gkey());
+    const khOf = (model) => mtKeyHash(mtIsClaude(model) ? ckey() : gkey()); // 這個模型用哪把金鑰
+    const aiNow = () => mtEngineState(cfg()).ai || mtAiOf(cfg()); // 現在實際在用的服務（Claude 不能用時是接手的 Gemini）
+    const aiName = () => mtAiName(aiNow());
     const siteOn = () => !!mtSiteMatch(cfg().sites);
     const isTouch = TOUCH;
     let stopped = false;
@@ -5816,27 +5853,36 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     let chainP = null;
     let chainFail = 0;
     function ensureChain() {
-      if (ai() !== 'gemini' || !key()) return Promise.resolve(); // Claude 只用設定裡選的那一個模型
+      if (aiNow() !== 'gemini' || !gkey()) return Promise.resolve(); // Claude 只用設定裡選的那一個模型
       const c = store.get('mt.chain', null);
-      if ((c && c.k === kh() && Date.now() - c.t < 24 * 3600 * 1000) || Date.now() - chainFail < 10 * 60 * 1000) return Promise.resolve();
+      if ((c && c.k === gkh() && Date.now() - c.t < 24 * 3600 * 1000) || Date.now() - chainFail < 10 * 60 * 1000) return Promise.resolve();
       if (chainP) return chainP;
-      const k = key();
-      const h = kh();
+      const k = gkey();
+      const h = gkh();
       chainP = mtListModels(k).then((names) => {
         const list = mtChainFrom(names);
         store.set('mt.chain', { k: h, t: Date.now(), list: list.length ? list : GEMINI_DEFAULT_CHAIN });
-        if (store.get('mt.badkey', '') === h) store.set('mt.badkey', '');
+        if (mtKeyBad(h)) mtMarkKey(h, false);
       }).catch((e) => {
         chainFail = Date.now();
-        if (e && (e.kind === 'key' || e.kind === 'region')) markBad(h, e);
+        if (e && (e.kind === 'key' || e.kind === 'region')) markBad(h, e, 'gemini');
       }).finally(() => { chainP = null; });
       return chainP;
     }
-    function markBad(h, e) {
-      store.set('mt.badkey', h);
-      const msg = e.kind === 'region' ? `你所在的地區不能使用 ${aiName()} API，先用免費模式翻譯。` : `${aiName()} 金鑰無效或沒有權限，先用免費模式翻譯。`;
-      tell('bad:' + h, msg, { actions: [keyAction] });
-      mtWarn(`${aiName()} 金鑰無法使用：`, e.message);
+    function markBad(h, e, model) {
+      mtMarkKey(h, true);
+      const name = mtAiName(mtIsClaude(model) ? 'claude' : 'gemini');
+      const msg = e.kind === 'region' ? `你所在的地區不能使用 ${name} API，先用免費模式翻譯。` : `${name} 金鑰無效或沒有權限，先用免費模式翻譯。`;
+      if (!handoff()) tell('bad:' + h, msg, { actions: [keyAction] });
+      mtWarn(`${name} 金鑰無法使用：`, e.message);
+    }
+    /** Claude 不能用了（額度、金鑰、模型）：Gemini 接得上的話告訴使用者一次，回傳 true */
+    function handoff() {
+      const st = mtEngineState(cfg());
+      if (!st.fallback) return false;
+      tell('handoff:' + st.fallback, `${mtClaudeWhy(cfg(), st.fallback)}，先用 Gemini（${modelLabel(st.model)}）接著翻${st.fallback === 'credit' ? '；加值後按狀態列的「重試」換回 Claude' : ''}。`, { title: '漫畫翻譯' });
+      setStatus();
+      return true;
     }
     function onFallback(st) {
       const fast = cfg().mode !== 'accurate';
@@ -5845,9 +5891,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         tell('nokey:' + st.ai, fast ? `還沒設定 ${name} 金鑰：先只用 Google 翻譯（認錯的字不會修正）。` : `還沒設定 ${name} 金鑰，先用免費模式翻譯（品質較普通）。`,
           { title: '漫畫翻譯', actions: [keyAction] });
       } else if (st.kind === 'credit') {
-        tell('credit:' + new Date().toDateString(), 'Claude 帳號的額度用完了，先用免費模式翻譯；到 Claude Console 加值後按狀態列的「重試」。', { title: '漫畫翻譯' });
+        tell('credit:' + new Date().toDateString(), `Claude 帳號的額度用完了${mtKeyFor(cfg(), 'gemini') ? '、Gemini 也不能用' : ''}，先用免費模式翻譯；到 Claude Console 加值後按狀態列的「重試」。`, { title: '漫畫翻譯' });
       } else if (st.kind === 'model') {
         tell('model:' + mtClaudeModel(cfg()), `帳號不能用 ${modelLabel(mtClaudeModel(cfg()))}，先用免費模式翻譯；請到設定換一個模型。`, { title: '漫畫翻譯', actions: [keyAction] });
+      } else if (st.kind === 'cors') {
+        tell('cors', 'Claude 的組織設定不允許從瀏覽器直接呼叫 API，先用免費模式翻譯；請到 Claude Console 的組織設定允許，或改選 Gemini。', { title: '漫畫翻譯', actions: [keyAction] });
       } else if (st.kind === 'quota') {
         tell('quota:' + new Date().toDateString(), fast
           ? `Gemini 今天的次數用完了，先只用 Google 翻譯；${mtWhen(st.until)} 後自動恢復修正。`
@@ -5863,28 +5911,29 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const ms = (m) => mstate[m] || (mstate[m] = { active: 0, times: [], lat: /-lite$/.test(m) ? 1500 : 2800, ok: 0 });
     function rpmOf(m) {
       const r = store.get('mt.rpm', null);
-      const v = r && r.k === kh() && r.m ? r.m[m] : 0;
+      const v = r && r.k === gkh() && r.m ? r.m[m] : 0;
       return v || (/-lite$/.test(m) ? 12 : 8);
     }
     function setRpm(m, v) {
+      if (mtIsClaude(m)) return; // Claude 每分鐘的次數很夠，不用慢慢試
       const r = store.get('mt.rpm', null);
-      const cur = r && r.k === kh() && r.m ? Object.assign({}, r.m) : {};
+      const cur = r && r.k === gkh() && r.m ? Object.assign({}, r.m) : {};
       cur[m] = Math.max(2, Math.min(40, Math.round(v * 10) / 10));
-      store.set('mt.rpm', { k: kh(), m: cur });
+      store.set('mt.rpm', { k: gkh(), m: cur });
     }
     /** 挑模型：畫面上的圖挑目前最快的；預先翻譯的照品質順序 */
     function pickModel(hp) {
-      const h = kh();
-      const blocks = mtBlocks(h);
       const now = Date.now();
       let soonest = Infinity;
-      if (ai() === 'claude') {
+      if (aiNow() === 'claude') {
         // Claude：只用設定裡選的那一個模型，每分鐘次數很夠，同時最多 4 個請求
         const m = mtClaudeModel(cfg());
-        const b = blocks[m];
+        const b = mtBlocks(khOf(m))[m];
         if (b && b.until > now) return { wait: Math.max(200, b.until - now) };
         return ms(m).active >= 4 ? { wait: 800 } : { model: m };
       }
+      const h = gkh();
+      const blocks = mtBlocks(h);
       const avail = [];
       for (const m of mtChain(h)) {
         const b = blocks[m];
@@ -6050,7 +6099,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         }
       };
       // 串流：請求內容加上 "stream": true，回應是 SSE（event: step.delta / data: {...}）；60 秒都沒有資料就中斷重試
-      const res = await mtPost(`${GEMINI_API}/interactions`, key(), body, opts.timeout || 180000, streaming ? onRaw : null, streaming ? 60000 : 0);
+      const res = await mtPost(`${GEMINI_API}/interactions`, gkey(), body, opts.timeout || 180000, streaming ? onRaw : null, streaming ? 60000 : 0);
       if (streaming && buf.trim()) onRaw(res.text + '\n\n'); // 最後一個事件沒有空白行結尾
       const text = String(res.text || '').trim();
       let json = null;
@@ -6147,7 +6196,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           else if (t === 'error') evErr = ev.error || ev;
         }
       };
-      const res = await mtPost(`${CLAUDE_API}/messages`, mtClaudeHeaders(key()), body, opts.timeout || 180000, streaming ? onRaw : null, streaming ? 60000 : 0);
+      const res = await mtPost(`${CLAUDE_API}/messages`, mtClaudeHeaders(ckey()), body, opts.timeout || 180000, streaming ? onRaw : null, streaming ? 60000 : 0);
       if (streaming && buf.trim()) onRaw(res.text + '\n\n');
       const text = String(res.text || '').trim();
       let json = null;
@@ -6219,7 +6268,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     function onBatchError(model, batch, e) {
       const now = Date.now();
-      const h = kh();
+      const h = khOf(model);
       const back = (list) => { gq.jobs.unshift(...list); };
       if (e.kind === 'rate') {
         mtSetBlock(h, model, now + Math.max(4000, e.delay || 30000), 'rate');
@@ -6234,11 +6283,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       } else if (e.kind === 'model') {
         mtSetBlock(h, model, now + 3 * 86400000, 'missing');
         back(batch);
-      } else if (e.kind === 'credit') {
-        mtSetBlock(h, model, now + 3600000, 'credit'); // 額度用完：一小時後再試（加值後按「重試」馬上恢復）
+        handoff();
+      } else if (e.kind === 'credit' || e.kind === 'cors') {
+        mtSetBlock(h, model, now + 3600000, e.kind); // 額度用完：一小時後再試（加值後按「重試」馬上恢復）
         back(batch);
+        handoff();
       } else if (e.kind === 'key' || e.kind === 'region') {
-        markBad(h, e);
+        markBad(h, e, model);
         back(batch);
       } else {
         // 忙碌、網路問題：重試 2 次；讀不懂回應：重試 1 次；請求本身有問題或內容被擋：直接交給免費模式（重試只會浪費額度）
@@ -6972,7 +7023,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     function onFixError(model, batch, e) {
       const now = Date.now();
-      const h = kh();
+      const h = khOf(model);
       const back = () => { batch.forEach((j) => { j.P.fix = 'wait'; }); fq.jobs.unshift(...batch); };
       if (e.kind === 'rate') {
         mtSetBlock(h, model, now + Math.max(4000, e.delay || 30000), 'rate');
@@ -6984,12 +7035,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       } else if (e.kind === 'model') {
         mtSetBlock(h, model, now + 3 * 86400000, 'missing');
         back();
-      } else if (e.kind === 'credit') {
-        mtSetBlock(h, model, now + 3600000, 'credit');
+        handoff();
+      } else if (e.kind === 'credit' || e.kind === 'cors') {
+        mtSetBlock(h, model, now + 3600000, e.kind);
         back();
+        handoff();
       } else if (e.kind === 'key' || e.kind === 'region') {
-        markBad(h, e);
-        batch.forEach((j) => { j.P.fix = ''; });
+        markBad(h, e, model);
+        if (mtEngineState(cfg()).fallback) back(); else batch.forEach((j) => { j.P.fix = ''; });
       } else {
         // 網路、忙碌、讀不懂：再試一次；內容被擋就不再試。都先留著 Google 的翻譯
         const keep = e.kind === 'blocked' ? [] : batch.filter((j) => ++j.tries <= 1);
@@ -8219,12 +8272,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const h = mtKeyHash(key);
     try {
       const ids = await mtListClaudeModels(key);
-      if (store.get('mt.badkey', '') === h) store.set('mt.badkey', '');
+      if (mtKeyBad(h)) mtMarkKey(h, false);
       const want = CLAUDE_MODELS.some(([id]) => id === model) ? model : CLAUDE_MODELS[0][0];
       if (ids.length && !ids.includes(want)) return { ok: false, text: `金鑰可以用，但帳號裡沒有 ${modelLabel(want)}，請換一個模型` };
       return { ok: true, text: `金鑰可以用，會用 ${modelLabel(want)}（付費，用帳號裡的額度）` };
     } catch (e) {
-      if (e && e.kind === 'key') { store.set('mt.badkey', h); return { ok: false, text: '金鑰無效，請確認有完整複製' }; }
+      if (e && e.kind === 'key') { mtMarkKey(h, true); return { ok: false, text: '金鑰無效，請確認有完整複製' }; }
       return { ok: false, text: `連不到 Claude（${(e && e.message) || '未知錯誤'}），請稍後再試` };
     }
   }
@@ -8236,11 +8289,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const names = await mtListModels(key);
       const list = mtChainFrom(names);
       store.set('mt.chain', { k: h, t: Date.now(), list: list.length ? list : GEMINI_DEFAULT_CHAIN });
-      if (store.get('mt.badkey', '') === h) store.set('mt.badkey', '');
+      if (mtKeyBad(h)) mtMarkKey(h, false);
       const use = list.length ? list : GEMINI_DEFAULT_CHAIN;
       return { ok: true, text: use.length > 1 ? `金鑰可以用，會同時用 ${use.length} 個免費模型（${modelLabel(use[0])} 等）` : `金鑰可以用，會用 ${modelLabel(use[0])}` };
     } catch (e) {
-      if (e && e.kind === 'key') { store.set('mt.badkey', h); return { ok: false, text: '金鑰無效，請確認有完整複製' }; }
+      if (e && e.kind === 'key') { mtMarkKey(h, true); return { ok: false, text: '金鑰無效，請確認有完整複製' }; }
       if (e && e.kind === 'region') return { ok: false, text: '你所在的地區不能使用 Gemini API' };
       return { ok: false, text: `連不到 Gemini（${(e && e.message) || '未知錯誤'}），請稍後再試` };
     }
@@ -8890,9 +8943,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       defaults: { engine: 'gemini', apiKey: '', claudeKey: '', claudeModel: CLAUDE_MODELS[0][0], mode: 'fast', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
       fields: [
         { key: 'engine', label: 'AI 服務', type: 'select', options: [['gemini', 'Gemini（免費）'], ['claude', 'Claude（付費，用帳號裡的額度）']] },
-        { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k), when: (c) => mtAiOf(c) === 'gemini' },
         { key: 'claudeKey', label: 'Claude 金鑰', type: 'secret', placeholder: '貼上 sk-ant- 開頭的金鑰', link: { href: CLAUDE_KEY_URL, text: '到 Claude Console 取得金鑰' }, test: (k, c) => mtTestClaudeKey(k, c.claudeModel), when: (c) => mtAiOf(c) === 'claude' },
         { key: 'claudeModel', label: 'Claude 模型', type: 'select', options: CLAUDE_MODELS, when: (c) => mtAiOf(c) === 'claude' },
+        // 選 Claude 時 Gemini 金鑰也留著：Claude 額度用完、金鑰壞掉時 Gemini 接手
+        { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k) },
         { key: 'mode', label: '翻譯方式', type: 'select', options: [['fast', '快速：Google 翻譯＋AI 修正（省錢、省次數）'], ['accurate', '精準：AI 看圖翻譯（最準，很耗次數）']] },
         { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站', addHere: true, paste: true },
         { key: 'auto', label: '在這些網站', type: 'select', options: [['off', '按了才翻譯'], ['on', '打開漫畫就自動翻譯整話']] },
@@ -9642,6 +9696,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (add.length) store.set('cfg.mangaTranslate', Object.assign({}, cur, { sites: cur.sites.concat(add) }));
     }
     store.set('mt.sitesAdded', done.concat(fresh));
+  })();
+  // 1.5.17：1.5.16／1.5.22 從瀏覽器呼叫 Claude 少了一個標頭，被當成金鑰無效記起來；補上標頭後把那個記號清掉一次
+  (() => {
+    if (store.get('mt.claudeUnbad', 0)) return;
+    store.set('mt.claudeUnbad', 1);
+    const c = store.get('cfg.mangaTranslate', null);
+    const k = c && String(c.claudeKey || '').trim();
+    if (k && mtKeyBad(mtKeyHash(k))) mtMarkKey(mtKeyHash(k), false);
   })();
   installUiGuard();
   MODULES.forEach(syncModule);
