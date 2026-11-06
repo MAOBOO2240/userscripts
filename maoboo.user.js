@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.19
+// @version      1.5.20
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、簡體轉繁體、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -43,6 +43,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.20 漫畫翻譯：歪一邊的字（喊叫的尖刺對話框裡斜著排的字）認得到了：之前方框裡會混進上下行的字、整句認不出來；
+ *        現在會先算出角度、轉正了再認，行的順序也照轉正後的位置排
  * 1.5.19 漫畫翻譯：修正整話翻完卻少幾句（漏網之魚）：免費翻譯一時被擋（Google 回 HTTP 429、微軟也失敗）或漏回某一句時，
  *        之前那幾段就直接沒了、整張還被當成翻完記住。現在漏回的句子會再翻一次，失敗的圖（整張或只缺幾句）不記住、20 秒後自動重翻（最多兩次），
  *        「重試」也會重翻只缺幾句的圖；之前用快速模式翻過的圖會重翻一次（把缺的句子補回來）
@@ -3820,12 +3822,16 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         stack[sp++] = p;
         lab[p] = 1;
         let x0 = w; let y0 = h; let x1 = 0; let y1 = 0; let sum = 0; let cnt = 0;
+        let sx = 0; let sy = 0; let sxx = 0; let syy = 0; let sxy = 0; // 算這塊的主軸（斜的字）
+        const pix = [];
         while (sp) {
           const q = stack[--sp];
           const x = q % w;
           const y = (q - x) / w;
           sum += P[q];
           cnt++;
+          sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+          pix.push(q);
           if (x < x0) x0 = x;
           if (x > x1) x1 = x;
           if (y < y0) y0 = y;
@@ -3853,6 +3859,42 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           y1: Math.min(H, (y1 + 1 + d) / ry),
           score: sum / cnt,
         };
+        // 斜的字（喊叫的對話框裡歪一邊的字）：方框裡會混進上下行的字、認不出來。用這塊的主軸算出角度和沿著字的範圍，
+        // 認字時轉正了再認（ang：角度；cx、cy：中心；len、th：沿著字的長度、字的粗細，都是圖片座標）
+        if (cnt >= 12) {
+          const mx = sx / cnt;
+          const my = sy / cnt;
+          const cxx = sxx / cnt - mx * mx;
+          const cyy = syy / cnt - my * my;
+          const cxy = sxy / cnt - mx * my;
+          const t = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
+          const tr = cxx + cyy;
+          const disc = Math.sqrt(Math.max(0, (tr * tr) / 4 - (cxx * cyy - cxy * cxy)));
+          const l2 = Math.max(1e-6, tr / 2 - disc);
+          // 歪 6～50 度、而且是長條的（一行字）才算斜；接近水平或直的照原本的方式
+          if (Math.abs(t) >= 0.1 && Math.abs(t) <= 0.87 && (tr / 2 + disc) / l2 >= 4) {
+            const cs = Math.cos(t);
+            const sn = Math.sin(t);
+            let u0 = Infinity; let u1 = -Infinity; let v0 = Infinity; let v1 = -Infinity;
+            for (const q of pix) {
+              const x = q % w;
+              const y = (q - x) / w;
+              const u = x * cs + y * sn;
+              const v = y * cs - x * sn;
+              if (u < u0) u0 = u;
+              if (u > u1) u1 = u;
+              if (v < v0) v0 = v;
+              if (v > v1) v1 = v;
+            }
+            const L = u1 - u0 + 1;
+            const T = v1 - v0 + 1;
+            const d2 = (L * T * unclip) / (2 * (L + T));
+            const sc = (1 / rx + 1 / ry) / 2;
+            const uc = (u0 + u1 + 1) / 2;
+            const vc = (v0 + v1 + 1) / 2;
+            Object.assign(b, { ang: t, len: (L + 2 * d2) * sc, th: (T + 2 * d2) * sc, cx: (uc * cs - vc * sn) / rx, cy: (uc * sn + vc * cs) / ry });
+          }
+        }
         if (Math.min(b.x1 - b.x0, b.y1 - b.y0) >= 5) boxes.push(b);
       }
       return boxes;
@@ -4381,9 +4423,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const items = boxes.map((b, i) => {
         const cw = Math.max(1, b.x1 - b.x0);
         const ch = Math.max(1, b.y1 - b.y0);
-        const rot = ch / cw >= 1.5; // 直排：逆時針轉 90 度再認
-        const tw = Math.max(8, Math.min(3200, Math.ceil(HH * (rot ? ch / cw : cw / ch))));
-        return { i, b, cw, ch, rot, tw };
+        const tilt = b.ang && b.len > 0 && b.th > 0; // 斜的字：轉正了再認
+        const rot = !tilt && ch / cw >= 1.5; // 直排：逆時針轉 90 度再認
+        const tw = Math.max(8, Math.min(3200, Math.ceil(HH * (tilt ? b.len / b.th : rot ? ch / cw : cw / ch))));
+        return { i, b, cw, ch, rot, tilt, tw };
       });
       items.sort((a, b) => a.tw - b.tw);
       const res = new Array(boxes.length);
@@ -4399,9 +4442,22 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           const c = canvas(it.tw, HH);
           const g = c.getContext('2d', { willReadFrequently: true });
           g.imageSmoothingQuality = 'high';
-          if (it.rot) g.setTransform(0, -HH / it.cw, it.tw / it.ch, 0, 0, HH);
-          else g.setTransform(it.tw / it.cw, 0, 0, HH / it.ch, 0, 0);
-          drawClip(g, bmp, it.b.x0, it.b.y0, it.cw, it.ch, 0, 0, it.cw, it.ch);
+          if (it.tilt) {
+            // 圖片座標 → 畫布：沿著字的方向放到橫的、字的粗細放到 HH 高
+            const { ang, len, th, cx, cy } = it.b;
+            const su = it.tw / len;
+            const sv = HH / th;
+            const cs = Math.cos(ang);
+            const sn = Math.sin(ang);
+            g.setTransform(su * cs, -sv * sn, su * sn, sv * cs, it.tw / 2 - su * (cs * cx + sn * cy), HH / 2 - sv * (cs * cy - sn * cx));
+            drawClip(g, bmp, it.b.x0 - th, it.b.y0 - th, it.cw + 2 * th, it.ch + 2 * th, it.b.x0 - th, it.b.y0 - th, it.cw + 2 * th, it.ch + 2 * th);
+          } else if (it.rot) {
+            g.setTransform(0, -HH / it.cw, it.tw / it.ch, 0, 0, HH);
+            drawClip(g, bmp, it.b.x0, it.b.y0, it.cw, it.ch, 0, 0, it.cw, it.ch);
+          } else {
+            g.setTransform(it.tw / it.cw, 0, 0, HH / it.ch, 0, 0);
+            drawClip(g, bmp, it.b.x0, it.b.y0, it.cw, it.ch, 0, 0, it.cw, it.ch);
+          }
           const px = g.getImageData(0, 0, it.tw, HH).data;
           const base = n * 3 * plane;
           for (let y = 0; y < HH; y++) {
@@ -4652,7 +4708,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const letters = text.replace(/[^\p{L}]/gu, '').length;
       // 很短又不太確定的（例如兩個字母）：單獨出現時多半是圖上的雜訊，跟別的行在一起才算
       const shaky = bub < 0 && (lang === 'eng' ? letters <= 2 : letters <= 1) && l.conf < 0.85;
-      lines.push({ x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, w, h, text, conf: +l.conf || 0, shaky, bub, vertical: h >= w * 1.5, square: Math.max(w, h) < Math.min(w, h) * 1.5, bgc: l.bgc || '' });
+      const ang = +l.ang || 0; // 斜的字：角度、字的粗細（認字時已經轉正）
+      lines.push({ x0: l.x0, y0: l.y0, x1: l.x1, y1: l.y1, w, h, text, conf: +l.conf || 0, shaky, bub, ang, th: ang && l.th > 0 ? l.th : Math.min(w, h),
+        vertical: !ang && h >= w * 1.5, square: !ang && Math.max(w, h) < Math.min(w, h) * 1.5, bgc: l.bgc || '' });
     }
     // 日文旁邊的小字（假名注音）：緊貼著一行粗很多的直排字，拿掉
     if (cjk) {
@@ -4727,9 +4785,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         return rows;
       };
       let parts;
+      const tilt = g.reduce((m, l) => m + l.ang, 0) / g.length; // 整段都是斜的字：行的順序照轉正後的位置排
       if (vertical) {
         const cols = order(g, (m, l) => Math.min(m.x1, l.x1) - Math.max(m.x0, l.x0) >= Math.min(m.w, l.w) * 0.5, (l) => -(l.x0 + l.x1));
         parts = cols.map((c) => c.sort((p, q) => p.y0 - q.y0).map((l) => l.text).join(''));
+      } else if (Math.abs(tilt) >= 0.1) {
+        const cs = Math.cos(tilt);
+        const sn = Math.sin(tilt);
+        const U = (l) => ((l.x0 + l.x1) / 2) * cs + ((l.y0 + l.y1) / 2) * sn; // 沿著字的方向
+        const V = (l) => ((l.y0 + l.y1) / 2) * cs - ((l.x0 + l.x1) / 2) * sn; // 一行一行往下
+        const rows = order(g, (m, l) => Math.abs(V(m) - V(l)) < Math.min(m.th, l.th) * 0.6, V);
+        parts = rows.map((r) => r.sort((p, q) => U(p) - U(q)).map((l) => l.text).join(' '));
       } else {
         const rows = order(g, (m, l) => Math.min(m.y1, l.y1) - Math.max(m.y0, l.y0) >= Math.min(m.h, l.h) * 0.5, (l) => l.y0 + l.y1);
         parts = rows.map((r) => r.sort((p, q) => p.x0 - q.x0).map((l) => l.text).join(' '));
@@ -4750,7 +4816,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (!mtPaddleScript(text, 'eng')) continue;
         text = mtSentenceCase(text);
       }
-      const t = g.reduce((m, l) => m + Math.min(l.w, l.h), 0) / g.length;
+      const t = g.reduce((m, l) => m + l.th, 0) / g.length;
       // 認字的信心（每行依字數加權）：判斷原文語言時用，認得很沒把握的多半是用錯語言的模型算出來的亂碼
       const nch = g.reduce((m, l) => m + Math.max(1, l.text.replace(/\s/g, '').length), 0);
       const o = {
