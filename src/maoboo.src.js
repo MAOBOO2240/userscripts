@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.23
+// @version      1.5.24
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -43,6 +43,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.24 漫畫翻譯：能力值視窗、系統訊息這種「每行一個 [項目]」（或「名稱：數值」）的方框，之前整個併成一段話翻、置中換行，看起來亂；
+ *        現在一行一項分開翻、譯文保留換行、靠左排，AI 修正也照項目分開（⏎ 隔開）。普通對話框不變
  * 1.5.23 漫畫翻譯：設定面板多了「重新讀取並翻譯」：這一話翻過的圖忘掉記住的結果，重新認字、重新翻譯（結果不對、改了設定時用）；
  *        之後捲到的圖也不用舊的結果。只在翻過的頁面上顯示；記住的原文語言和作品用語表不動
  * 1.5.22 漫畫翻譯：AI 修正時會幫每部作品整理一張「用語表」（人名、招式、地名的譯法，和主要角色的口氣），之後每一批、下一話都附上照著翻，
@@ -2620,6 +2622,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       'Use full-width punctuation and Taiwanese wording. Keep names and terms consistent with the recent translations. Write Traditional Chinese characters only, never Simplified Chinese.',
       'When a glossary for this series is given, translate the listed names and terms exactly as listed and keep each character\'s manner of speaking as described; one or two entries may be wrong, so if the text clearly contradicts an entry, follow the text.',
       'Lines marked [shouting] are in a jagged, spiky bubble, which usually means the speaker is shouting, screaming or startled; when the words fit, translate with that force (short, punchy, exclamation marks where natural).',
+      'A line may hold several short items separated by ⏎ (a status window, a system message, a menu): translate each item and keep the ⏎ separators in zh, same number of items, same order.',
       'Also return "gloss": new or corrected glossary entries you are confident about — proper names (people, places, organizations, skills, items), recurring terms, and for a main character a short note on how they speak (k = "tone", s = the name as written in the text, z = under 20 characters of Traditional Chinese). At most 10 per answer, Traditional Chinese only; return an empty gloss when there is nothing new.',
       'A short reply that leans on the line before it (Me neither, Me too, Same here, So do I, Why not?) must match what that line actually says (see "Lines just before these" and the numbered lines). If that line is not given, translate the reply as it is without inventing a verb (Me neither → 我也是。).',
       'Never add content that the line does not say.',
@@ -3061,6 +3064,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       .trim());
   }
 
+  /** 一行一項的譯文（清單式的字）：每一項各自整理，保留換行 */
+  function mtCleanZhLines(t) {
+    return String(t || '').split('\n').map((x) => mtCleanZh(x)).filter(Boolean).join('\n');
+  }
+
   /**
    * 回傳 { s: 字級, lines: [每一行文字], vertical, overflow }
    * 橫排時 lines 是一行一行；直排時是一列一列（由右到左）
@@ -3074,7 +3082,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const toks = String(text).match(/[A-Za-z0-9À-ɏ'’.\-]+|\s+|[\s\S]/gu) || [];
     if (!toks.length || boxW < 4 || boxH < 4) return null;
     const meas = (s) => (vertical && [...s].length === 1 && MT_CJK.test(s) ? 100 : ctx.measureText(s).width);
-    const items = toks.map((s) => ({ s, sp: /^\s+$/.test(s), w: meas(s) }));
+    const items = toks.map((s) => ({ s, sp: /^\s+$/.test(s), br: !!opt.list && /\n/.test(s), w: meas(s) })); // br：清單式的換行（一行一項）
     const along = vertical ? boxH : boxW; // 每行的長度方向
     const across = vertical ? boxW : boxH; // 行數堆疊的方向
 
@@ -3091,6 +3099,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const queue = items.slice();
       while (queue.length) {
         const it = queue.shift();
+        if (it.br) { flush(); continue; }
         if (it.sp && !cur.length) continue;
         if (!it.sp && it.w > L && [...it.s].length > 1) {
           // 太長的英文字拆成單一字母
@@ -3147,8 +3156,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     let overflow = false;
     if (!best) { overflow = true; size = minFont; best = wrap(along / minFont * 100); }
-    // 平衡：行數不變，盡量讓每一行一樣長（看起來像對話框裡的排字）
-    if (best.length > 1 && !overflow) {
+    // 平衡：行數不變，盡量讓每一行一樣長（看起來像對話框裡的排字）；清單式的不用（一行一項、靠左）
+    if (best.length > 1 && !overflow && !opt.list) {
       const n = best.length;
       let lo = Math.max(...best.map((l) => l.w)) / n;
       let hi = along / size * 100;
@@ -3206,6 +3215,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 .t > div { display: block; }
 .t.v { writing-mode: vertical-rl; text-orientation: mixed; }
+.t.is-list { text-align: left; }
 .mt-badge { position: absolute; left: 0; top: 0; transform-origin: 0 0; display: flex; flex-direction: column; gap: 5px; padding: 6px 10px 7px;
   border-radius: 10px; background: rgba(15, 22, 30, .84); color: #FFFFFF; font-family: ${MT_FONT}; font-size: 12px; font-weight: 600;
   line-height: 1.2; white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, .3); pointer-events: none; }
@@ -3313,7 +3323,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
      * 對話框（bub）的範圍是找出來的對話框內部：不會被分開或撐大，大半在裡面的其他字框併進來
      */
     function arrange() {
-      const rs = blocks.map((b) => ({ x0: b.x0 * cw, y0: b.y0 * ch, x1: b.x1 * cw, y1: b.y1 * ch, zh: b.zh, vertical: !!b.vertical,
+      const rs = blocks.map((b) => ({ x0: b.x0 * cw, y0: b.y0 * ch, x1: b.x1 * cw, y1: b.y1 * ch, zh: b.zh, vertical: !!b.vertical, list: !!b.list,
         bub: !!b.bub, bg: b.bg || '', shape: b.bub ? b.shape || '' : '', rows: b.bub ? b.rows || null : null, lh: b.lh > 0 ? b.lh * cw : 0, blank: !!b.blank, seam: !!b.seam }));
       const ov = (a, c) => [Math.min(a.x1, c.x1) - Math.max(a.x0, c.x0), Math.min(a.y1, c.y1) - Math.max(a.y0, c.y0)];
       const area = (a) => (a.x1 - a.x0) * (a.y1 - a.y0);
@@ -3415,7 +3425,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const inset = Math.max(2, Math.min(10, Math.min(w, hh) * 0.07));
         const iw = w - inset * 2;
         const ih = hh - inset * 2;
-        let lay = mtLayout(r.zh, iw, ih, { maxFont });
+        let lay = mtLayout(r.zh, iw, ih, { maxFont, list: r.list });
+        if (r.list) return lay; // 清單式（一行一項）：一定橫排、靠左
         // 直排：原文是直排（日文漫畫）時優先直排。原文是橫的（英文、韓文）：維持橫排，
         // 只有框很窄、橫排一行只放得下一兩個字（讀起來斷斷續續），直排的字明顯大很多，或橫排放不下時才直排
         const tall = ih / Math.max(1, iw);
@@ -3506,7 +3517,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       }
       if (blank) return h('div', { class: 'b' + (r.bub ? ' bub' : ''), style });
       return h('div', { class: 'b' + (r.bub ? ' bub' : ''), style },
-        h('div', { class: 't' + (lay.vertical ? ' v' : ''), style: Object.assign({ fontSize: lay.s + 'px' }, mtDarkBg(r.bg) ? { color: '#FFFFFF' } : {}) }, lay.lines.map((t) => h('div', { text: t }))));
+        h('div', { class: 't' + (lay.vertical ? ' v' : '') + (r.list ? ' is-list' : ''), style: Object.assign({ fontSize: lay.s + 'px' }, mtDarkBg(r.bg) ? { color: '#FFFFFF' } : {}) }, lay.lines.map((t) => h('div', { text: t }))));
     }
 
     function layout() {
@@ -4684,6 +4695,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    * PaddleOCR 認出來的一行一行 → 一個個對話框（同一框的行合併，照閱讀順序接起來）。
    * 有找到對話框時：同一個對話框裡的行一定合在一起、不同對話框的一定分開，譯文框用對話框裡面的整個空間
    */
+  /** 清單裡一項的開頭：[、【、<、《、•、▪、1.、1)、或「名稱: 」（NAME: LIN MOYU、STR: 120） */
+  const MT_LIST_START = /^(?:[[【［<《〈]|[•‣▪◆◇■□]\s*|\d{1,2}[.)）]\s|[A-Za-z][A-Za-z ]{1,24}[:：]\s*\S)/;
   function mtPaddleGroups(raw, lang, bubbles) {
     const cjk = lang === 'jpn';
     const B = Array.isArray(bubbles) ? bubbles : [];
@@ -4799,21 +4812,29 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const rows = order(g, (m, l) => Math.min(m.y1, l.y1) - Math.max(m.y0, l.y0) >= Math.min(m.h, l.h) * 0.5, (l) => l.y0 + l.y1);
         parts = rows.map((r) => r.sort((p, q) => p.x0 - q.x0).map((l) => l.text).join(' '));
       }
-      let text = '';
-      for (const p of parts) {
-        if (!text) text = p;
-        else if (cjk) text += p;
-        else if (/[A-Za-z]-$/.test(text) && /^[a-z]/i.test(p)) text = text.slice(0, -1) + p; // 行尾斷字
-        else text += ' ' + p;
+      const joinRow = (a, p) => (cjk ? a + p : /[A-Za-z]-$/.test(a) && /^[a-z]/i.test(p) ? a.slice(0, -1) + p : a + ' ' + p); // 行尾斷字接回去
+      // 清單式的字（能力值視窗、系統訊息、選單：每行一個 [項目] 或「名稱：數值」）：一行一項，分開翻、譯文也一行一項，不併成一段
+      let list = false;
+      if (!vertical && parts.length >= 3) {
+        const starts = parts.map((p) => MT_LIST_START.test(p));
+        const n1 = starts.filter(Boolean).length;
+        if (starts[0] && n1 >= 3 && n1 >= parts.length * 0.6) {
+          const items = [];
+          parts.forEach((p, i) => { if (starts[i] || !items.length) items.push(p); else items[items.length - 1] = joinRow(items[items.length - 1], p); }); // 沒有開頭記號的行是上一項折下來的
+          parts = items;
+          list = true;
+        }
       }
+      let text = '';
+      for (const p of parts) text = !text ? p : list ? text + '\n' + p : joinRow(text, p);
       if (cjk) {
-        text = text.replace(/\s+/g, '');
+        text = text.replace(/[^\S\n]+/g, '');
         if (!/[\u3040-\u30FF]/.test(text)) continue; // 只有漢字、沒有假名的多半是中文，不用翻
       }
       if (lang === 'eng') {
         text = text.replace(/(^|[\s.!?"])[1|](?=[\s-]+[A-Za-z]{2,})/g, '$1I');
         if (!mtPaddleScript(text, 'eng')) continue;
-        text = mtSentenceCase(text);
+        text = list ? text.split('\n').map(mtSentenceCase).join('\n') : mtSentenceCase(text);
       }
       const t = g.reduce((m, l) => m + l.th, 0) / g.length;
       // 認字的信心（每行依字數加權）：判斷原文語言時用，認得很沒把握的多半是用錯語言的模型算出來的亂碼
@@ -4825,6 +4846,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         y1: Math.max(...g.map((l) => l.y1)) + t * 0.1,
         text,
         vertical,
+        list,
         lh: t, // 原文一行的粗細：譯文的字不要比它大太多
         lines: g.length,
         conf: g.reduce((m, l) => m + l.conf * Math.max(1, l.text.replace(/\s/g, '').length), 0) / nch,
@@ -5324,6 +5346,18 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    * 再不行才用 Chrome 的離線翻譯（只有電腦版 Chrome 有）
    */
   async function mtFreeTranslate(texts, lang) {
+    // 文字裡有換行（清單式的字：一行一項）：每一項分開翻、翻完再接回去；有一項沒翻到就整段算沒翻（會再翻一次）
+    if (texts.some((t) => /\n/.test(t))) {
+      const flat = [];
+      const at = [];
+      texts.forEach((t, i) => String(t).split('\n').forEach((x) => { flat.push(x); at.push(i); }));
+      const zh = await mtFreeTranslate(flat, lang);
+      const parts = texts.map(() => []);
+      zh.forEach((z, k) => parts[at[k]].push(z));
+      const res = parts.map((a) => (a.every(Boolean) ? a.join('\n') : ''));
+      res.by = zh.by;
+      return res;
+    }
     const src = MT_LANG[lang] || 'en';
     const prep = texts.map((t) => (src === 'en' ? mtStutter(t) : { text: t, lead: false }));
     const send = prep.map((p) => p.text);
@@ -5937,7 +5971,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         ex: Array.isArray(v.ex) && v.ex.length === 2 ? v.ex.map((x) => Math.min(1, Math.max(0, Number(x) || 0))) : null,
         blocks: v.b.map((a) => ({ x0: a[0], y0: a[1], x1: a[2], y1: a[3], zh: String(a[4] || ''), vertical: !!a[5], lang: a[6] || '', src: a[7] || '',
           bub: !!a[8], lh: Number(a[9]) || 0, bg: typeof a[10] === 'string' ? a[10] : '', shape: typeof a[11] === 'string' ? a[11] : '', rows: Array.isArray(a[12]) ? a[12] : null,
-          ct: !!(a[13] & 1), cb: !!(a[13] & 2), blank: !!(a[13] & 4), xs: !!(a[13] & 8), fixed: !!(a[13] & 16), seam: !!(a[13] & 32), mirror: !!(a[13] & 64), spiky: !!(a[13] & 128), msrc: typeof a[14] === 'string' ? a[14] : '', edge: false })),
+          ct: !!(a[13] & 1), cb: !!(a[13] & 2), blank: !!(a[13] & 4), xs: !!(a[13] & 8), fixed: !!(a[13] & 16), seam: !!(a[13] & 32), mirror: !!(a[13] & 64), spiky: !!(a[13] & 128), list: !!(a[13] & 256), msrc: typeof a[14] === 'string' ? a[14] : '', edge: false })),
       };
     }
     function cachePut(P, model, w, h, blk, fx) {
@@ -5945,7 +5979,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const r4 = (n) => Math.round(n * 10000) / 10000;
       store.set(k, { v: MTC_VER, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, ex: P.seamExt ? P.seamExt.map(r4) : 0,
         b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang, b.src || '', b.bub ? 1 : 0, r4(b.lh || 0), b.bg || '', b.shape || '', b.rows || 0,
-          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0) | (b.spiky ? 128 : 0), b.msrc || '']) });
+          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0) | (b.spiky ? 128 : 0) | (b.list ? 256 : 0), b.msrc || '']) });
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       idx = idx.filter((x) => x !== k);
@@ -6134,7 +6168,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     function remember(items) {
       for (const it of items || []) {
         if (!it || !it.zh || it.lang === 'zh') continue;
-        const z = mtCleanZh(it.zh).slice(0, 60);
+        const z = mtCleanZh(String(it.zh).replace(/\s*⏎\s*/g, ' ')).slice(0, 60);
         if (z && !recent.includes(z)) recent.push(z);
       }
       if (recent.length > 30) recent.splice(0, recent.length - 30);
@@ -6932,10 +6966,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           x1: g.x1 / plan.W,
           y0: (s.y0 + g.y0) / plan.H,
           y1: (s.y0 + g.y1) / plan.H,
-          zh: mtCleanZh(zh[i]),
+          zh: g.list ? mtCleanZhLines(zh[i]) : mtCleanZh(zh[i]),
           src: g.text,
           lang: MT_LANG[lang],
           vertical: g.vertical,
+          list: !!g.list, // 清單式（一行一項）：譯文保留換行、靠左排
           bub: !!g.bub,
           bg: g.bg || '',
           shape: g.shape || '',
@@ -7064,7 +7099,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         for (const R of pages.values()) if (R.order < first.order && !inBatch.has(R) && said(R).length && (!Q || R.order > Q.order)) Q = R;
       }
       if (!Q) return [];
-      return said(Q).sort((a, b) => (a.y0 - b.y0) || (a.x0 - b.x0)).slice(-3).map((b) => `- ${(b.msrc || b.src).replace(/\s+/g, ' ')} → ${b.zh}`);
+      return said(Q).sort((a, b) => (a.y0 - b.y0) || (a.x0 - b.x0)).slice(-3).map((b) => `- ${(b.msrc || b.src).replace(/\s+/g, ' ')} → ${String(b.zh).replace(/\s*\n\s*/g, ' ')}`);
     }
     /**
      * Gemini 說不是故事文字（譯文空的）、但不在對話框裡的一段：看起來是對話就留著原本的翻譯，不拿掉。
@@ -7094,6 +7129,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const sfxOn = cfg().sfx === 'translate';
       const before = fixBefore(batch);
       const sk = seriesKey();
+      // 清單式的字（一行一項）：項目之間用 ⏎ 隔開送出，譯文也照 ⏎ 分回一行一項
+      const srcOf = (l) => (l.b.list ? l.src.split('\n').map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ⏎ ') : l.src.replace(/\s+/g, ' '));
       // 每一行的提示：不在對話框裡（多半是音效、招牌）、尖刺框（喊叫）
       const hint = (b) => (!sfxOn && !b.bub ? '[outside bubbles] ' : b.spiky ? '[shouting] ' : '');
       const text = [
@@ -7103,7 +7140,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         before.length ? 'Lines just before these, already translated (context only, do not output them):' : '',
         ...before,
         'Lines:',
-        ...lines.map((l, i) => `${i + 1}. ${hint(l.b)}${l.src.replace(/\s+/g, ' ')}`),
+        ...lines.map((l, i) => `${i + 1}. ${hint(l.b)}${srcOf(l)}`),
       ].filter(Boolean).join('\n');
       const gloss = []; // AI 回的用語表新條目（串流時夾在譯文裡、或最後一起回）
       const applied = new Set();
@@ -7129,7 +7166,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           applied.add(i);
           left.set(l.j, left.get(l.j) - 1);
           if (l.j.gen !== l.j.P.gen || l.b.blank || (l.b.msrc || l.b.src) !== l.src) continue; // 送出後這一行又被接上別張圖的字：等下一次修正
-          const zh = mtCleanZh(it.zh);
+          const zh = l.b.list ? mtCleanZhLines(String(it.zh || '').replace(/\s*⏎\s*/g, '\n')) : mtCleanZh(it.zh);
           if (zh && !mtIsWatermark(zh)) {
             l.b.zh = zh;
             // 接縫上的字：另一張圖上的那一份也換成修正後的譯文
