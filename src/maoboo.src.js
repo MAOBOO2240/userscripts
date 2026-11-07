@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.22
+// @version      1.5.23
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -43,6 +43,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.23 漫畫翻譯：設定面板多了「重新讀取並翻譯」：這一話翻過的圖忘掉記住的結果，重新認字、重新翻譯（結果不對、改了設定時用）；
+ *        之後捲到的圖也不用舊的結果。只在翻過的頁面上顯示；記住的原文語言和作品用語表不動
  * 1.5.22 漫畫翻譯：AI 修正時會幫每部作品整理一張「用語表」（人名、招式、地名的譯法，和主要角色的口氣），之後每一批、下一話都附上照著翻，
  *        同一個名字不會前面叫「林墨宇」後面變「林莫予」；名詞第二次出現才算穩、改譯法要連兩次才換，兩個月沒看的作品自動清掉。
  *        併在原本的修正請求裡（不多打 API、不變慢）。尖刺對話框（喊叫、嚇一跳）裡的字會告訴 AI 可能是喊的，語氣才對；診斷報告多了用語表條數
@@ -259,7 +261,7 @@ button, input, select, output { font: inherit; }
 .mb-toast.is-leaving { opacity: 0; transform: translateY(6px); transition: opacity .16s, transform .16s; }
 .mb-toast-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mb-toast-text strong { font-weight: 700; }
-.mb-toast-text span { color: #FFFFFF; }
+.mb-toast-text span { color: #FFFFFF; white-space: pre-line; }
 .mb-toast-text strong + span { color: #D3DAE2; font-size: 12.5px; }
 .mb-toast-actions { display: flex; gap: 6px; flex: none; }
 .mb-toast-actions button { height: 30px; padding: 0 12px; border: 1px solid rgba(255, 255, 255, .3); border-radius: 8px;
@@ -342,6 +344,7 @@ button, input, select, output { font: inherit; }
 .mb-pct-unit { margin-left: -4px; color: var(--ink); font-weight: 650; }
 .mb-field input:focus-visible, .mb-field select:focus-visible, .mb-btn:focus-visible, .mb-close:focus-visible,
 .mb-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mb-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .mb-hint { margin: 6px 0 0; font-size: 12px; color: var(--ink-2); }
 .mb-switch { position: relative; flex: none; width: 46px; height: 26px; margin-top: 1px; }
 .mb-switch input { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 100%; margin: 0;
@@ -423,8 +426,9 @@ button, input, select, output { font: inherit; }
 /* ---------- 手機：手指好按、字不會太小 ---------- */
 @media (hover: none) and (pointer: coarse) {
   /* 狀態列固定寬度：進度文字變長變短時，右邊的按鈕不會跟著移動，不會按錯 */
-  .mt-chip { width: min(calc(100% - 32px), 520px); height: 40px; padding: 0 4px 0 14px; border-radius: 20px; font-size: 14px; }
-  .mt-chip-text { flex: 1; max-width: none; }
+  .mt-chip { width: min(calc(100% - 32px), 520px); min-height: 40px; height: auto; padding: 4px 4px 4px 14px; border-radius: 20px; font-size: 14px; }
+  /* 字放不下時換到第二行（最多兩行），不會只剩「…」 */
+  .mt-chip-text { flex: 1; max-width: none; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; line-height: 1.25; }
   .mt-chip button { height: 32px; padding: 0 12px; border-radius: 16px; }
   .mt-chip button.mt-x { width: 32px; font-size: 18px; }
   .mt-bar { bottom: 4px; }
@@ -7208,6 +7212,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         let hit = cacheGet(P);
         // 免費模式一個字都沒認到的舊結果不沿用（可能是那時候認字出了問題），重新辨識一次
         if (hit && hit.m === 'free' && !hit.blocks.length) hit = null;
+        if (hit && pg.freshAt && (hit.t || 0) < pg.freshAt) hit = null; // 按過「重新讀取並翻譯」：之前記住的結果都不用
         // 快速模式：有翻過就用；精準模式：免費模式翻的只在 Gemini 不能用（或 Gemini 拒絕這張圖）時沿用
         if (hit && (fast || hit.m !== 'free' || hit.blk || st0.kind !== 'ai')) {
           if (hit.m) P.engines.add(hit.m);
@@ -7665,6 +7670,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       pg.on = false;
       pg.hidden = false;
       pg.chipOff = false;
+      pg.freshAt = 0;
       if (pg.mo) pg.mo.disconnect();
       if (pg.perf) { try { pg.perf.disconnect(); } catch (_) { /* 已停止 */ } }
       clearInterval(pg.liveT);
@@ -7836,6 +7842,19 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       }
       return '';
     }
+    /** 失敗的圖最常見的原因（狀態列用，短的） */
+    function errWhy() {
+      const n = new Map();
+      for (const P of pages.values()) if (P.queued && P.state === 'error' && P.error) n.set(P.error, (n.get(P.error) || 0) + 1);
+      const top = [...n.entries()].sort((a, b) => b[1] - a[1])[0];
+      return top ? top[0].replace(/[（(].*$/, '').slice(0, 24) : '';
+    }
+    /** 失敗的是第幾張、為什麼（點狀態列文字時顯示） */
+    function errDetail() {
+      const by = new Map();
+      for (const P of pages.values()) if (P.queued && P.state === 'error') { const k = P.error || '翻譯失敗'; if (!by.has(k)) by.set(k, []); by.get(k).push(pageNo(P)); }
+      return [...by.entries()].map(([k, nos]) => `\n第 ${nos.sort((a, b) => a - b).join('、')} 張：${k}`).join('');
+    }
     let tick = 0;
     function chip(force) {
       if (!pg.on) {
@@ -7851,7 +7870,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (!chipEl) {
         const fill = h('i');
         const bar = h('span', { class: 'mt-bar', 'aria-hidden': 'true' }, fill);
-        const textEl = h('span', { class: 'mt-chip-text' });
+        const textEl = h('span', { class: 'mt-chip-text', onclick: () => { if (chipEl && chipEl.v.full) toast(chipEl.v.full + errDetail(), { title: '漫畫翻譯', timeout: 8000 }); } });
         const retry = h('button', { type: 'button', class: 'mt-retry', text: '重試', hidden: true, title: '重新開始卡住或失敗的圖', onclick: () => retryAll() });
         const toggle = h('button', { type: 'button', onclick: () => pageShow(pg.hidden) });
         // 手機：× 只收起狀態列（翻譯照常、譯文留在圖上），按「譯」再叫出來；要關掉翻譯用選單。電腦沒有「譯」，× 是關閉翻譯
@@ -7874,7 +7893,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       let text;
       if (pg.hidden) text = c.busy || fixing ? '顯示原文中・翻譯暫停' : '顯示原文中';
       else if (c.busy) text = `${c.done}/${c.total} 張 · ${stuck ? `好像卡住了（${act}）` : act}`;
-      else if (c.err) text = `已翻譯 ${c.done} 張，${c.err} 張失敗`;
+      else if (c.err) text = `已翻譯 ${c.done} 張，${c.err} 張失敗${errWhy() ? `（${errWhy()}）` : ''}`;
       else if (fixing) text = `已翻譯 ${c.done} 張 · ${act}`;
       else {
         const tr = c.ms ? (c.gtx ? 'Google／微軟翻譯' : '微軟翻譯') : 'Google 翻譯';
@@ -7882,9 +7901,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const how = c.gem && !c.free ? an : c.fixDone ? `${tr}＋${an} 修正` : c.gem ? `${an}＋${tr}` : tr;
         text = `已翻譯 ${c.done} 張 · ${how}`;
       }
-      // 手機畫面窄：不寫「漫畫翻譯」，留位置給進度
+      // 手機畫面窄：不寫「漫畫翻譯」，留位置給進度（放不下的點一下文字會整段顯示）
       chipEl.v.textEl.textContent = isTouch ? text : `漫畫翻譯　${text}`;
       chipEl.title = `漫畫翻譯　${text}`;
+      chipEl.v.full = text;
       chipEl.v.toggle.textContent = pg.hidden ? '顯示譯文' : '顯示原文';
       chipEl.v.toggle.title = pg.hidden ? '顯示譯文，沒翻完的接著翻' : '顯示原文，還沒翻完的先暫停';
       chipEl.v.retry.hidden = !(stuck || (c.err && !c.busy));
@@ -7997,6 +8017,44 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       }
       bump();
       setStatus();
+    }
+    /** 忘掉一張圖記住的結果（每個版本的快取都清） */
+    function cacheDrop(P) {
+      let idx = store.get('mtc.idx', []);
+      if (!Array.isArray(idx)) idx = [];
+      let touched = false;
+      for (let ver = MTC_VER; ver >= 2; ver--) {
+        const k = cacheKeyOf(P, 'v' + ver);
+        if (store.get(k, null) === null) continue;
+        try { GM_deleteValue(k); } catch (_) { /* 舊版管理器 */ }
+        if (idx.includes(k)) { idx = idx.filter((x) => x !== k); touched = true; }
+      }
+      if (touched) store.set('mtc.idx', idx);
+    }
+    /**
+     * 設定面板的「重新讀取並翻譯」：這一話翻過的圖忘掉記住的結果，重新認字、重新翻譯（結果不對、改了設定時用）。
+     * 之後才捲到的圖也不用舊的結果（比按下去的時間早的快取都不算）；記住的原文語言和作品用語表不動。回傳重翻幾張
+     */
+    function reloadAll() {
+      pg.freshAt = Date.now();
+      mtAbortAll();
+      if (loc.making || loc.failed || Date.now() - lastProgress > 30000) resetWorkers();
+      loc.failed = '';
+      let n = 0;
+      for (const P of pages.values()) {
+        if (P.state === 'skip') continue; // 不是漫畫頁（太小）
+        const had = P.state !== 'idle' || P.blocks.length > 0;
+        cacheDrop(P);
+        if (!had && !pg.on) continue; // 整頁翻譯沒開：只重翻之前單張翻過的
+        resetPage(P);
+        P.userCancel = false;
+        n++;
+        if (pg.on) queueP(P); else translateP(P);
+      }
+      if (pg.on && pg.hidden) pageShow(true);
+      bump();
+      setStatus();
+      return n;
     }
 
     /* ---------- 觸控裝置：「譯」按鈕 ---------- */
@@ -8368,12 +8426,27 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (gq.jobs.length) pumpSoon(0);
       },
       // Tampermonkey 選單：開始翻譯、網站清單都在「譯」按鈕和面板上操作；翻譯中只留「關閉（恢復原文）」和診斷資訊
+      // Tampermonkey 選單：開始翻譯、網站清單都在「譯」按鈕和面板上操作；翻譯中只留「關閉（恢復原文）」和診斷資訊（面板上也有）
       menuItems() {
         if (!pg.on) return [];
         return [
           { key: 'mt.stop', label: '　關閉漫畫翻譯（恢復原文）', run: () => pageStop(), close: true },
           { key: 'mt.diag', label: '　複製診斷資訊（回報問題用）', run: () => diag(), close: true },
         ];
+      },
+      // 設定面板上的按鈕（手機上選單不好找，這裡一定按得到）：翻過的頁面才有「重新讀取並翻譯」；手機翻譯中多一個「關閉」
+      panelActions() {
+        const translated = pg.on || [...pages.values()].some((P) => P.state !== 'idle' || P.blocks.length);
+        return [
+          translated ? {
+            key: 'mt.reload',
+            label: '重新讀取並翻譯',
+            title: '忘掉這一話記住的結果，重新認字、重新翻譯（結果不對、改了設定時用）',
+            run: () => { const n = reloadAll(); toast(n ? `重新讀取 ${n} 張圖，重新辨識、翻譯中。` : '這一頁還沒有翻過的圖。'); },
+          } : null,
+          { key: 'mt.diag', label: '複製診斷資訊', title: '回報問題用：這一頁翻譯的狀況和錯誤，不含漫畫內容和金鑰', run: () => diag() },
+          isTouch && pg.on ? { key: 'mt.stop', label: '關閉翻譯（恢復原文）', title: '關閉這一頁的漫畫翻譯，恢復原文', run: () => pageStop() } : null,
+        ].filter(Boolean);
       },
       stop() {
         stopped = true;
@@ -9657,6 +9730,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     });
     const hintText = () => (typeof m.hint === 'function' ? m.hint(getCfg(m)) : m.hint);
     const hint = m.hint ? h('p', { class: 'mb-hint', text: hintText() }) : null;
+    // 正在跑的模組提供的按鈕（例如漫畫翻譯的「重新讀取並翻譯」）：按了就關掉面板，看得到結果
+    const actions = m.menuExtra ? h('div', { class: 'mb-actions', hidden: true }) : null;
+    const fillActions = () => {
+      if (!actions) return;
+      const inst = running.get(m.id);
+      let list = [];
+      if (inst && typeof inst.panelActions === 'function') { try { list = inst.panelActions() || []; } catch (e) { console.error(`[MAOBOO] 「${m.name}」面板按鈕`, e); } }
+      actions.replaceChildren(...list.map((a) => h('button', { type: 'button', class: 'mb-btn', text: a.label, title: a.title || null, onclick: () => { if (panel) panel.close(); a.run(); } })));
+      actions.hidden = !list.length;
+    };
+    fillActions();
     const el = h('article', { class: 'mb-row' + (sw.checked ? '' : ' is-off') },
       h('div', { class: 'mb-row-top' },
         h('div', { class: 'mb-info' },
@@ -9667,6 +9751,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           h('p', { class: 'mb-desc', text: m.desc })),
         h('label', { class: 'mb-switch' }, sw, h('span', { class: 'mb-knob', 'aria-hidden': 'true' }))),
       fields.length ? h('div', { class: 'mb-fields' }, fields.map((f) => f.el)) : null,
+      actions,
       hint);
     sw.addEventListener('change', () => {
       store.set('on.' + m.id, sw.checked);
@@ -9680,6 +9765,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         sw.checked = isOn(m);
         el.classList.toggle('is-off', !sw.checked);
         fields.forEach((f) => f.refresh());
+        fillActions();
         if (hint) hint.textContent = hintText();
       },
     };
