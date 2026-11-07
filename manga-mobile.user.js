@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.26
+// @version      1.5.27
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -42,6 +42,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.27  設定面板整理：翻譯方式只留「快速」（Google 翻譯＋AI 修正）；「顯示翻譯按鈕的網站」改成一個網站一格、按 × 刪除，貼上網址的格子旁多了「加入」；
+ *         說明文字縮短；簡體轉繁體併進「翻譯」裡一直開著，不再另外列出；Tampermonkey 選單拿掉「翻譯這一話的漫畫」「在這個網站顯示翻譯按鈕」
  * 1.5.26  歪一邊的字（喊叫的尖刺對話框裡斜著排的字）認得到了：之前方框裡會混進上下行的字、整句認不出來；現在會先算出角度、轉正了再認，行的順序也照轉正後的位置排
  * 1.5.25  修正整話翻完卻少幾句（漏網之魚）：免費翻譯一時被擋（Google 回 HTTP 429、微軟也失敗）或漏回某一句時，之前那幾段就直接沒了、整張還被當成翻完記住。
  *         現在漏回的句子會再翻一次，失敗的圖（整張或只缺幾句）不記住、20 秒後自動重翻（最多兩次），「重試」也會重翻只缺幾句的圖；
@@ -210,6 +212,9 @@ ${p}.mb-field select { min-width: 0; max-width: 100%; }
 ${p}.mb-field input[type=range] { width: auto; flex: 1; min-width: 0; }
 ${p}.mb-field-range > span:first-child { min-width: 5em; }
 ${p}.mb-mini, ${p}.mb-btn { height: 40px; font-size: 14px; }
+${p}.mb-field > .mb-combo-label:first-child { flex: 0 0 100%; padding-top: 0; }
+${p}.mb-chip { height: 34px; padding-left: 12px; font-size: 14px; }
+${p}.mb-chip-x { width: 30px; height: 30px; font-size: 20px; }
 ${p}.mb-foot { padding: 10px 16px; }
 `;
 
@@ -246,7 +251,7 @@ button, input, select, output { font: inherit; }
 /* ---------- 設定面板 ---------- */
 .mb-backdrop { position: fixed; inset: 0; display: flex; align-items: flex-start; justify-content: center;
   padding: max(16px, 6vh) 16px 16px; background: rgba(20, 33, 46, .42); font-family: var(--font); animation: mb-fade .14s ease-out; }
-.mb-panel { width: min(468px, 100%); max-height: calc(100vh - max(16px, 6vh) - 16px); display: flex; flex-direction: column;
+.mb-panel { width: min(600px, 100%); max-height: calc(100vh - max(16px, 6vh) - 16px); display: flex; flex-direction: column;
   overflow: hidden; border-radius: 14px; background: var(--paper); color: var(--ink); font-size: 14px; line-height: 1.5;
   box-shadow: 0 24px 60px rgba(20, 33, 46, .3), 0 0 0 1px rgba(20, 33, 46, .08); animation: mb-in .18s ease-out; outline: none; }
 .mb-tail { flex: none; height: 6px; background: repeating-linear-gradient(90deg, var(--ink) 0 24px, #C9D1DA 24px 48px); }
@@ -284,6 +289,17 @@ button, input, select, output { font: inherit; }
 .mb-secret, .mb-combo { flex-wrap: wrap; }
 .mb-secret-in, .mb-combo-in { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .mb-secret-foot, .mb-combo-foot { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.mb-combo { align-items: flex-start; }
+.mb-combo-label { flex: none; padding-top: 5px; }
+.mb-combo-foot { align-items: center; }
+.mb-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.mb-chip { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 3px 0 10px; border: 1px solid #CDD4DC; border-radius: 999px;
+  background: var(--wash); color: var(--ink); font-size: 12.5px; font-weight: 600; }
+.mb-chip-x { width: 22px; height: 22px; border: 0; border-radius: 50%; background: transparent; color: var(--ink-2); font-size: 16px; line-height: 1;
+  cursor: pointer; }
+.mb-chip-x:hover { background: #D6DEE7; color: #B42318; }
+.mb-chip-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mb-chip-none { align-self: center; font-size: 12.5px; color: var(--ink-2); }
 .mb-mini { flex: none; height: 30px; padding: 0 10px; border: 1px solid #CDD4DC; border-radius: 7px; background: var(--paper);
   color: var(--ink); font-size: 12.5px; font-weight: 600; cursor: pointer; }
 .mb-mini:hover { border-color: var(--ink-2); }
@@ -2193,30 +2209,23 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   /** Claude 不能用的原因，給提示用 */
   const mtClaudeWhy = (c, kind) => (kind === 'credit' ? 'Claude 帳號的額度用完了' : kind === 'badkey' ? 'Claude 金鑰無效' : kind === 'model' ? `帳號不能用 ${modelLabel(mtClaudeModel(c))}`
     : kind === 'cors' ? 'Claude 的組織設定不允許從瀏覽器直接呼叫 API' : '還沒填 Claude 金鑰');
+  /** 設定面板上漫畫翻譯的一行說明：現在用哪個服務、出了什麼問題（翻譯方式只有快速：瀏覽器辨識文字＋Google 翻譯，再用 AI 修正譯文） */
   function mtHint(c) {
     const s = mtEngineState(c);
-    const fast = c.mode !== 'accurate';
     if (s.fallback) return `${mtClaudeWhy(c, s.fallback)}，目前由 Gemini（${modelLabel(s.model)}）接手${s.fallback === 'credit' ? '；加值後按狀態列的「重試」換回 Claude' : ''}。`;
     if (s.ai === 'claude') {
-      if (s.kind === 'nokey') return '還沒填 Claude 金鑰：目前只用免費模式（瀏覽器辨識文字＋Google 翻譯）。到 Claude Console 取得金鑰，貼上後按「測試」。';
+      if (s.kind === 'nokey') return '還沒填 Claude 金鑰：目前只用免費模式（瀏覽器辨識文字＋Google 翻譯）。貼上金鑰後按「測試」。';
       if (s.kind === 'badkey') return 'Claude 金鑰無效或沒有權限，目前只用免費模式。請重新貼上金鑰再按「測試」。';
-      if (s.kind === 'credit') return 'Claude 帳號的額度用完了（請到 Claude Console 加值），目前只用免費模式；加值後按狀態列的「重試」或重新整理。';
+      if (s.kind === 'credit') return 'Claude 帳號的額度用完了（請到 Claude Console 加值），目前只用免費模式；加值後按狀態列的「重試」。';
       if (s.kind === 'model') return `帳號不能用 ${modelLabel(mtClaudeModel(c))}，目前只用免費模式。請換一個模型再試。`;
       if (s.kind === 'cors') return 'Claude 的組織設定不允許從瀏覽器直接呼叫 API，目前只用免費模式。請到 Claude Console 的組織設定允許，或改選 Gemini。';
       const cost = mtClaudeCost(s.model);
-      const out = mtKeyFor(c, 'gemini') ? '額度用完會自動換 Gemini 接手。' : '額度用完會自動改用免費模式（填了 Gemini 金鑰的話會換 Gemini 接手）。';
-      return fast
-        ? `快速模式：瀏覽器辨識文字＋Google 翻譯，畫面上很快就有譯文；再用 ${modelLabel(s.model)} 依前後文修正，只送文字，很省（一話約 US$${cost[0]}）。每次都會用到帳號裡的額度；${out}`
-        : `精準模式：${modelLabel(s.model)} 直接看圖翻譯，最準，但每張圖都要付費（一話約 US$${cost[1]}）；${out}`;
+      return `快速模式：Google 翻譯後用 ${modelLabel(s.model)} 修正譯文（只送文字，一話約 US$${cost[0]}）；額度用完會自動換 ${mtKeyFor(c, 'gemini') ? 'Gemini 接手' : '免費模式'}。`;
     }
-    if (s.kind === 'nokey') {
-      return fast ? '還沒填金鑰：目前只用瀏覽器辨識文字＋Google 翻譯。填了 Gemini 金鑰（可以免費申請）會再幫忙修正認錯的字、翻得不順的地方，只送文字、很省次數；免費額度用完也不會收費。'
-        : '還沒填金鑰，目前用免費模式（瀏覽器辨識文字＋Google 翻譯，品質較普通）。Gemini 金鑰可以免費申請；免費額度用完只會改回免費模式，不會收費。';
-    }
+    if (s.kind === 'nokey') return '還沒填金鑰：目前只用瀏覽器辨識文字＋Google 翻譯。填了 Gemini 金鑰（免費申請）會再修正譯文，免費額度用完也不會收費。';
     if (s.kind === 'badkey') return '金鑰無效或沒有權限，目前只用免費模式。請重新貼上金鑰再按「測試」。';
     if (s.kind === 'quota') return `Gemini 今天的免費額度都用完了，目前只用免費模式；${mtWhen(s.until)} 後自動恢復。`;
-    if (fast) return `快速模式：瀏覽器辨識文字＋Google 翻譯，畫面上很快就有譯文；再用 Gemini（例如 ${modelLabel(s.model)}）依前後文修正，只送文字、很多張合成一次，很省次數。免費額度用完不會收費。`;
-    return `精準模式：Gemini 直接看圖翻譯（同時用你帳號裡所有免費的模型，例如 ${modelLabel(s.model)}），每張圖都會用到次數。額度用完會自動換模型，全部用完就改用免費模式，不會收費。`;
+    return `快速模式：Google 翻譯後用 Gemini（${modelLabel(s.model)}）修正譯文，只送文字、很省次數；免費額度用完不會收費。`;
   }
 
   /* ---------- Gemini 連線 ---------- */
@@ -2937,135 +2946,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       i++;
     }
     return out;
-  }
-
-  /* ======================================================================
-   * 簡體網頁轉繁體：看出是簡體中文的網頁才轉（日文網頁不轉），之後載入的內容也會轉
-   * ==================================================================== */
-  let s2tOn = false; // 這一頁（最上層）正在轉成繁體：設定面板顯示「本頁」
-  function startPageS2T() {
-    const doc = document;
-    const SKIP = 'script,style,noscript,template,textarea,code,pre,kbd,samp,var';
-    const ATTRS = ['title', 'placeholder', 'alt', 'aria-label'];
-    const KANA = /[\u3040-\u30FF]/;
-    const CJK = /[\u4E00-\u9FFF]/;
-    const { uniq } = mtS2TLoad();
-    const lang = () => (doc.documentElement && doc.documentElement.lang) || '';
-    /** 這段文字是不是簡體中文：有夠多只有簡體才用的字，而且幾乎沒有假名（日文） */
-    const isSimp = (t) => {
-      let cjk = 0;
-      let simp = 0;
-      let kana = 0;
-      for (const ch of t) {
-        const c = ch.charCodeAt(0);
-        if (c >= 0x3040 && c <= 0x30FF) kana++;
-        else if (c >= 0x4E00 && c <= 0x9FFF) { cjk++; if (uniq.has(ch)) simp++; }
-      }
-      return simp >= 3 && simp >= cjk * 0.03 && kana < (cjk + kana) * 0.15; // 日文的假名通常佔三成以上
-    };
-    const origText = new WeakMap(); // 文字節點 → 原文（關掉時還原）
-    const origAttr = new WeakMap(); // 元素 → { 屬性: 原文 }
-    const skip = (el) => !el || !!el.closest(SKIP) || el.isContentEditable;
-    const convText = (n) => {
-      const t = n.nodeValue;
-      if (!t || !CJK.test(t) || KANA.test(t) || skip(n.parentElement)) return;
-      const z = mtS2T(t);
-      if (z === t) return;
-      if (!origText.has(n)) origText.set(n, t);
-      n.nodeValue = z;
-    };
-    const convAttrs = (el) => {
-      for (const a of ATTRS) {
-        const v = el.getAttribute(a);
-        if (!v || !CJK.test(v) || KANA.test(v)) continue;
-        const z = mtS2T(v);
-        if (z === v) continue;
-        let o = origAttr.get(el);
-        if (!o) { o = {}; origAttr.set(el, o); }
-        if (!(a in o)) o[a] = v;
-        el.setAttribute(a, z);
-      }
-    };
-    const walk = (root) => {
-      if (!root) return;
-      if (root.nodeType === 3) { convText(root); return; }
-      if (root.nodeType !== 1) return;
-      if (root.hasAttributes()) convAttrs(root);
-      const tw = doc.createTreeWalker(root, 5); // 元素＋文字
-      for (let n = tw.nextNode(); n; n = tw.nextNode()) {
-        if (n.nodeType === 3) convText(n);
-        else if (n.hasAttributes()) convAttrs(n);
-      }
-    };
-    let conv = null;
-    let active = false;
-    function activate() {
-      if (active) return;
-      active = true;
-      if (IS_TOP) s2tOn = true;
-      if (sniff) sniff.disconnect();
-      walk(doc.documentElement);
-      conv = new MutationObserver((ms) => {
-        for (const m of ms) {
-          if (m.type === 'childList') m.addedNodes.forEach(walk);
-          else if (m.type === 'characterData') convText(m.target);
-          else if (m.type === 'attributes') convAttrs(m.target);
-        }
-      });
-      conv.observe(doc, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRS });
-    }
-    // 還沒確定是簡體網頁：收集新出現的中文字來判斷（網頁一邊載入一邊看，確定了馬上轉，不會先閃一下簡體字）
-    let buf = '';
-    let checkedAt = 0;
-    const check = () => {
-      if (active || /^ja/i.test(lang())) return;
-      if (isSimp(buf)) activate();
-      else if (buf.length > 6000) { buf = buf.slice(-3000); checkedAt = buf.length; }
-    };
-    const feed = (t) => {
-      if (active || !t || !/[\u3040-\u9FFF]/.test(t)) return;
-      buf += t;
-      if (buf.length - checkedAt < (checkedAt ? 200 : 40)) return;
-      checkedAt = buf.length;
-      check();
-    };
-    const sample = (node) => {
-      if (node.nodeType === 3) { if (!skip(node.parentElement)) feed(node.nodeValue); return; }
-      if (node.nodeType !== 1 || node.closest(SKIP)) return;
-      const tw = doc.createTreeWalker(node, 4);
-      let got = 0;
-      for (let n = tw.nextNode(); n && got < 3000; n = tw.nextNode()) {
-        if (n.parentElement && n.parentElement.closest(SKIP)) continue;
-        got += n.nodeValue.length;
-        feed(n.nodeValue);
-        if (active) return;
-      }
-    };
-    const sniff = new MutationObserver((ms) => {
-      for (const m of ms) {
-        if (m.type === 'childList') { for (const n of m.addedNodes) { sample(n); if (active) return; } } else sample(m.target);
-      }
-    });
-    // 從網頁一開始就看（還沒有 <html> 時也可以看整份文件）
-    sniff.observe(doc, { childList: true, subtree: true, characterData: true });
-    if (doc.documentElement) sample(doc.documentElement);
-    // 字比較少的網頁：載入完再判斷一次
-    doc.addEventListener('DOMContentLoaded', check, { once: true });
-    return () => {
-      doc.removeEventListener('DOMContentLoaded', check);
-      sniff.disconnect();
-      if (conv) conv.disconnect();
-      if (IS_TOP) s2tOn = false;
-      // 還原成原文
-      if (!active) return;
-      const tw = doc.createTreeWalker(doc.documentElement, 5);
-      for (let n = tw.currentNode; n; n = tw.nextNode()) {
-        if (n.nodeType === 3) { const o = origText.get(n); if (o !== undefined && n.nodeValue === mtS2T(o)) n.nodeValue = o; } else {
-          const o = origAttr.get(n);
-          if (o) for (const a of Object.keys(o)) n.setAttribute(a, o[a]);
-        }
-      }
-    };
   }
 
   function mtCleanZh(t) {
@@ -8326,21 +8206,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       });
     }
 
-    function toggleSite() {
-      const list = (cfg().sites || []).slice();
-      const hit = mtSiteMatch(list);
-      if (hit && String(hit).trim() === '*') return;
-      if (hit) {
-        ctx.save('sites', list.filter((x) => x !== hit));
-        toast(isTouch ? '這個網站不再顯示「譯」；在 Tampermonkey 選單按「翻譯這一話的漫畫」還是可以翻譯。' : '這個網站不再顯示翻譯按鈕；按 Alt+T 還是可以翻譯整話。');
-      } else {
-        ctx.save('sites', list.concat([HOST.replace(/^www\./, '')]));
-        toast(`已在 ${HOST} 顯示翻譯按鈕。`);
-      }
-      placeHover();
-      fabSync();
-    }
-
     syncHover();
     fabWatch();
     autoWatch();
@@ -8356,20 +8221,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         chainFail = 0;
         if (gq.jobs.length) pumpSoon(0);
       },
+      // Tampermonkey 選單：開始翻譯、網站清單都在「譯」按鈕和面板上操作；翻譯中只留「關閉（恢復原文）」和診斷資訊
       menuItems() {
-        const items = [{
-          key: 'mt.page',
-          label: '　' + (!pg.on ? '翻譯這一話的漫畫' : pg.hidden ? '顯示漫畫譯文' : '暫時顯示漫畫原文') + (isTouch ? '' : '（Alt+T）'),
-          run: () => { warmLocal(); pageToggle(); },
-          close: true,
-        }];
-        if (pg.on) items.push({ key: 'mt.stop', label: '　關閉漫畫翻譯（恢復原文）', run: () => pageStop(), close: true });
-        const hit = mtSiteMatch(cfg().sites);
-        if (String(hit).trim() !== '*') {
-          items.push({ key: 'mt.site', label: hit ? '　這個網站不要顯示翻譯按鈕' : '　在這個網站顯示翻譯按鈕', run: () => toggleSite(), close: true });
-        }
-        if (pg.on) items.push({ key: 'mt.diag', label: '　複製診斷資訊（回報問題用）', run: () => diag(), close: true });
-        return items;
+        if (!pg.on) return [];
+        return [
+          { key: 'mt.stop', label: '　關閉漫畫翻譯（恢復原文）', run: () => pageStop(), close: true },
+          { key: 'mt.diag', label: '　複製診斷資訊（回報問題用）', run: () => diag(), close: true },
+        ];
       },
       stop() {
         stopped = true;
@@ -8450,7 +8308,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       group: 'video',
       name: '影片快轉',
       site: '所有網站',
-      desc: '按住修飾鍵再按 ← 或 →，讓影片倒退或前進固定秒數；在輸入框打字時不會誤觸。',
+      desc: '按住修飾鍵再按 ← 或 →，影片倒退或前進固定秒數。',
       defaults: { seconds: 87, modifier: 'ctrl' },
       fields: [
         { key: 'seconds', label: '秒數', type: 'number', min: 1, max: 3600, step: 1, unit: '秒' },
@@ -8511,10 +8369,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       group: 'video',
       name: '短影片自動下一部',
       site: 'YouTube／IG／FB',
-      desc: 'YouTube Shorts、Instagram 和 Facebook 的 Reels 播完馬上跳到下一部，不會先重播開頭；切到其他分頁也會繼續播。',
+      desc: 'Shorts、Reels 播完直接跳下一部，不重播開頭。',
       defaults: { early: 0 },
       fields: [{ key: 'early', label: '提早幾秒跳', type: 'number', min: 0, max: 3, step: 0.1, unit: '秒' }],
-      hint: '0 是播完才跳（預設）；想略過片尾的話可以調大一點。',
+      hint: '0 是播完才跳；想略過片尾可以調大。',
       frames: 'all',
       phase: 'start',
       match: () => location.protocol === 'https:' && (HOST === 'www.youtube.com' || /(^|\.)instagram\.com$/.test(HOST) || /(^|\.)facebook\.com$/.test(HOST)),
@@ -8679,7 +8537,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       group: 'video',
       name: '影片音量記憶',
       site: 'Threads／X／IG／FB',
-      desc: '每個網站各記住一個音量，之後每一支影片都用這個音量，不會突然 100%。在網站自己的音量條上調、或在這裡調都可以；直接打開 X 的影片網址（video.twimg.com）時用下面設定的音量。',
+      desc: '每個網站記住一個音量，之後的影片都用它，不會突然 100%。',
       defaults: { direct: 5, bar: 'hide' },
       fields: [
         { key: 'threads', label: 'Threads', type: 'memory', memKey: 'mem.threadsVolume', def: 0.1 },
@@ -8763,7 +8621,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       group: 'download',
       name: 'X 影片下載按鈕',
       site: 'X',
-      desc: '在有影片或圖片的推文旁加上下載鈕，點了會用 cobalt.tools 開啟下載頁。按住 S 點圖片時，也不會再跳出 X 的分享選單。',
+      desc: '推文旁加下載鈕，點了用 cobalt.tools 開下載頁。',
       frames: 'all',
       phase: 'idle',
       match: () => HOST === 'x.com' || HOST === 'twitter.com',
@@ -8867,7 +8725,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       group: 'download',
       name: 'LINE 貼圖下載',
       site: 'LINE Store',
-      desc: '在貼圖、表情貼商品頁加上下載按鈕：靜態圖打包成 ZIP；動態圖直接在頁面上轉成去背 GIF 再打包。',
+      desc: '貼圖商品頁加下載按鈕：靜態圖打包 ZIP，動態圖轉成去背 GIF。',
       frames: 'top',
       phase: 'dom',
       match: () => HOST === 'store.line.me',
@@ -9075,8 +8933,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       name: '漫畫翻譯',
       site: '漫畫網站',
       desc: TOUCH
-        ? '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，點角落的「譯」就會翻譯這一話；其他網站在下面按「新增這個網站」或貼上漫畫網址，也可以在 Tampermonkey 選單按「翻譯這一話的漫畫」。'
-        : '把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文。在下面列出的網站，滑到圖片上會出現「翻譯」按鈕（其他網站在下面按「新增這個網站」或貼上漫畫網址）；任何網站都可以按 Alt+T 翻譯整頁。',
+        ? '把漫畫圖裡的英文、日文、韓文翻成繁體中文。清單裡的網站點角落的「譯」就翻譯這一話。'
+        : '把漫畫圖裡的英文、日文、韓文翻成繁體中文。清單裡的網站滑到圖上會出現「翻譯」按鈕，任何網站都可以按 Alt+T。',
       defaults: { engine: 'gemini', apiKey: '', claudeKey: '', claudeModel: CLAUDE_MODELS[0][0], mode: 'fast', sites: MT_SITES, auto: 'off', sfx: 'skip', ocrLang: 'auto' },
       fields: [
         { key: 'engine', label: 'AI 服務', type: 'select', options: [['gemini', 'Gemini（免費）'], ['claude', 'Claude（付費，用帳號裡的額度）']] },
@@ -9084,8 +8942,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         { key: 'claudeModel', label: 'Claude 模型', type: 'select', options: CLAUDE_MODELS, when: (c) => mtAiOf(c) === 'claude' },
         // 選 Claude 時 Gemini 金鑰也留著：Claude 額度用完、金鑰壞掉時 Gemini 接手
         { key: 'apiKey', label: 'Gemini 金鑰', type: 'secret', placeholder: '貼上 AIza 開頭的金鑰', link: { href: GEMINI_KEY_URL, text: '免費申請金鑰' }, test: (k) => mtTestKey(k) },
-        { key: 'mode', label: '翻譯方式', type: 'select', options: [['fast', '快速：Google 翻譯＋AI 修正（省錢、省次數）'], ['accurate', '精準：AI 看圖翻譯（最準，很耗次數）']] },
-        { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '用逗號分隔；* 代表所有網站', addHere: true, paste: true },
+        { key: 'sites', label: '顯示翻譯按鈕的網站', type: 'list', placeholder: '貼上漫畫網址或打網域（* 代表所有網站）', addHere: true },
         { key: 'auto', label: '在這些網站', type: 'select', options: [['off', '按了才翻譯'], ['on', '打開漫畫就自動翻譯整話']] },
         { key: 'sfx', label: '狀聲詞', type: 'select', options: [['skip', '不翻'], ['translate', '也翻']] },
         { key: 'ocrLang', label: '漫畫原文（辨識文字用）', type: 'select', options: [['auto', '自動判斷'], ['eng', '英文'], ['kor', '韓文'], ['jpn', '日文']] },
@@ -9112,33 +8969,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       },
     },
 
-    /* ---------------- 簡體轉繁體 ---------------- */
-    {
-      id: 's2t',
-      group: 'translate',
-      name: '簡體轉繁體',
-      site: '簡體網頁',
-      desc: '打開簡體中文的網頁（小說、B 站、知乎等）時，自動把文字轉成繁體，之後載入的內容也會轉。輸入框裡的字、程式碼不會動，日文網頁也不會被誤轉。',
-      defaults: { exclude: [] },
-      fields: [{ key: 'exclude', label: '不轉換的網站', type: 'list', placeholder: '例如 example.com' }],
-      frames: 'all',
-      phase: 'start',
-      match: () => /^https?:$/.test(location.protocol),
-      here: () => s2tOn,
-      start(ctx) {
-        const ex = (ctx.cfg().exclude || []).some((e) => { const d = String(e).trim().toLowerCase(); return d && (HOST === d || HOST.endsWith('.' + d)); });
-        if (ex) return undefined;
-        return startPageS2T();
-      },
-    },
-
     /* ---------------- 隱藏推薦內容 ---------------- */
     {
       id: 'feedClean',
       group: 'social',
       name: '隱藏推薦內容',
       site: 'FB／Threads',
-      desc: '把動態裡的「贊助」廣告、還沒追蹤的粉專和社團的推薦貼文、「你可能認識的朋友」和「為你推薦」的帳號直接隱藏。想知道收了哪些，可以改成留一行字（點一下就能打開）。',
+      desc: '隱藏動態裡的贊助廣告、推薦貼文和推薦帳號。',
       defaults: { fb: 'all', threads: 'all', style: 'hide' },
       fields: [
         { key: 'fb', label: 'Facebook', type: 'select', options: [['all', '收贊助和推薦'], ['reels', '收贊助、推薦和 Reels'], ['ads', '只收贊助'], ['off', '不收']] },
@@ -9160,7 +8997,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       group: 'web',
       name: '網址追蹤參數清除',
       site: '所有網站',
-      desc: '移除網址列和頁面連結裡的 utm_、fbclid、gclid 等追蹤參數，也會清掉 YouTube／Spotify 的 si、X 的 s 和 t、Threads 的 xmt。',
+      desc: '移除網址裡的 utm_、fbclid、si 等追蹤參數。',
       frames: 'all',
       phase: 'start',
       match: () => /^https?:$/.test(location.protocol),
@@ -9271,9 +9108,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       group: 'web',
       name: '手機版自動轉電腦版',
       site: 'm. 網址',
-      desc: '打開 m. 開頭的手機版網頁時自動換成 www. 電腦版；zh.m.wikipedia.org 這類網址也會轉。',
+      desc: 'm. 開頭的手機版網址自動換成電腦版。',
       defaults: { exclude: ['m.me'] },
-      fields: [{ key: 'exclude', label: '不轉換的網域', type: 'list', placeholder: '例如 m.me, m.example.com' }],
+      fields: [{ key: 'exclude', label: '不轉換的網域', type: 'list', placeholder: '打網域，例如 m.me', empty: '沒有' }],
       frames: 'top',
       phase: 'start',
       match: () => /^https?:$/.test(location.protocol) && (/^m\./.test(HOST) || WIKI_RE.test(HOST)),
@@ -9546,74 +9383,73 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       };
     }
     if (f.type === 'list') {
-      const input = h('input', { type: 'text', spellcheck: 'false', placeholder: f.placeholder || '' });
-      const show = () => { input.value = (cfgVal() || []).join(', '); };
-      // 網站清單：打進去、貼進去的網址只留網站（https://mgread.io/manga/… → mgread.io）
-      const parse = (text) => Array.from(new Set(text.split(/[\s,，、;；]+/).map((x) => (f.paste ? mtSiteOf(x) : '') || x.trim().toLowerCase()).filter(Boolean)));
-      // 「新增這個網站」：按一下就把現在這個網站加進清單，不用自己打網址
+      // 網站清單：一個網站一個小格，右邊的 × 可以刪掉；下面的格子貼上漫畫網址（或打網域）按「加入」就加進清單，* 代表所有網站
+      const chips = h('div', { class: 'mb-chips', role: 'list', 'aria-label': f.label });
       const here = f.addHere ? HOST.replace(/^www\./, '') : '';
-      const note = here || f.paste ? h('span', { class: 'mb-note', 'aria-live': 'polite' }) : null;
+      const note = h('span', { class: 'mb-note', 'aria-live': 'polite' });
       const tell = (text, ok) => { note.className = 'mb-note ' + (ok ? 'is-ok' : 'is-bad'); note.textContent = text; };
+      const list = () => (cfgVal() || []).map((x) => String(x).trim()).filter(Boolean);
+      const save = (arr) => saveCfg(m, f.key, Array.from(new Set(arr)));
       const add = here ? h('button', { type: 'button', class: 'mb-mini mb-add' }) : null;
-      // 貼上漫畫網址的格子：貼上（或打好按 Enter）就取出網站加進清單，不用自己找網域、打逗號
-      const paste = f.paste ? h('input', {
-        type: 'text', class: 'mb-paste', spellcheck: 'false', autocomplete: 'off', inputmode: 'url', enterkeyhint: 'done',
-        placeholder: '貼上漫畫網址，自動加進清單', 'aria-label': '貼上漫畫網址，自動加進清單',
-      }) : null;
       const sync = () => {
         if (!add) return;
-        const hit = !!mtSiteMatch(cfgVal() || []);
+        const hit = !!mtSiteMatch(list());
         add.disabled = hit;
         add.textContent = hit ? '已在清單裡' : '新增這個網站';
         add.title = hit ? `${here} 已經在清單裡` : `把 ${here} 加進清單`;
       };
-      show();
-      sync();
-      input.addEventListener('change', () => {
-        saveCfg(m, f.key, parse(input.value));
+      const show = () => {
+        chips.textContent = '';
+        const cur = list();
+        if (!cur.length) chips.append(h('span', { class: 'mb-chip-none', text: f.empty || '還沒有' }));
+        for (const site of cur) {
+          chips.append(h('span', { class: 'mb-chip', role: 'listitem' },
+            h('span', { text: site === '*' ? '所有網站' : site }),
+            h('button', {
+              type: 'button', class: 'mb-chip-x', 'aria-label': `移除 ${site}`, title: `從清單移除 ${site}`, text: '×',
+              onclick: () => { save(list().filter((x) => x !== site)); show(); sync(); tell(`已移除 ${site}`, true); },
+            })));
+        }
+      };
+      const input = h('input', {
+        type: 'text', class: 'mb-paste', spellcheck: 'false', autocomplete: 'off', inputmode: 'url', enterkeyhint: 'done',
+        placeholder: f.placeholder || '貼上網址或打網域', 'aria-label': `${f.label}：貼上網址或打網域`,
+      });
+      const take = () => {
+        const text = input.value.trim();
+        if (!text) return;
+        const sites = mtSitesIn(text); // 網址只留網站；* 代表所有網站
+        if (!sites.length) { tell('看不出是哪個網站，請貼上完整的網址', false); return; }
+        const cur = list();
+        const fresh = sites.filter((x) => !mtSiteMatch(cur, x) && !cur.includes(x));
+        input.value = '';
+        if (fresh.length) save(cur.concat(fresh));
         show();
         sync();
-      });
+        tell(fresh.length ? `已新增 ${fresh.join('、')}` : `${sites.join('、')} 已經在清單裡`, true);
+      };
+      const go = h('button', { type: 'button', class: 'mb-mini', text: '加入', onclick: take });
+      input.addEventListener('paste', () => setTimeout(take, 0)); // 貼上就直接加（等貼上的字放進格子再處理）
+      // 按 Enter、離開格子（手機鍵盤的剪貼簿直接插入文字時沒有貼上事件）也加：用 change 事件，面板擋住網站快捷鍵的攔截不會擋到它
+      input.addEventListener('change', take);
       if (add) {
         add.addEventListener('click', () => {
-          const list = cfgVal() || [];
-          if (mtSiteMatch(list)) return;
-          saveCfg(m, f.key, Array.from(new Set(list.concat([here]))));
+          const cur = list();
+          if (mtSiteMatch(cur)) return;
+          save(cur.concat([here]));
           show();
           sync();
           tell(`已新增 ${here}`, true);
         });
       }
-      if (paste) {
-        const take = () => {
-          const text = paste.value.trim();
-          if (!text) return;
-          const sites = mtSitesIn(text);
-          if (!sites.length) { tell('看不出是哪個網站，請貼上完整的漫畫網址', false); return; }
-          const list = cfgVal() || [];
-          const fresh = sites.filter((x) => !mtSiteMatch(list, x));
-          paste.value = '';
-          if (fresh.length) saveCfg(m, f.key, Array.from(new Set(list.concat(fresh))));
-          show();
-          sync();
-          tell(fresh.length ? `已新增 ${fresh.join('、')}` : `${sites.join('、')} 已經在清單裡`, true);
-        };
-        paste.addEventListener('paste', () => setTimeout(take, 0)); // 等貼上的字放進格子再處理
-        paste.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); take(); } });
-        paste.addEventListener('change', take); // 手機鍵盤的剪貼簿直接插入文字（沒有貼上事件）：離開格子時處理
-      }
-      if (note) {
-        return {
-          el: h('div', { class: 'mb-field mb-field-wide mb-combo' },
-            h('label', { class: 'mb-combo-in' }, h('span', { text: f.label }), input),
-            add,
-            h('div', { class: 'mb-combo-foot' }, paste, note)),
-          refresh: () => { if (!input.matches(':focus')) show(); sync(); },
-        };
-      }
+      show();
+      sync();
       return {
-        el: h('label', { class: 'mb-field mb-field-wide' }, h('span', { text: f.label }), input),
-        refresh: () => { if (!input.matches(':focus')) show(); },
+        el: h('div', { class: 'mb-field mb-field-wide mb-combo' },
+          h('span', { class: 'mb-combo-label', text: f.label }),
+          chips,
+          h('div', { class: 'mb-combo-foot' }, input, go, add, note)),
+        refresh: () => { show(); sync(); },
       };
     }
     // 音量：'percent' 存在設定裡，'memory' 是記住的音量。數字可以直接改；滑鼠在拉桿或數字上滾動也可以調
@@ -9797,6 +9633,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   /* ======================================================================
    * 啟動
    * ==================================================================== */
+
+  // 1.5.21：翻譯方式只留「快速」，之前選「精準」的改回快速
+  (() => {
+    if (store.get('mt.fastOnly', false)) return;
+    store.set('mt.fastOnly', true);
+    const c = store.get('cfg.mangaTranslate', null);
+    if (c && c.mode === 'accurate') store.set('cfg.mangaTranslate', Object.assign({}, c, { mode: 'fast' }));
+  })();
 
   // 1.4.1：「X 直連影片音量」併進「X 影片音量」，之前設過的音量搬過來
   (() => {
