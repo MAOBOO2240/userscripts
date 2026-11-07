@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.27
+// @version      1.5.28
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -42,8 +42,11 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.28  AI 修正時會幫每部作品整理一張「用語表」（人名、招式、地名的譯法，和主要角色的口氣），之後每一批、下一話都附上照著翻，同一個名字不會前面叫「林墨宇」後面變「林莫予」；
+ *         名詞第二次出現才算穩、改譯法要連兩次才換，兩個月沒看的作品自動清掉。併在原本的修正請求裡（不多打 API、不變慢）。
+ *         尖刺對話框（喊叫、嚇一跳）裡的字會告訴 AI 可能是喊的，語氣才對；診斷報告多了用語表條數
  * 1.5.27  設定面板整理：翻譯方式只留「快速」（Google 翻譯＋AI 修正）；「顯示翻譯按鈕的網站」改成一個網站一格、按 × 刪除，貼上網址的格子旁多了「加入」；
- *         說明文字縮短；簡體轉繁體併進「翻譯」裡一直開著，不再另外列出；Tampermonkey 選單拿掉「翻譯這一話的漫畫」「在這個網站顯示翻譯按鈕」
+ *         說明文字縮短；Tampermonkey 選單拿掉「翻譯這一話的漫畫」「在這個網站顯示翻譯按鈕」
  * 1.5.26  歪一邊的字（喊叫的尖刺對話框裡斜著排的字）認得到了：之前方框裡會混進上下行的字、整句認不出來；現在會先算出角度、轉正了再認，行的順序也照轉正後的位置排
  * 1.5.25  修正整話翻完卻少幾句（漏網之魚）：免費翻譯一時被擋（Google 回 HTTP 429、微軟也失敗）或漏回某一句時，之前那幾段就直接沒了、整張還被當成翻完記住。
  *         現在漏回的句子會再翻一次，失敗的圖（整張或只缺幾句）不記住、20 秒後自動重翻（最多兩次），「重試」也會重翻只缺幾句的圖；
@@ -2437,7 +2440,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (a >= 0 && b > a) { try { v = JSON.parse(t.slice(a, b + 1)); } catch (__) { /* 放棄 */ } }
     }
     if (Array.isArray(v)) return v;
-    if (v && Array.isArray(v.items)) return v.items;
+    if (v && Array.isArray(v.items)) {
+      if (Array.isArray(v.gloss)) v.items.gloss = v.gloss; // 用語表的新條目（修正時一起回）
+      return v.items;
+    }
     if (v && Array.isArray(v.blocks)) return v.blocks;
     return v && typeof v === 'object' ? [] : null;
   }
@@ -2503,9 +2509,83 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           required: ['id', 'zh'],
         },
       },
+      gloss: {
+        type: 'array',
+        description: 'New or corrected glossary entries for this series (names, recurring terms, how a character speaks); empty when nothing new',
+        items: {
+          type: 'object',
+          properties: {
+            s: { type: 'string', description: 'The name or term as written in the original text; for a tone note, the character name' },
+            z: { type: 'string', description: 'Its Traditional Chinese translation; for a tone note, a short description of how the character speaks' },
+            k: { type: 'string', enum: ['name', 'term', 'tone'] },
+          },
+          required: ['s', 'z', 'k'],
+        },
+      },
     },
-    required: ['items'],
+    required: ['items', 'gloss'],
   };
+
+  /* ----------------------------------------------------------------------
+   * 作品用語表：人名、名詞的譯法和主要角色的口氣，每部作品一張（跨話沿用）。
+   * AI 修正譯文時附上這張表照著翻，回覆裡順便回新學到的條目；同一個名詞第二次出現才算穩，
+   * 改譯法要連兩次都這麼說才換（一次認錯的字不會把表帶壞）。60 天沒看的作品自動清掉
+   * -------------------------------------------------------------------- */
+  const MT_GLOSS_MAX = 60; // 一部作品最多記幾條
+  const MT_GLOSS_SERIES = 40; // 最多記幾部作品
+  const MT_GLOSS_TTL = 60 * 86400000;
+  const mtGlossAll = () => { const g = store.get('mt.gloss', null); return g && typeof g === 'object' && !Array.isArray(g) ? g : {}; };
+  function mtGlossGet(sk) {
+    const g = mtGlossAll()[sk];
+    return g && Array.isArray(g.items) ? g.items : [];
+  }
+  /** AI 回的條目整理成可以存的樣子：s 原文（或角色名）、z 譯法（或口氣）、k name／term／tone */
+  function mtGlossClean(e) {
+    if (!e || typeof e !== 'object') return null;
+    const k = e.k === 'tone' ? 'tone' : e.k === 'term' ? 'term' : 'name';
+    const s = String(e.s || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    const z = mtCleanZh(e.z).slice(0, k === 'tone' ? 40 : 24);
+    if (!s || !z || !/\p{L}/u.test(s) || !/[⺀-鿿]/.test(z)) return null; // 譯法、口氣要是中文
+    return { s, z, k };
+  }
+  function mtGlossMerge(sk, entries) {
+    // 同一次回覆裡重複的條目只算一次（串流時收到一次、最後整理又收到一次）
+    const seen = new Set();
+    const list = (entries || []).map(mtGlossClean).filter((e) => e && !seen.has(e.k + '|' + e.s.toLowerCase()) && seen.add(e.k + '|' + e.s.toLowerCase()));
+    if (!sk || !list.length) return;
+    const now = Date.now();
+    const all = mtGlossAll();
+    const g = all[sk] && Array.isArray(all[sk].items) ? all[sk] : { t: now, items: [] };
+    for (const e of list) {
+      const key = e.k + '|' + e.s.toLowerCase();
+      const cur = g.items.find((x) => x.k + '|' + String(x.s).toLowerCase() === key);
+      if (!cur) { g.items.push({ s: e.s, z: e.z, k: e.k, n: 1, t: now }); continue; }
+      cur.t = now;
+      if (cur.z === e.z) { cur.n = (cur.n || 1) + 1; cur.alt = ''; } else if (cur.alt === e.z) { cur.z = e.z; cur.n = 2; cur.alt = ''; } else cur.alt = e.z;
+    }
+    g.items.sort((a, b) => (b.n || 0) - (a.n || 0) || (b.t || 0) - (a.t || 0) || String(a.s).localeCompare(String(b.s)) || String(a.k).localeCompare(String(b.k)));
+    g.items = g.items.slice(0, MT_GLOSS_MAX);
+    g.t = now;
+    all[sk] = g;
+    // 太久沒看的作品、太多部作品：清掉
+    const keys = Object.keys(all).filter((k) => all[k] && now - (all[k].t || 0) <= MT_GLOSS_TTL).sort((a, b) => (all[b].t || 0) - (all[a].t || 0)).slice(0, MT_GLOSS_SERIES);
+    const kept = {};
+    for (const k of keys) kept[k] = all[k];
+    store.set('mt.gloss', kept);
+  }
+  /** 附在修正請求前面的用語表文字（沒有就空字串） */
+  function mtGlossText(sk) {
+    const items = mtGlossGet(sk);
+    if (!items.length) return '';
+    const terms = items.filter((x) => x.k !== 'tone').map((x) => `- ${x.s} → ${x.z}`);
+    const tones = items.filter((x) => x.k === 'tone').map((x) => `- ${x.s}: ${x.z}`);
+    return [
+      terms.length ? 'Glossary for this series (translate these names and terms exactly like this):' : '',
+      ...terms,
+      tones.length ? 'How the characters speak:' : '',
+      ...tones,
+    ].filter(Boolean).join('\n');
+  }
 
   /** 只送文字的修正：瀏覽器認出來的字可能有錯，請 Gemini 依前後文猜出原文再翻譯 */
   function mtFixPrompt(sfx) {
@@ -2514,12 +2594,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       'For every line, work out what the original text most likely says from the surrounding lines and the story, then translate it into natural, fluent Traditional Chinese as used in Taiwan (繁體中文，台灣用語) that fits the speaker and the tone.',
       'Each line is one text block, usually a whole speech bubble. Translate every line on its own: never move words from one line to another, and never leave a line empty just because its sentence continues in another line.',
       'Use full-width punctuation and Taiwanese wording. Keep names and terms consistent with the recent translations. Write Traditional Chinese characters only, never Simplified Chinese.',
+      'When a glossary for this series is given, translate the listed names and terms exactly as listed and keep each character\'s manner of speaking as described; one or two entries may be wrong, so if the text clearly contradicts an entry, follow the text.',
+      'Lines marked [shouting] are in a jagged, spiky bubble, which usually means the speaker is shouting, screaming or startled; when the words fit, translate with that force (short, punchy, exclamation marks where natural).',
+      'Also return "gloss": new or corrected glossary entries you are confident about — proper names (people, places, organizations, skills, items), recurring terms, and for a main character a short note on how they speak (k = "tone", s = the name as written in the text, z = under 20 characters of Traditional Chinese). At most 10 per answer, Traditional Chinese only; return an empty gloss when there is nothing new.',
       'A short reply that leans on the line before it (Me neither, Me too, Same here, So do I, Why not?) must match what that line actually says (see "Lines just before these" and the numbered lines). If that line is not given, translate the reply as it is without inventing a verb (Me neither → 我也是。).',
       'Never add content that the line does not say.',
       sfx ? 'Translate sound effects too, as natural Chinese onomatopoeia.'
         : 'Return an empty zh for lines that are only a sound effect, or an action word lettered as a sound effect (like BAM, THUD, DUN, TILT, NOD, GRAB, STARE, GASP, ドン, 쾅), even when it is a real English word. Lines marked [outside bubbles] are not inside any speech bubble; a very short one of those is usually a sound effect.',
       'Return an empty zh for lines that are not story text (OCR noise, watermarks, website names, scanlator or translator credits, page numbers) or that cannot be made sense of.',
-      'Answer with JSON only: {"items":[{"id":1,"zh":"..."}]}, exactly one item per input line, using the same id.',
+      'Answer with JSON only: {"items":[{"id":1,"zh":"..."}],"gloss":[{"s":"...","z":"...","k":"name"}]}, exactly one item per input line, using the same id.',
     ].join('\n');
   }
 
@@ -4001,6 +4084,36 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           }
           let dirty = 0;
           for (let k = 0; k < pm.length; k++) if (pm[k] !== 2 && !fr[k]) dirty++;
+          // 尖刺的對話框（喊叫、嚇一跳）：從中心往 72 個方向走到邊，半徑忽大忽小、至少 6 個尖角（橢圓 2 個、方框 4 個）。告訴 AI 這句是喊的，語氣才對
+          let spiky = false;
+          if (!cut && pin > 60) {
+            let sx = 0; let sy = 0;
+            for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) if (pm[y * bw + x] !== 2) { sx += x; sy += y; }
+            const cx = sx / pin;
+            const cy = sy / pin;
+            const N = 72;
+            const rad = new Float32Array(N);
+            let sum = 0;
+            for (let k = 0; k < N; k++) {
+              const a = (2 * Math.PI * k) / N;
+              const dx = Math.cos(a);
+              const dy = Math.sin(a);
+              let r = 0;
+              while (r < bw + bh && inP(Math.round(cx + dx * (r + 1)), Math.round(cy + dy * (r + 1)))) r++;
+              rad[k] = r;
+              sum += r;
+            }
+            const mean = sum / N;
+            let peaks = 0;
+            for (let k = 0; k < N && mean > 0; k++) {
+              const c = rad[k];
+              if (!(c > rad[(k + N - 1) % N] && c >= rad[(k + 1) % N])) continue;
+              let lo = c;
+              for (let j = 1; j <= 6; j++) lo = Math.min(lo, rad[(k + N - j) % N], rad[(k + j) % N]);
+              if (c - lo >= mean * 0.12) peaks++;
+            }
+            spiky = peaks >= 6;
+          }
           // 形狀：大多數對話框是橢圓形或方形，這時白底直接蓋滿整個對話框，譯文排在正中間
           let shape = null;
           if (parts.size === 1 && !cut && dirty <= pin * 0.02) {
@@ -4124,6 +4237,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
               x1: Math.min(W, (X0 + box.x1) * f),
               y1: Math.min(H, (Y0 + box.y1) * f),
               shape: box.kind,
+              spiky: spiky ? 1 : 0, // 尖刺的對話框（喊叫）：形狀照常（裡面常常放得下一個橢圓），只是告訴 AI 這句是喊的
               rows: box.rows || null,
               et: et ? 1 : 0, // 對話框碰到這一段圖的上緣／下緣（被切開的對話框）
               eb: eb ? 1 : 0,
@@ -4701,7 +4815,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         Object.assign(o, {
           x0: exact ? b.x0 : Math.min(b.x0, o.x0 + t * 0.1), y0: exact ? b.y0 : Math.min(b.y0, o.y0 + t * 0.1),
           x1: exact ? b.x1 : Math.max(b.x1, o.x1 - t * 0.1), y1: exact ? b.y1 : Math.max(b.y1, o.y1 - t * 0.1),
-          bub: true, bg: b.bg || '', shape: b.shape || '', rows: !exact && inside && Array.isArray(b.rows) ? b.rows : null,
+          bub: true, bg: b.bg || '', shape: b.shape || '', spiky: !!b.spiky, rows: !exact && inside && Array.isArray(b.rows) ? b.rows : null,
           et: !!b.et, eb: !!b.eb,
         });
       } else {
@@ -5634,7 +5748,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const ql = inL(x);
         U.blocks = U.blocks.filter((b) => !covered(b, qu));
         L.blocks = L.blocks.filter((b) => !covered(b, ql));
-        const base = { zh: z, src: x.text, lang: MT_LANG[code], vertical: !!x.vertical, bub: !!x.bub, bg: x.bg || '', shape: x.shape || '',
+        const base = { zh: z, src: x.text, lang: MT_LANG[code], vertical: !!x.vertical, bub: !!x.bub, bg: x.bg || '', shape: x.shape || '', spiky: !!x.spiky,
           rows: x.rows || null, lh: x.lh > 0 ? x.lh / W : 0, seam: true, edge: false };
         const pu = Object.assign({}, base, qu);
         const pl = Object.assign({}, base, ql, { mirror: true, fixed: true });
@@ -5799,7 +5913,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         ex: Array.isArray(v.ex) && v.ex.length === 2 ? v.ex.map((x) => Math.min(1, Math.max(0, Number(x) || 0))) : null,
         blocks: v.b.map((a) => ({ x0: a[0], y0: a[1], x1: a[2], y1: a[3], zh: String(a[4] || ''), vertical: !!a[5], lang: a[6] || '', src: a[7] || '',
           bub: !!a[8], lh: Number(a[9]) || 0, bg: typeof a[10] === 'string' ? a[10] : '', shape: typeof a[11] === 'string' ? a[11] : '', rows: Array.isArray(a[12]) ? a[12] : null,
-          ct: !!(a[13] & 1), cb: !!(a[13] & 2), blank: !!(a[13] & 4), xs: !!(a[13] & 8), fixed: !!(a[13] & 16), seam: !!(a[13] & 32), mirror: !!(a[13] & 64), msrc: typeof a[14] === 'string' ? a[14] : '', edge: false })),
+          ct: !!(a[13] & 1), cb: !!(a[13] & 2), blank: !!(a[13] & 4), xs: !!(a[13] & 8), fixed: !!(a[13] & 16), seam: !!(a[13] & 32), mirror: !!(a[13] & 64), spiky: !!(a[13] & 128), msrc: typeof a[14] === 'string' ? a[14] : '', edge: false })),
       };
     }
     function cachePut(P, model, w, h, blk, fx) {
@@ -5807,7 +5921,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const r4 = (n) => Math.round(n * 10000) / 10000;
       store.set(k, { v: MTC_VER, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, ex: P.seamExt ? P.seamExt.map(r4) : 0,
         b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang, b.src || '', b.bub ? 1 : 0, r4(b.lh || 0), b.bg || '', b.shape || '', b.rows || 0,
-          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0), b.msrc || '']) });
+          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0) | (b.spiky ? 128 : 0), b.msrc || '']) });
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       idx = idx.filter((x) => x !== k);
@@ -6801,6 +6915,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           bub: !!g.bub,
           bg: g.bg || '',
           shape: g.shape || '',
+          spiky: !!g.spiky,
           rows: g.rows || null,
           lh: g.lh > 0 ? g.lh / plan.W : 0,
           conf: typeof g.conf === 'number' ? Math.round(g.conf * 100) / 100 : null, // 認字的信心（PaddleOCR 才有）：改記語言時，沒有一句有把握的圖重新辨識
@@ -6954,14 +7069,19 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const langs = [...new Set(lines.map((l) => LN[l.b.lang]).filter(Boolean))];
       const sfxOn = cfg().sfx === 'translate';
       const before = fixBefore(batch);
+      const sk = seriesKey();
+      // 每一行的提示：不在對話框裡（多半是音效、招牌）、尖刺框（喊叫）
+      const hint = (b) => (!sfxOn && !b.bub ? '[outside bubbles] ' : b.spiky ? '[shouting] ' : '');
       const text = [
         contextText(),
+        mtGlossText(sk),
         langs.length ? `Original language: ${langs.join(', ')}` : '',
         before.length ? 'Lines just before these, already translated (context only, do not output them):' : '',
         ...before,
         'Lines:',
-        ...lines.map((l, i) => `${i + 1}. ${!sfxOn && !l.b.bub ? '[outside bubbles] ' : ''}${l.src.replace(/\s+/g, ' ')}`),
+        ...lines.map((l, i) => `${i + 1}. ${hint(l.b)}${l.src.replace(/\s+/g, ' ')}`),
       ].filter(Boolean).join('\n');
+      const gloss = []; // AI 回的用語表新條目（串流時夾在譯文裡、或最後一起回）
       const applied = new Set();
       const touched = new Set();
       // 每張圖還沒修正的行數：一張圖的行都修好了就馬上算完成（不用等同一批的其他圖）
@@ -6978,6 +7098,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       };
       const apply = (got) => {
         for (const it of got) {
+          if (it && it.id == null && typeof it.s === 'string') { gloss.push(it); continue; }
           const i = Math.round(Number(it && it.id)) - 1;
           const l = lines[i];
           if (!l || applied.has(i)) continue;
@@ -7010,6 +7131,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       } catch (e) { onFixError(model, batch.filter((j) => !finished.has(j)), e); return; }
       apply(items);
       remember(items);
+      if (items && Array.isArray(items.gloss)) gloss.push(...items.gloss);
+      if (applied.size) mtGlossMerge(sk, gloss);
       batch.forEach(finish);
       setStatus();
       const s = ms(model);
@@ -8055,11 +8178,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         v: VERSION, ed: EDITION, ua: navigator.userAgent.replace(/^Mozilla\/5\.0 /, '').slice(0, 160), site: HOST, path: location.pathname.replace(/\d+/g, '#'),
         scr: [innerWidth, innerHeight, window.devicePixelRatio, vv ? Math.round(vv.scale * 100) / 100 : null, uiZ],
         pg: { on: pg.on, hidden: pg.hidden, dirs: pg.dirs ? pg.dirs.size : 0 }, c: counts(), views: views.size,
-        // 每張圖：狀態、幾句、幾個圖片元素、g = 猜的、語言和認字信心（c92 = 平均 92）
+        // 這部作品的用語表有幾條、總共記了幾部作品（只有數量，不放內容）
+        gloss: [mtGlossGet(seriesKey()).length, Object.keys(mtGlossAll()).length],
+        // 每張圖：狀態、幾句、幾個圖片元素、g = 猜的、語言和認字信心（c92 = 平均 92）、幾個尖刺框（喊叫）
         pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => {
           const cs = P.blocks.map((b) => b.conf).filter((c) => typeof c === 'number');
           const conf = cs.length ? ` c${Math.round((cs.reduce((n, c) => n + c, 0) / cs.length) * 100)}` : '';
-          return `${name(P.url)} ${P.state} b${P.blocks.length} e${P.els.size}${P.guess ? ' g' : ''}${P.lang ? ' ' + P.lang : ''}${conf}`;
+          const sp = P.blocks.filter((b) => b.spiky).length;
+          return `${name(P.url)} ${P.state} b${P.blocks.length} e${P.els.size}${P.guess ? ' g' : ''}${P.lang ? ' ' + P.lang : ''}${conf}${sp ? ' s' + sp : ''}`;
         }),
         imgs, test: test || undefined, err: DIAG_ERRS.slice(),
       });
