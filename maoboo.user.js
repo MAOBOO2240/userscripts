@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.5.24
-// @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
+// @version      1.6.0
+// @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、Anime1 卡片介面、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
 // @supportURL   https://github.com/MAOBOO2240/userscripts/issues
@@ -39,10 +39,16 @@
 // @connect      kakaocdn.net
 // @connect      webtoons.com
 // @connect      nhentai.net
+// @connect      api.bgm.tv
+// @connect      graphql.anilist.co
 // @connect      *
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.6.0  新功能：Anime1 卡片介面（anime1.me）。原本獨立的腳本「Anime1 視覺化卡片介面」整合進來：動畫列表改成封面卡片牆（封面自動到 bgm.tv、AniList 找）、
+ *        觀看紀錄、播放器下方的集數按鈕、續播、播放器封面。每排幾張改在設定面板調（預設 8）；開關馬上生效，不用重新整理。
+ *        封面、集數清單這些快取放在 anime1.me 自己的儲存空間，查封面用的繁轉簡（OpenCC）只在 anime1.me 才下載，其他網站不受影響。
+ *        舊的那支腳本請在 Tampermonkey 停用（還開著的話整合包會先不接手並提醒）。手機版漫畫翻譯不含這個功能，也沒有改版
  * 1.5.24 漫畫翻譯：能力值視窗、系統訊息這種「每行一個 [項目]」（或「名稱：數值」）的方框，之前整個併成一段話翻、置中換行，看起來亂；
  *        現在一行一項分開翻、譯文保留換行、靠左排，AI 修正也照項目分開（⏎ 隔開）。普通對話框不變
  * 1.5.23 漫畫翻譯：設定面板多了「重新讀取並翻譯」：這一話翻過的圖忘掉記住的結果，重新認字、重新翻譯（結果不對、改了設定時用）；
@@ -8550,6 +8556,1030 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
   }
 
+  /* #desktop-only：這一段只有整合包有，手機版產生時整段拿掉（tools/build.js） */
+  /* ======================================================================
+   * Anime1 卡片介面（anime1.me）
+   * 動畫列表改成封面卡片牆（封面到 bgm.tv、AniList 找），加上觀看紀錄、集數按鈕、續播和播放器封面。
+   * 原本是獨立的腳本「Anime1 視覺化卡片介面」，整合進來時改了這幾件事：
+   *   - 每排幾張改在設定面板調（原本在油猴選單）
+   *   - 觀看紀錄、播放進度存在油猴裡；查到的封面、集數清單這些可以重抓的快取存在 anime1.me 自己的 localStorage
+   *     （整合包在每個網站都會載入，快取放油猴裡會拖到其他網站）
+   *   - 繁轉簡（查 bgm.tv 用）的 OpenCC 只在 anime1.me 上才下載，檔案內容核對過才執行，其他網站完全不載入
+   *   - 開關可以即時套用（關掉時把頁面還原）
+   * ==================================================================== */
+
+  const A1_OCC_URL = 'https://cdn.jsdelivr.net/npm/opencc-js@1.4.2/dist/umd/t2cn.js';
+  const A1_OCC_SHA256 = '5009384a6bdc904babee967a8bb9928e3c92288ec8a89ed036d53257e74cd8ab'; // 這個版本的檔案內容；不一樣就不執行
+  const A1_COLS = 8; // 每排卡片數的預設值（2～16，設定面板可改）
+
+  function startAnime1(ctx) {
+    const CONFIG = {
+      minCardWidth: 140, // 卡片最小寬度 px，放不下才減少每排數量
+      pageLength: 24, // 首頁每頁筆數
+      playerMaxWidth: 1600, // 播放器最大寬度 px（高度另限視窗 75%）
+      nextIfRemain: 90, // 上次那集剩不到幾秒就算看完，點封面開下一集
+      resume: true, // 沒看完的集數自動跳回上次位置
+      wideLayout: true, // 加寬版面，側邊欄靠右
+      edgePadding: 'clamp(24px, 4vw, 80px)', // 加寬版面左右留白
+      sidebarWidth: 320, // 側邊欄寬度 px
+      radius: 16, // 卡片圓角 px
+      historyMax: 60, // 觀看紀錄筆數上限
+      hitTTL: 30 * 864e5, // 封面快取：找到 30 天
+      missTTL: 3 * 864e5, // 封面快取：找不到 3 天後重試
+      epsTTL: 15 * 60e3, // 集數清單快取 15 分鐘
+      listTTL: 10 * 60e3, // animelist.json 快取 10 分鐘
+      maxConcurrent: 3, // 封面查詢同時請求數
+      adultCover: false, // 外站項目也查封面
+      minScore: 0.5, // 標題比對最低分（0~1）
+      debug: false,
+    };
+    // 使用者的資料存在油猴裡
+    const K = { hist: 'a1.history', prog: 'a1.progress' };
+    // 可以重抓的快取存在 anime1.me 的 localStorage
+    const L = { cache: 'a1v_cover_cache_v2', list: 'a1v_animelist', eps: 'a1v_episodes', pp: 'a1v_page_poster', occ: 'a1v_opencc_1.4.2' };
+    const RESTART_HASH = '#a1v-restart';
+    const HISTORY_HASH = '#history';
+    const ACCENT = 'var(--animeone-red,#77cc6d)';
+    const log = (...a) => CONFIG.debug && console.log('[MAOBOO][anime1]', ...a);
+    const ls = {
+      get(k, d) {
+        try { const s = localStorage.getItem(k); const v = s == null ? null : JSON.parse(s); return v == null ? d : v; } catch (_) { return d; }
+      },
+      set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) { /* 滿了或被停用：這次不記 */ } },
+      text(k) { try { return localStorage.getItem(k) || ''; } catch (_) { return ''; } },
+      setText(k, s) { try { localStorage.setItem(k, s); } catch (_) { /* 滿了或被停用 */ } },
+    };
+    const asObj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+    // localStorage 網頁自己也能寫：圖片網址只收 https、不含會跳出 CSS url("…") 的字
+    const okUrl = (u) => typeof u === 'string' && /^https:\/\/[^\s"'\\()<>]+$/.test(u);
+
+    /* ---------- 關掉時還原 ---------- */
+    const undo = []; // 關掉這個功能時要做的事（照相反的順序做）
+    let stopped = false;
+    let conflict = false; // 舊的獨立腳本也在跑：<html> 上的狀態交給它，不動
+    const on = (target, type, fn, opts) => { target.addEventListener(type, fn, opts); undo.push(() => target.removeEventListener(type, fn, opts)); };
+    const hidden = new Set(); // 被我們藏起來的網站元素
+    const hide = (node) => { node.classList.add('a1v-hide'); hidden.add(node); };
+    const marked = []; // 加在網站元素上的 class
+    const mark = (node, cls) => { if (!node.classList.contains(cls)) { node.classList.add(cls); marked.push([node, cls]); } };
+
+    // 建立元素：文字一律走 textContent（避免 XSS / 破版）
+    function el(tag, attrs, ...kids) {
+      const node = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs || {})) {
+        if (v == null || v === false) continue;
+        if (k === 'class') node.className = v;
+        else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+        else node.setAttribute(k, v);
+      }
+      for (const c of kids.flat()) if (c != null && c !== false) node.append(c.nodeType ? c : String(c));
+      return node;
+    }
+
+    /* ---------- 播放器封面（一開始就做）：先蓋掉站方預設海報；這頁有快取就同步套上，直到影片真正開始播放 ---------- */
+    const root = () => document.documentElement; // 一開始 <html> 可能還沒建立
+    const pageKey = (() => {
+      const m = location.pathname.match(/^\/(\d+)\/?$/) || location.search.match(/[?&]p=(\d+)/);
+      const c = location.search.match(/[?&]cat=(\d+)/);
+      return m ? m[1] : c ? 'c' + c[1] : '';
+    })();
+    let posterUrl = '';
+    const setPoster = (p) => {
+      posterUrl = p.u;
+      root().style.setProperty('--a1v-poster', `url("${p.u}")`);
+      root().classList.toggle('a1v-wide', !!p.w);
+      root().classList.add('a1v-pc');
+      root().classList.remove('a1v-pp');
+    };
+    const early = () => {
+      if (stopped) return;
+      // a1v-pp：查詢中（深色底）；a1v-pc：已套封面（橫幅 cover，直式 contain + 模糊背景）
+      const style = el('style', { id: 'mb-a1v-early' }, `
+html:is(.a1v-pp,.a1v-pc) .video-js{background:#111}
+html.a1v-pp .video-js .vjs-poster{background-image:none!important}
+html:is(.a1v-pp,.a1v-pc) .video-js:not(.a1v-playing) .vjs-tech{opacity:0}
+html.a1v-pc .video-js:not(.a1v-playing) .vjs-poster{display:block!important;overflow:hidden;background:#000!important}
+html.a1v-pc .video-js .vjs-poster::before,html.a1v-pc .video-js .vjs-poster::after{content:"";position:absolute;inset:0;background:var(--a1v-poster) center/contain no-repeat}
+html.a1v-pc .video-js .vjs-poster::before{inset:-24px;background-size:cover;filter:blur(18px) brightness(.55)}
+html.a1v-pc.a1v-wide .video-js .vjs-poster::after{background-size:cover}
+html.a1v-pc.a1v-wide .video-js .vjs-poster::before{content:none}
+html.a1v-pc .video-js.a1v-playing .vjs-poster{display:none!important}`);
+      root().append(style);
+      undo.push(() => style.remove());
+      const cached = asObj(ls.get(L.pp, {}))[pageKey];
+      if (cached && okUrl(cached.u)) setPoster(cached); else root().classList.add('a1v-pp');
+      const playing = (e, yes) => { const v = e.target.closest && e.target.closest('.video-js'); if (v) v.classList.toggle('a1v-playing', yes); };
+      on(document, 'playing', (e) => playing(e, true), true);
+      on(document, 'timeupdate', (e) => !e.target.paused && e.target.currentTime > 0 && playing(e, true), true);
+      on(document, 'loadstart', (e) => playing(e, false), true);
+    };
+    if (pageKey) {
+      if (root()) early();
+      else {
+        const mo = new MutationObserver(() => { if (root()) { mo.disconnect(); early(); } });
+        mo.observe(document, { childList: true });
+        undo.push(() => mo.disconnect());
+      }
+    }
+
+    const hueOf = (s) => { let x = 0; for (const c of s) x = (x * 31 + c.codePointAt(0)) >>> 0; return x % 360; };
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const postIdOfArt = (art) => (art && art.id.match(/^post-(\d+)$/) || [])[1];
+    // 「連載中(08)」→8、「1-12」→12
+    const latestEpOf = (eps) => { const n = String(eps || '').match(/\d+(?:\.\d+)?/g); return n ? Math.max(...n.map(Number)) : NaN; };
+
+    /* ---------- 找封面（bgm.tv v0 → bgm.tv 舊版 → AniList） ---------- */
+    // 繁→簡：OpenCC（只在這個網站才下載，內容核對過才執行）；載入失敗時保留原字
+    let occ = null;
+    async function loadOcc() {
+      const sha = async (text) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      let text = ls.text(L.occ);
+      if (text && (await sha(text)) !== A1_OCC_SHA256) text = '';
+      if (!text) {
+        text = await mtGmText(A1_OCC_URL);
+        if ((await sha(text)) !== A1_OCC_SHA256) throw new Error('OpenCC 檔案內容不符');
+        ls.setText(L.occ, text);
+      }
+      const mod = { exports: {} };
+      new Function('module', 'exports', text)(mod, mod.exports); // 內容核對過的 OpenCC（跟一般腳本的 @require 一樣，只是只在這個網站才載入）
+      return mod.exports.Converter({ from: 'tw', to: 'cn' });
+    }
+    const EXTRA = { 姊: '姐', 妳: '你', 祂: '他', 牠: '它', 羣: '群', 裏: '里' };
+    const simpMemo = new Map();
+    const toSimp = (s) => {
+      if (!simpMemo.has(s)) simpMemo.set(s, Array.from(occ ? occ(s) : s, (c) => EXTRA[c] || c).join(''));
+      return simpMemo.get(s);
+    };
+    const norm = (s) => toSimp(String(s || '')).normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+
+    const CN_NUM = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+    const SEASON_RE = /(?:第\s*([一二三四五六七八九十\d]+)\s*[季期部]|season\s*(\d+)|(\d+)(?:st|nd|rd|th)\s*season|\bS(\d+)\b)/i;
+    function seasonOf(t) {
+      const m = String(t).match(SEASON_RE);
+      if (!m) return 1;
+      const v = m[1] || m[2] || m[3] || m[4];
+      return /^\d+$/.test(v) ? +v : v.length === 2 && v[0] === '十' ? 10 + CN_NUM[v[1]] : CN_NUM[v] || 1;
+    }
+
+    // 搜尋關鍵字：完整 → 去標點 → 去季數與括號 → 第一段
+    function queryVariants(title) {
+      const t = String(title).replace(/🔞/g, '').replace(/[【】「」『』《》〈〉]/g, ' ').trim();
+      const noSeason = t.replace(SEASON_RE, ' ').replace(/[(（][^)）]*[)）]/g, ' ').replace(/\s+/g, ' ').trim();
+      const first = noSeason.split(/[\s─—–\-～~:：]+/).filter(Boolean)[0] || '';
+      return [...new Set([t, t.replace(/[\p{P}\p{S}]+/gu, ' '), noSeason, first]
+        .map((x) => toSimp(x).replace(/\s+/g, ' ').trim()).filter((x) => x.length >= 2))];
+    }
+
+    function dice(a, b) {
+      if (a === b) return 1;
+      if (a.length < 2 || b.length < 2) return 0;
+      const g = new Map();
+      for (let i = 0; i < a.length - 1; i++) g.set(a.substr(i, 2), (g.get(a.substr(i, 2)) || 0) + 1);
+      let hit = 0;
+      for (let i = 0; i < b.length - 1; i++) { const n = g.get(b.substr(i, 2)); if (n) { hit++; g.set(b.substr(i, 2), n - 1); } }
+      return (2 * hit) / (a.length + b.length - 2);
+    }
+    function lcs(a, b) { // 最長共同子字串長度
+      let best = 0;
+      const prev = new Array(b.length + 1).fill(0);
+      for (let i = 1; i <= a.length; i++) {
+        let diag = 0;
+        for (let j = 1; j <= b.length; j++) {
+          const tmp = prev[j];
+          prev[j] = a[i - 1] === b[j - 1] ? diag + 1 : 0;
+          best = Math.max(best, prev[j]);
+          diag = tmp;
+        }
+      }
+      return best;
+    }
+
+    // 打分：標題相似度 + 年份 + 季數；rank 為搜尋排序（前幾名且同年份時容許不同譯名）
+    function scoreCandidate(title, year, names, candYear, rank = 99) {
+      const q = norm(title);
+      const qBase = norm(String(title).replace(SEASON_RE, ''));
+      const years = String(year || '').match(/\d{4}/g) || []; // 可能是「2020/2021」
+      const sameYear = !!candYear && years.includes(String(candYear));
+      let best = 0;
+      for (const n of names) {
+        const c = norm(n);
+        if (!c) continue;
+        let s = Math.max(dice(q, c), dice(qBase, c) * 0.95);
+        if (c.length >= 2 && (q.includes(c) || c.includes(qBase)) && Math.min(c.length, qBase.length) >= 3) s = Math.max(s, 0.8);
+        if (c.length >= 2 && qBase.startsWith(c)) s = Math.max(s, 0.7); // 「刻刻 ─時間暫停─」→「刻刻」
+        if (rank < 3 && sameYear && lcs(qBase, c) >= 3) s = Math.max(s, 0.55);
+        if (rank === 0 && sameYear && !/[\u3040-\u30ff\u4e00-\u9fff]/.test(title)) s = Math.max(s, 0.55); // 純英文標題
+        best = Math.max(best, s);
+      }
+      const wantS = seasonOf(title);
+      const gotS = Math.max(...names.map(seasonOf));
+      if (wantS > 1 && gotS === wantS) best += 0.1;
+      else if (wantS !== gotS) best -= 0.1;
+      if (years.length && candYear) {
+        const d = Math.min(...years.map((y) => Math.abs(+y - +candYear)));
+        best += d === 0 ? 0.1 : d > 2 ? -0.15 : 0;
+      }
+      return best;
+    }
+
+    const gmJSON = (method, url, body) => new Promise((resolve, reject) => GM_xmlhttpRequest({
+      method,
+      url,
+      timeout: 12000,
+      headers: Object.assign({ Accept: 'application/json' }, body ? { 'Content-Type': 'application/json' } : {}),
+      data: body ? JSON.stringify(body) : undefined,
+      onload: (r) => { try { if (r.status >= 200 && r.status < 300) resolve(JSON.parse(r.responseText)); else reject(new Error('HTTP ' + r.status)); } catch (e) { reject(e); } },
+      onerror: () => reject(new Error('network')),
+      ontimeout: () => reject(new Error('timeout')),
+    }));
+    const bgmItem = (src, dateKey) => (s) => ({
+      names: [s.name_cn, s.name].filter(Boolean),
+      year: (s[dateKey] || '').slice(0, 4),
+      src,
+      img: s.images ? String(s.images.common || s.images.large || '').replace(/^http:/, 'https:') : '',
+    });
+    const searchBgmV0 = async (keyword) => ((await gmJSON('POST', 'https://api.bgm.tv/v0/search/subjects?limit=10',
+      { keyword, sort: 'match', filter: { type: [2], nsfw: false } })).data || []).map(bgmItem('bgm', 'date'));
+    const searchBgmLegacy = async (kw) => ((await gmJSON('GET', `https://api.bgm.tv/search/subject/${encodeURIComponent(kw)}?type=2&responseGroup=small&max_results=10`)).list || []).map(bgmItem('bgm-legacy', 'air_date'));
+    async function searchAniList(s) {
+      const query = 'query($s:String){Page(perPage:8){media(search:$s,type:ANIME,isAdult:false){title{romaji english native} synonyms seasonYear bannerImage coverImage{extraLarge large}}}}';
+      const r = await gmJSON('POST', 'https://graphql.anilist.co', { query, variables: { s } });
+      return ((r.data && r.data.Page && r.data.Page.media) || []).map((m) => ({
+        names: [m.title.native, m.title.romaji, m.title.english, ...(m.synonyms || [])].filter(Boolean),
+        year: m.seasonYear ? String(m.seasonYear) : '',
+        img: m.coverImage && (m.coverImage.extraLarge || m.coverImage.large),
+        banner: m.bannerImage || '',
+        src: 'anilist',
+      }));
+    }
+    function pickBest(title, year, cands) {
+      let best = null;
+      cands.forEach((c, i) => {
+        if (!okUrl(c.img) || /no_icon/.test(c.img)) return;
+        const score = scoreCandidate(title, year, c.names, c.year, c.src === 'anilist' ? 99 : i);
+        if (!best || score > best.score) best = Object.assign({}, c, { score });
+      });
+      return best && best.score >= CONFIG.minScore ? best : null;
+    }
+
+    // 依序嘗試各關鍵字與來源，保留最高分；≥0.9 提早結束。回傳 { url, src, score, name } 或 null
+    async function findCover(title, year) {
+      const variants = queryVariants(title);
+      const raw = String(title).replace(/🔞/g, '').trim();
+      const latin = (raw.match(/[A-Za-z][A-Za-z0-9 .'!?&:-]{2,}/g) || []).join(' ').trim();
+      let best = null;
+      const steps = [
+        ...variants.map((kw) => () => searchBgmV0(kw)),
+        ...[...new Set([variants[0], raw, variants[2]].filter(Boolean))].map((kw) => () => searchBgmLegacy(kw)), // 舊版斷詞不同，簡繁都試
+        () => (!best && latin.length >= 3 ? searchAniList(latin) : []), // AniList 不支援中文
+      ];
+      for (const step of steps) {
+        try {
+          const b = pickBest(title, year, await step());
+          if (b && (!best || b.score > best.score)) best = b;
+          if (best && best.score >= 0.9) break;
+        } catch (e) { log('查詢失敗', title, e.message); }
+      }
+      log('封面', title, best);
+      // jp：日文原名（之後用來找橫式主視覺）；banner：AniList 橫幅
+      return best && { url: best.img, src: best.src, score: best.score, name: best.names[0], jp: best.src === 'anilist' ? best.names[0] : best.names[1] || '', banner: okUrl(best.banner) ? best.banner : '' };
+    }
+    // 用日文原名在 AniList 找橫幅（bannerImage），供播放器封面使用
+    async function findBanner(jp) {
+      const query = 'query($s:String){Page(perPage:5){media(search:$s,type:ANIME){title{native romaji} bannerImage}}}';
+      const r = await gmJSON('POST', 'https://graphql.anilist.co', { query, variables: { s: jp } });
+      const q = norm(jp);
+      const m = ((r.data && r.data.Page && r.data.Page.media) || []).find((x) => okUrl(x.bannerImage) && seasonOf(x.title.native || '') === seasonOf(jp)
+        && Math.max(dice(q, norm(x.title.native)), dice(q, norm(x.title.romaji))) >= 0.6);
+      return m ? m.bannerImage : '';
+    }
+
+    /* ---------- 封面快取（找到 / 找不到都記錄）+ 併發佇列 ---------- */
+    let cache = {};
+    const fresh = (v) => v && Date.now() - v.t <= (v.u ? CONFIG.hitTTL : CONFIG.missTTL);
+    let saveTimer = 0;
+    const flushCache = () => {
+      saveTimer = 0;
+      for (const k of Object.keys(cache)) if (!fresh(cache[k])) delete cache[k];
+      ls.set(L.cache, cache);
+    };
+    const saveCache = () => { clearTimeout(saveTimer); saveTimer = setTimeout(flushCache, 500); };
+    const inflight = new Map();
+    const waiting = [];
+    let active = 0;
+    const runQueued = (fn) => new Promise((resolve) => {
+      const go = async () => {
+        active++;
+        try { resolve(await fn()); } catch (_) { resolve(null); } finally { active--; if (waiting.length) waiting.shift()(); }
+      };
+      if (active < CONFIG.maxConcurrent) go(); else waiting.push(go);
+    });
+    function getCover(title, year, needJp = false) {
+      const key = norm(title);
+      const c = cache[key];
+      if (fresh(c) && (!c.u || okUrl(c.u)) && !(needJp && c.u && c.j === undefined)) return Promise.resolve(c.u || null); // 舊版快取沒有日文名 → 播放器頁重查
+      if (!inflight.has(key)) {
+        inflight.set(key, runQueued(() => findCover(title, year)).then((r) => {
+          cache[key] = { u: r ? r.url : '', j: r ? r.jp : '', b: r && r.banner ? r.banner : undefined, t: Date.now() };
+          saveCache();
+          inflight.delete(key);
+          return r ? r.url : null;
+        }));
+      }
+      return inflight.get(key);
+    }
+
+    // 播放器封面：優先橫幅，否則直式封面（置中 + 模糊背景）
+    async function getPoster(title) {
+      const key = norm(title);
+      if (!(await getCover(title, '', true))) return null;
+      const c = cache[key];
+      if (c.b === undefined) {
+        c.b = c.j ? await findBanner(c.j).catch(() => '') : '';
+        saveCache();
+      }
+      return { cover: c.u, banner: okUrl(c.b) ? c.b : '' };
+    }
+
+    /* ---------- 樣式（沿用原站配色；深色模式自動使用原站 --animeone-* 變數） ---------- */
+    const R = CONFIG.radius;
+    const EDGE = CONFIG.edgePadding;
+    const LINE = 'border:1px solid #e6e6e6;border-color:color-mix(in srgb,currentColor 22%,transparent)';
+    const PLAYER_PAGES = (sel) => `body.single ${sel},body.archive ${sel}`;
+    const CSS = `
+.a1v-hide{display:none!important}
+.a1v-grid{--a1v-gap:16px;clear:both;width:100%;display:grid;gap:var(--a1v-gap);margin:0 0 1.5em;padding:0;
+  grid-template-columns:repeat(auto-fill,minmax(max(${CONFIG.minCardWidth}px,calc((100% - (var(--a1v-cols,6) - 1) * var(--a1v-gap)) / var(--a1v-cols,6))),1fr))}
+.a1v-card{position:relative;display:block;border-radius:${R}px;overflow:hidden;background:var(--animeone-content-background-light,#fff);${LINE};
+  text-decoration:none!important;color:inherit;transition:transform .2s,box-shadow .2s;isolation:isolate;container-type:inline-size}
+@supports (corner-shape:squircle){.a1v-card,.a1v-dialog,.a1v-btn{corner-shape:squircle;border-radius:${R * 1.6}px}}
+.a1v-card:hover{transform:translateY(-4px);box-shadow:0 10px 24px rgba(0,0,0,.18)}
+.a1v-card.is-updated{box-shadow:0 0 0 2px #e8453c}
+.a1v-card.is-updated:hover{box-shadow:0 0 0 2px #e8453c,0 10px 24px rgba(0,0,0,.18)}
+.a1v-card:focus-visible,.a1v-btn:focus-visible,.a1v-x:focus-visible,.a1v-ep:focus-visible{outline:3px solid ${ACCENT};outline-offset:2px}
+.a1v-cover{position:relative;aspect-ratio:3/4;overflow:hidden;background:linear-gradient(150deg,hsl(var(--h) 45% 62%),hsl(calc(var(--h) + 50) 50% 38%))}
+.a1v-cover::before{content:attr(data-initial);position:absolute;inset:0;display:grid;place-items:center;font-size:64px;font-weight:700;color:rgba(255,255,255,.28)}
+.a1v-cover::after{content:"";position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.82),rgba(0,0,0,.35) 38%,transparent 62%);pointer-events:none}
+.a1v-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transform:scale(1.04);transition:opacity .45s,transform .6s}
+.a1v-cover img.is-loaded{opacity:1;transform:none}
+.a1v-card:hover .a1v-cover img.is-loaded{transform:scale(1.05)}
+.a1v-info{position:absolute;left:0;right:0;bottom:0;z-index:1;padding:10px 12px;color:#fff}
+.a1v-card .a1v-title{color:#fff!important;margin:0;font-size:15px;line-height:1.35;font-weight:700;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-shadow:0 1px 3px rgba(0,0,0,.6)}
+.a1v-card .a1v-meta{color:#fff;margin-top:4px;font-size:12px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.a1v-badges{position:absolute;top:8px;left:8px;right:8px;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:4px;pointer-events:none}
+.a1v-badge{box-sizing:border-box;height:calc(1em + 10px);display:inline-flex;align-items:center;padding:0 .7em;border:1px solid transparent;border-radius:999px;
+  font-size:clamp(12px,4.6cqi,15px);line-height:1;font-weight:600;color:#fff;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
+  min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.a1v-badge.is-right{margin-left:auto}
+.a1v-badge.is-live{background:${ACCENT}}
+.a1v-badge.is-new{background:#e8453c}
+.a1v-badge.is-watched{background:rgba(0,0,0,.72);border-color:rgba(255,255,255,.35)}
+@container (max-width:200px){.a1v-badge{font-size:11px;padding:0 6px;height:20px}.a1v-badges{top:6px;left:6px;right:6px}}
+@container (min-width:260px){.a1v-badges{top:10px;left:10px;right:10px}.a1v-card .a1v-title{font-size:clamp(15px,5.4cqi,19px)}.a1v-card .a1v-meta{font-size:13px}.a1v-info{padding:12px 14px}}
+@container (max-width:120px){.a1v-badges{flex-wrap:wrap;row-gap:4px}}
+.a1v-empty{padding:2em 0;text-align:center;opacity:.6}
+.a1v-hist-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.a1v-x{${LINE};background:transparent;color:inherit;border-radius:999px;padding:4px 14px;font-size:14px;line-height:1.6;cursor:pointer}
+.a1v-x:hover{border-color:${ACCENT};color:${ACCENT}}
+.a1v-overlay{position:fixed;inset:0;z-index:99999;display:grid;place-items:center;background:rgba(0,0,0,.45);animation:a1v-fade .15s}
+.a1v-dialog{min-width:min(320px,90vw);max-width:90vw;padding:24px;border-radius:${R}px;background:var(--animeone-content-background-light,#fff);color:var(--animeone-primary-text,#666);box-shadow:0 20px 50px rgba(0,0,0,.3);text-align:center;animation:a1v-pop .18s}
+.a1v-dialog p{margin:0 0 20px;font-size:16px}
+.a1v-menu{position:fixed;z-index:99999;min-width:150px;padding:6px;border-radius:10px;background:var(--animeone-content-background-light,#fff);color:var(--animeone-primary-text,#666);${LINE};box-shadow:0 8px 24px rgba(0,0,0,.25);animation:a1v-fade .1s}
+.a1v-menu button{display:block;width:100%;padding:8px 12px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:14px;text-align:left;cursor:pointer}
+.a1v-menu button:hover,.a1v-menu button:focus-visible{outline:0;background:color-mix(in srgb,currentColor 12%,transparent)}
+#table-list_wrapper .dataTables_filter,#table-list_wrapper .dataTables_length{margin-bottom:20px}
+.a1v-actions{display:flex;gap:12px;justify-content:center}
+.a1v-btn{min-width:96px;height:40px;padding:0 20px;border-radius:${R / 1.6}px;border:1px solid ${ACCENT};font-size:16px;line-height:38px;cursor:pointer;background:${ACCENT};color:#fff}
+.a1v-btn:hover{background:var(--animeone-red-dark,#68B25F);border-color:var(--animeone-red-dark,#68B25F)}
+.a1v-btn.is-no{background:transparent;color:inherit;${LINE}}
+.a1v-btn.is-no:hover{border-color:currentColor}
+@keyframes a1v-fade{from{opacity:0}}
+@keyframes a1v-pop{from{opacity:0;transform:scale(.96)}}
+/* 頁首：標題與選單依內容寬度排列（多了「觀看紀錄」不換行） */
+@media screen and (min-width:769px){
+  #masthead .site-branding{display:flex;align-items:flex-start}
+  #masthead .site-branding::before,#masthead .site-branding::after{display:none}
+  #masthead .header-content.inline .site-title{flex:0 0 auto;width:auto;margin-right:24px}
+  #masthead .header-content.inline .main-navigation{flex:1 1 auto;width:auto;float:none;margin-right:0}
+}
+/* 深色模式短頁面不露白：背景跟原站、#page 撐滿視窗 */
+html,body{background:var(--animeone-content-background,#fafafa)}
+#page.site{min-height:100vh;display:flex;flex-direction:column}
+#page.site>.site-content{flex:1 0 auto;width:100%}
+#page.site>.site-header,#page.site>.site-footer{flex:none;width:100%}
+${CONFIG.wideLayout ? `
+@media screen and (min-width:769px){
+  #masthead .header-content,#page.site>.site-content{max-width:none;box-sizing:border-box;padding-left:${EDGE};padding-right:${EDGE}}
+}
+@media screen and (min-width:1025px){
+  #page.site>.site-content{display:flex;flex-wrap:wrap;align-items:flex-start}
+  #page.site>.site-content::after{display:none}
+  #page.site>.site-content>.page-header{flex:0 0 100%;box-sizing:border-box;padding:0 24px}
+  #primary.content-area{flex:1 1 auto;width:auto;min-width:0;float:none}
+  #secondary.widget-area{flex:0 0 ${CONFIG.sidebarWidth}px;width:${CONFIG.sidebarWidth}px;float:none}
+}
+@media screen and (min-width:769px) and (max-width:1024px){#primary.content-area,#secondary.widget-area{float:none;width:auto}}` : ''}
+/* 單集 / 分類頁：播放器放大為 16:9，與標題、按鈕、留言同一欄，在內容區置中 */
+${PLAYER_PAGES('#main')}{max-width:min(100%,${CONFIG.playerMaxWidth}px,calc(75vh * 16 / 9));margin-inline:auto}
+${PLAYER_PAGES('.vjscontainer')},${PLAYER_PAGES('.player-space')}{width:100%;max-width:none;height:auto!important;aspect-ratio:16/9;margin:0 0 14px}
+${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe')}{width:100%!important;height:100%!important;border:0}
+.a1v-under{display:flex;align-items:flex-start;gap:12px;margin:0 0 14px}
+.a1v-links{display:flex;justify-content:flex-end;margin:0 0 14px}
+.a1v-links br,.a1v-links a[href*="?cat="],.a1v-links a[disabled]{display:none!important}
+.a1v-links:not(:has(a:not([href*="?cat="]):not([disabled]))){display:none}
+.a1v-next{display:inline-flex;align-items:center;flex:none;margin-left:auto;height:40px;padding:0 18px;border-radius:8px;font-size:15px;font-weight:600;
+  text-decoration:none!important;color:inherit!important;${LINE};background:color-mix(in srgb,currentColor 6%,transparent)}
+.a1v-next::after{content:"›";margin-left:8px;font-size:20px;line-height:1}
+.a1v-eps{display:flex;flex-wrap:wrap;gap:8px;flex:1 1 auto;min-width:0;max-height:232px;overflow-y:auto;padding:2px}
+.a1v-ep{display:inline-flex;align-items:center;justify-content:center;min-width:44px;height:40px;padding:0 10px;border-radius:10px;font-size:15px;line-height:1;
+  text-decoration:none!important;color:inherit!important;${LINE};font-variant-numeric:tabular-nums;transition:border-color .15s,background .15s}
+.a1v-ep:hover,.a1v-next:hover{border-color:${ACCENT}}
+.a1v-ep.is-seen{background:color-mix(in srgb,currentColor 9%,transparent);opacity:.7}
+.a1v-ep.is-current{background:${ACCENT};border-color:${ACCENT};color:#fff!important;font-weight:700;opacity:1}
+@media (max-width:600px){.a1v-grid{--a1v-gap:10px}.a1v-card .a1v-title{font-size:14px}.a1v-cover::before{font-size:48px}}
+@media (prefers-reduced-motion:reduce){.a1v-card,.a1v-cover img{transition:none}.a1v-card:hover{transform:none}}
+`;
+
+    /* ---------- 每排數量（設定面板） ---------- */
+    const colsOf = (c) => Math.min(16, Math.max(2, Math.round(+(c && c.cols)) || A1_COLS));
+    let cols = colsOf(ctx.cfg());
+    const applyCols = () => { if (root()) root().style.setProperty('--a1v-cols', String(cols)); };
+
+    /* ---------- 卡片（IntersectionObserver 延遲載入封面） ---------- */
+    let io = null;
+    function loadCover(cover) {
+      getCover(cover.dataset.title, cover.dataset.year).then((url) => {
+        if (stopped || !url || !cover.isConnected) return;
+        const img = el('img', { alt: '', decoding: 'async', referrerpolicy: 'no-referrer' });
+        img.onload = () => img.classList.add('is-loaded');
+        img.onerror = () => img.remove();
+        img.src = url;
+        cover.prepend(img);
+      });
+    }
+
+    // badge：右上「更新 N」；watched：左上「上次觀看 N」；newEp：右上「新的一集 N」（取代集數）
+    function makeCard({ title, href, badge, live, meta, year, external, watched, newEp, cat }) {
+      const cover = el('div', { class: 'a1v-cover', style: `--h:${hueOf(title)}`, 'data-initial': Array.from(title.replace(/^[\s🔞#]+/u, ''))[0] || '', 'data-title': title, 'data-year': year || '' });
+      const right = newEp ? el('span', { class: 'a1v-badge is-right is-new' }, '新的一集 ' + newEp)
+        : badge ? el('span', { class: 'a1v-badge is-right' + (live ? ' is-live' : '') }, /\d/.test(badge) ? '更新 ' + badge : badge) : null;
+      const card = el('a', { class: 'a1v-card' + (newEp ? ' is-updated' : ''), role: 'listitem', href: href || '#', title, target: external ? '_blank' : null, rel: external ? 'noopener' : null },
+        cover,
+        (watched || right) && el('div', { class: 'a1v-badges' }, watched && el('span', { class: 'a1v-badge is-watched' }, '上次觀看 ' + watched), right),
+        el('div', { class: 'a1v-info' }, el('h3', { class: 'a1v-title' }, title), meta && el('div', { class: 'a1v-meta' }, meta)));
+      if (io && (!external || CONFIG.adultCover)) io.observe(cover);
+      if (cat && !external) linkSmart(card, cat, title);
+      return card;
+    }
+
+    /* ---------- 首頁：DataTables 表格 → 卡片牆 ---------- */
+    function initHome() {
+      const table = document.getElementById('table-list');
+      if (!table) return;
+      const grid = el('div', { class: 'a1v-grid', role: 'list' });
+      hide(table);
+      table.after(grid);
+      const render = () => {
+        if (stopped) return;
+        if (grid.previousElementSibling !== table) table.after(grid); // DataTables 晚於本腳本包裝表格 → 卡片牆跟著移進 wrapper
+        const hist = historyIndex();
+        grid.replaceChildren(...[...(table.tBodies[0] ? table.tBodies[0].rows : [])].map((tr) => {
+          const td = [...tr.cells].map((c) => c.textContent.trim());
+          if (td.length < 5) return el('div', { class: 'a1v-empty' }, tr.textContent.trim()); // 載入中 / 無結果
+          const a = tr.cells[0].querySelector('a');
+          const hrefAttr = (a && a.getAttribute('href')) || '';
+          const title = td[0].replace(/🔞/g, '').replace(/\s+/g, ' ').trim();
+          const live = /連載中/.test(td[1]);
+          const external = !/^(https?:)?\/\/anime1\.me\//.test(hrefAttr);
+          const cat = (hrefAttr.match(/[?&]cat=(\d+)/) || [])[1];
+          const seen = !external && ((cat && hist.byCat[cat]) || hist.byTitle[norm(title)]);
+          const watchedN = seen ? latestEpOf(seen.ep) : NaN;
+          const latestN = latestEpOf(td[1]);
+          return makeCard({
+            title,
+            href: a && a.href,
+            live,
+            external,
+            cat,
+            year: td[2],
+            meta: [td[2], td[3], td[4] !== '-' && td[4]].filter(Boolean).join(' · '),
+            badge: live ? td[1].replace(/連載中\(?(\d+)\)?/, '$1') : td[1],
+            watched: seen && seen.ep,
+            newEp: latestN > watchedN ? pad2(latestN) : null,
+          });
+        }));
+      };
+      // 監看整個 table（DataTables 可能替換 tbody），rAF 合併多次變動
+      let raf = 0;
+      const mo = new MutationObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(render); });
+      mo.observe(table, { childList: true, subtree: true });
+      undo.push(() => { mo.disconnect(); cancelAnimationFrame(raf); grid.remove(); });
+      render();
+      const $ = PAGE.jQuery || window.jQuery;
+      if ($ && $.fn && $.fn.dataTable) {
+        let prevLen = null; // 網站原本每頁幾筆（關掉時改回去）
+        const setLen = () => {
+          try {
+            const api = $(table).DataTable();
+            if (api.page.len() !== CONFIG.pageLength) { if (prevLen === null) prevLen = api.page.len(); api.page.len(CONFIG.pageLength).draw(false); }
+          } catch (e) { log(e); }
+        };
+        if ($.fn.dataTable.isDataTable(table)) setLen();
+        $(table).one('init.dt', setLen);
+        undo.push(() => {
+          try { $(table).off('init.dt', setLen); if (prevLen !== null) $(table).DataTable().page.len(prevLen).draw(false); } catch (e) { log(e); }
+        });
+      }
+    }
+
+    /* ---------- 觀看紀錄 ---------- */
+    const getHistory = () => { const v = store.get(K.hist, []); return Array.isArray(v) ? v : []; };
+    function historyIndex() {
+      const byCat = {};
+      const byTitle = {};
+      for (const it of getHistory()) {
+        if (it.cat && !byCat[it.cat]) byCat[it.cat] = it;
+        const t = norm(it.title);
+        if (!byTitle[t]) byTitle[t] = it;
+      }
+      return { byCat, byTitle };
+    }
+    // 讀文章：單集頁標題無連結；分類 id 優先取「全集連結」（class 的 category-xxx 有時是文字 slug）
+    function parseArticle(art) {
+      const t = art && art.querySelector('.entry-title');
+      if (!t) return null;
+      const a = t.querySelector('a');
+      const postId = postIdOfArt(art) || '';
+      const m = t.textContent.trim().match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
+      const catLink = art.querySelector('a[href*="?cat="]');
+      const cat = (catLink && (catLink.getAttribute('href').match(/[?&]cat=(\d+)/) || [])[1]) || (art.className.match(/\bcategory-(\d+)\b/) || [])[1] || '';
+      return {
+        title: (m ? m[1] : t.textContent).trim(),
+        ep: m ? m[2] : '',
+        cat,
+        postId,
+        url: a ? a.href : postId ? location.origin + '/' + postId : location.href.split('#')[0],
+      };
+    }
+    function recordHistory(item) {
+      if (!item || !item.title) return;
+      const key = (x) => x.cat || norm(x.title);
+      const all = getHistory();
+      const prev = all.find((x) => key(x) === key(item));
+      const seen = [...new Set([...((prev && prev.seen) || []), item.postId].filter(Boolean))].slice(-500); // 看過的集數 id
+      store.set(K.hist, [Object.assign({}, item, { seen, t: Date.now() }), ...all.filter((x) => x !== prev)].slice(0, CONFIG.historyMax));
+    }
+    function initHistoryRecorder() {
+      const arts = document.querySelectorAll('article.post');
+      if (document.body.classList.contains('single') && arts.length === 1) recordHistory(parseArticle(arts[0]));
+      on(document, 'play', (e) => { const art = e.target.closest && e.target.closest('article'); if (art) recordHistory(parseArticle(art)); }, true);
+    }
+
+    /* ---------- 集數清單：分類頁只列最新約 14 集（無分頁、REST API 關閉），合併正序 / 倒序兩頁，中間缺的按月份補 ---------- */
+    const parseEpisodeList = (html) => [...new DOMParser().parseFromString(html, 'text/html').querySelectorAll('article.post')].map((art) => {
+      const id = postIdOfArt(art);
+      const text = (art.querySelector('.entry-title') || {}).textContent || '';
+      const time = art.querySelector('time.entry-date');
+      return id && { id, ep: (text.match(/\[([^\]]+)\]\s*$/) || [null, text.trim()])[1], d: time ? time.getAttribute('datetime') : '' };
+    }).filter(Boolean);
+    const fetchText = (url) => fetch(url, { credentials: 'same-origin' }).then((r) => (r.ok ? r.text() : ''));
+    const epsInflight = {};
+    function getEpisodes(cat, force = false) {
+      const c = asObj(ls.get(L.eps, {}))[cat];
+      if (!force && c && Array.isArray(c.list) && Date.now() - c.t < CONFIG.epsTTL) return Promise.resolve(c.list);
+      if (!epsInflight[cat]) {
+        epsInflight[cat] = (async () => {
+          const base = '/?cat=' + encodeURIComponent(cat);
+          const [desc, asc] = (await Promise.all([fetchText(base), fetchText(base + '&order=ASC')])).map(parseEpisodeList);
+          const map = new Map([...desc, ...asc].map((e) => [e.id, e]));
+          const size = desc.length;
+          if (size && asc.length === size && !desc.some((e) => asc.some((x) => x.id === e.id))) {
+            const from = new Date(asc[size - 1].d);
+            const to = new Date(desc[size - 1].d);
+            for (let y = from.getFullYear(), mo = from.getMonth(), n = 0; (y < to.getFullYear() || (y === to.getFullYear() && mo <= to.getMonth())) && n < 60; n++, mo === 11 ? (y++, mo = 0) : mo++) {
+              const ym = `${y}${pad2(mo + 1)}`;
+              const part = parseEpisodeList(await fetchText(`${base}&m=${ym}`));
+              if (part.length >= size) part.push(...parseEpisodeList(await fetchText(`${base}&m=${ym}&order=ASC`)));
+              part.forEach((e) => map.set(e.id, e));
+            }
+          }
+          const list = [...map.values()].sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : a.id - b.id));
+          if (list.length) {
+            const st = asObj(ls.get(L.eps, {}));
+            st[cat] = { t: Date.now(), list };
+            Object.keys(st).sort((a, b) => st[b].t - st[a].t).slice(80).forEach((k) => delete st[k]); // 保留最近 80 部
+            ls.set(L.eps, st);
+          }
+          return list;
+        })().catch((e) => { log('集數清單失敗', e); return c && Array.isArray(c.list) ? c.list : []; }).finally(() => delete epsInflight[cat]);
+      }
+      return epsInflight[cat];
+    }
+
+    /* ---------- 播放進度與點封面的目標集數 ---------- */
+    const getProgress = () => asObj(store.get(K.prog, {}));
+    function saveProgress(id, data) {
+      const all = getProgress();
+      all[id] = Object.assign({}, all[id], data, { at: Date.now() });
+      const ids = Object.keys(all);
+      if (ids.length > 500) ids.sort((a, b) => all[a].at - all[b].at).slice(0, ids.length - 500).forEach((k) => delete all[k]);
+      store.set(K.prog, all);
+    }
+    const isFinished = (p) => !!p && (p.ended || (p.d > 0 && p.d - p.t < CONFIG.nextIfRemain));
+    // 看過：上次那集看完 → 下一集（已是最新則從頭重播），沒看完 → 上次那集；沒看過 → 最新一集
+    async function resolveTarget(cat, title) {
+      const hi = historyIndex();
+      const seen = hi.byCat[cat] || hi.byTitle[norm(title)];
+      const last = seen && (seen.postId || (String(seen.url).match(/anime1\.me\/(\d+)/) || [])[1]);
+      if (last && !isFinished(getProgress()[last])) return '/' + last;
+      const list = await getEpisodes(cat);
+      if (!last) return list.length ? '/' + list[list.length - 1].id : null;
+      const next = list[list.findIndex((e) => e.id === last) + 1];
+      return next && list.some((e) => e.id === last) ? '/' + next.id : '/' + last + RESTART_HASH;
+    }
+    // 滑過 / 聚焦時先改好 href（中鍵、新分頁也正確），點擊時重新計算
+    function linkSmart(card, cat, title) {
+      const fallback = card.href;
+      const resolve = () => resolveTarget(cat, title).then((u) => { if (u) card.href = u; return u; }).catch(() => null);
+      card.addEventListener('pointerenter', resolve);
+      card.addEventListener('focus', resolve);
+      card.addEventListener('click', (e) => {
+        if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        Promise.race([resolve(), new Promise((r) => setTimeout(r, 4000))]).then((u) => { location.href = u || fallback; });
+      });
+    }
+    // 每 5 秒 / 暫停 / 結束存進度；重開沒看完的集數跳回上次位置
+    function initProgressTracker() {
+      const lastSave = new WeakMap();
+      const resumed = new WeakSet();
+      const idOf = (v) => postIdOfArt(v.closest('article'));
+      const isMedia = (e) => e.target instanceof HTMLMediaElement;
+      const save = (v, ended) => {
+        const id = idOf(v);
+        if (!id || !(v.duration > 0)) return;
+        saveProgress(id, { t: Math.floor(v.currentTime), d: Math.floor(v.duration), ended });
+        lastSave.set(v, Date.now());
+      };
+      on(document, 'timeupdate', (e) => { if (isMedia(e) && !e.target.seeking && Date.now() - (lastSave.get(e.target) || 0) >= 5000) save(e.target, false); }, true);
+      on(document, 'pause', (e) => { if (isMedia(e) && !e.target.ended) save(e.target, false); }, true);
+      on(document, 'ended', (e) => { if (isMedia(e)) save(e.target, true); }, true);
+      const restart = location.hash === RESTART_HASH;
+      if (restart) history.replaceState(history.state, '', location.pathname + location.search);
+      if (!CONFIG.resume && !restart) return;
+      on(document, 'loadedmetadata', (e) => {
+        const v = e.target;
+        if (!isMedia(e) || resumed.has(v)) return;
+        resumed.add(v);
+        const p = getProgress()[idOf(v)];
+        if (restart) v.currentTime = 0;
+        else if (p && !isFinished(p) && p.t > 5 && p.t < v.duration - 5) v.currentTime = p.t;
+      }, true);
+    }
+
+    /* ---------- 單集頁：播放器下方集數按鈕 +「下一集」；隱藏「全集連結」 ---------- */
+    const linksOf = (scope) => [...scope.querySelectorAll('.entry-content p')].filter((p) => p.querySelector('a[href*="?cat="]'));
+    function initEpisodeButtons() {
+      if (document.body.classList.contains('archive')) {
+        document.querySelectorAll('article.post').forEach((art) => linksOf(art).forEach((p) => {
+          mark(p, 'a1v-links');
+          p.querySelectorAll('a').forEach((a) => /下一集/.test(a.textContent) && mark(a, 'a1v-next'));
+        }));
+      }
+      if (!document.body.classList.contains('single')) return;
+      const art = document.querySelector('article.post');
+      const info = parseArticle(art);
+      const anchor = art && (art.querySelector('.vjscontainer') || art.querySelector('.entry-content > *'));
+      if (!info || !info.cat || !anchor) return;
+      const nav = el('nav', { class: 'a1v-eps', 'aria-label': info.title });
+      const under = el('div', { class: 'a1v-under' }, nav);
+      anchor.after(under);
+      undo.push(() => under.remove());
+      for (const p of linksOf(art)) {
+        hide(p);
+        const next = [...p.querySelectorAll('a')].find((a) => /下一集/.test(a.textContent));
+        if (next && !next.hasAttribute('disabled') && !/[?&]p=$/.test(next.getAttribute('href') || '')) under.append(el('a', { class: 'a1v-next', href: next.href, rel: 'next' }, '下一集'));
+      }
+      getEpisodes(info.cat)
+        .then((list) => (list.some((e) => e.id === info.postId) ? list : getEpisodes(info.cat, true))) // 快取沒有這集 → 重抓
+        .then((list) => {
+          if (stopped) return;
+          const hist = historyIndex().byCat[info.cat];
+          const seen = new Set((hist && hist.seen) || []);
+          nav.replaceChildren(...list.map((e) => {
+            const cur = e.id === info.postId;
+            return el('a', { href: '/' + e.id, class: 'a1v-ep' + (cur ? ' is-current' : seen.has(e.id) ? ' is-seen' : ''), 'aria-current': cur && 'page', title: String(e.d || '').slice(0, 10) || null }, e.ep);
+          }));
+        });
+    }
+
+    /* ---------- 播放器封面：換成該動畫的主視覺（找不到就還原站方海報） ---------- */
+    function initPosters() {
+      const done = () => { if (!stopped) root().classList.remove('a1v-pp'); };
+      if (!document.body.classList.contains('single') && !document.body.classList.contains('archive')) return done();
+      // 分類頁標題移進內容欄，與播放器一起置中
+      const ph = document.querySelector('#content > .page-header');
+      const main = document.getElementById('main');
+      if (ph && main && document.body.classList.contains('archive')) {
+        const parent = ph.parentNode;
+        const next = ph.nextSibling;
+        main.prepend(ph);
+        undo.push(() => { if (parent.isConnected) parent.insertBefore(ph, next && next.parentNode === parent ? next : null); });
+      }
+      const arts = [...document.querySelectorAll('article.post')].filter((a) => a.querySelector('.vjscontainer'));
+      const info = arts.length && parseArticle(arts[0]); // 同一頁都是同一部動畫
+      if (!info || !pageKey) return done();
+      if (posterUrl) enforcePoster();
+      return getPoster(info.title).then((p) => {
+        if (stopped) return;
+        if (!p) { done(); return; }
+        const v = { u: p.banner || p.cover, w: p.banner ? 1 : 0 };
+        const all = asObj(ls.get(L.pp, {}));
+        setPoster(v);
+        enforcePoster();
+        delete all[pageKey];
+        all[pageKey] = v;
+        const keys = Object.keys(all);
+        keys.slice(0, Math.max(0, keys.length - 300)).forEach((k) => delete all[k]);
+        ls.set(L.pp, all);
+      }, done);
+    }
+    // 站方 / video.js 改回預設海報時再蓋回去（poster 屬性、player.poster()）
+    let posterMO = null;
+    const posterWas = new Map(); // 元素原本的海報（關掉時還原）
+    function enforcePoster() {
+      const run = () => {
+        if (stopped) return;
+        document.querySelectorAll('.video-js, .video-js video').forEach((node) => {
+          if (node.getAttribute('poster') !== posterUrl) {
+            if (!posterWas.has(node)) posterWas.set(node, node.getAttribute('poster'));
+            node.setAttribute('poster', posterUrl);
+          }
+          try { const pl = node.player; if (pl && pl.poster && pl.poster() !== posterUrl) pl.poster(posterUrl); } catch (e) { log(e); }
+        });
+      };
+      run();
+      if (posterMO) return;
+      posterMO = new MutationObserver(run);
+      posterMO.observe(document.getElementById('content') || document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['poster'] });
+      ['loadstart', 'play', 'waiting'].forEach((t) => on(document, t, run, true));
+      undo.push(() => {
+        posterMO.disconnect();
+        posterMO = null;
+        posterWas.forEach((was, node) => {
+          if (was === null) node.removeAttribute('poster'); else node.setAttribute('poster', was);
+          try { const pl = node.player; if (pl && pl.poster) pl.poster(was || ''); } catch (e) { log(e); }
+        });
+        posterWas.clear();
+        // video.js 啟動時把我們的封面抄到外層的，一起改回影片原本的
+        document.querySelectorAll('.video-js[poster]').forEach((node) => {
+          if (node.getAttribute('poster') !== posterUrl) return;
+          const v = node.querySelector('video');
+          const was = v && v.getAttribute('poster');
+          if (was && was !== posterUrl) node.setAttribute('poster', was); else node.removeAttribute('poster');
+        });
+      });
+    }
+
+    /* ---------- 是 / 否 對話框（是在左；Esc、點背景關閉；預設聚焦「否」） ---------- */
+    let closeDialog = null;
+    const confirmDialog = (message) => new Promise((resolve) => {
+      const prevFocus = document.activeElement;
+      const yes = el('button', { type: 'button', class: 'a1v-btn' }, '是');
+      const no = el('button', { type: 'button', class: 'a1v-btn is-no' }, '否');
+      const overlay = el('div', { class: 'a1v-overlay' }, el('div', { class: 'a1v-dialog', role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': 'a1v-dlg-msg' },
+        el('p', { id: 'a1v-dlg-msg' }, message), el('div', { class: 'a1v-actions' }, yes, no)));
+      const onKey = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(false); } else if (e.key === 'Tab') { e.preventDefault(); (document.activeElement === yes ? no : yes).focus(); }
+      };
+      const close = (v) => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey, true);
+        closeDialog = null;
+        if (prevFocus && prevFocus.focus) prevFocus.focus();
+        resolve(v);
+      };
+      yes.onclick = () => close(true);
+      no.onclick = () => close(false);
+      overlay.addEventListener('mousedown', (e) => e.target === overlay && close(false));
+      document.addEventListener('keydown', onKey, true);
+      document.body.append(overlay);
+      closeDialog = () => close(false);
+      no.focus();
+    });
+
+    /* ---------- 「觀看紀錄」選單 + #history 檢視 ---------- */
+    let histView = null;
+    let hiddenMain = [];
+    let navLi = null;
+    let prevCurrent = [];
+    function initHistoryMenu() {
+      const menu = document.getElementById('primary-menu');
+      const tpl = menu && menu.querySelector(':scope > li');
+      if (!tpl) return;
+      navLi = tpl.cloneNode(true); // 複製原選單項目，樣式一致
+      navLi.removeAttribute('id');
+      navLi.className = 'menu-item menu-item-type-custom menu-item-object-custom';
+      navLi.querySelectorAll('ul').forEach((u) => u.remove());
+      const a = navLi.querySelector('a');
+      a.textContent = '觀看紀錄';
+      a.href = HISTORY_HASH;
+      a.removeAttribute('aria-current');
+      menu.prepend(navLi);
+      undo.push(() => {
+        unmountHistory();
+        navLi.remove();
+        if (location.hash === HISTORY_HASH) history.replaceState(null, '', location.pathname + location.search);
+      });
+      on(window, 'hashchange', route);
+      on(document, 'keydown', (e) => { if (e.key === 'Escape' && histView && !document.querySelector('.a1v-overlay')) closeHistory(); });
+      route();
+    }
+    const route = () => (location.hash === HISTORY_HASH ? openHistory() : unmountHistory());
+    function closeHistory() {
+      if (history.state && history.state.a1v) history.back();
+      else history.replaceState(null, '', location.pathname + location.search);
+      unmountHistory();
+    }
+    const setCurrent = (yes) => {
+      prevCurrent.forEach((li) => li.classList.toggle('current-menu-item', !yes));
+      navLi.classList.toggle('current-menu-item', yes);
+      navLi.querySelector('a').toggleAttribute('aria-current', yes);
+    };
+    function openHistory() {
+      const main = document.getElementById('main');
+      if (!main) return;
+      document.querySelectorAll('video').forEach((v) => v.pause()); // 開啟觀看紀錄時暫停播放
+      if (!histView) {
+        hiddenMain = [...main.children].filter((c) => !c.classList.contains('a1v-hide'));
+        hiddenMain.forEach((c) => c.classList.add('a1v-hide'));
+        histView = el('article', { class: 'page type-page hentry a1v-history', 'aria-labelledby': 'a1v-hist-title' });
+        main.prepend(histView);
+        prevCurrent = [...document.querySelectorAll('#primary-menu > li.current-menu-item')];
+        setCurrent(true);
+        if (!history.state || !history.state.a1v) history.replaceState({ a1v: true }, '');
+      }
+      renderHistory();
+      window.scrollTo(0, 0);
+      histView.querySelector('h2').focus({ preventScroll: true });
+    }
+    function unmountHistory() {
+      if (!histView) return;
+      histView.remove();
+      histView = null;
+      hiddenMain.forEach((c) => c.classList.remove('a1v-hide'));
+      setCurrent(false);
+    }
+    // animelist.json：各動畫最新集數（判斷紀錄是否有新集）
+    let listPromise = null;
+    function getAnimeList() {
+      const c = ls.get(L.list, null);
+      if (c && c.byCat && c.byTitle && Date.now() - c.t < CONFIG.listTTL) return Promise.resolve(c);
+      if (!listPromise) {
+        listPromise = fetch('/animelist.json', { credentials: 'omit' }).then((r) => r.json()).then((rows) => {
+          const v = { t: Date.now(), byCat: {}, byTitle: {} };
+          for (const [cat, title, eps] of rows) {
+            const ep = latestEpOf(eps);
+            if (!Number.isFinite(ep)) continue;
+            if (cat) v.byCat[cat] = ep;
+            v.byTitle[norm(String(title).replace(/<[^>]+>/g, ''))] = ep;
+          }
+          ls.set(L.list, v);
+          return v;
+        }).catch((e) => { log('animelist 失敗', e); listPromise = null; return c && c.byCat && c.byTitle ? c : null; });
+      }
+      return listPromise;
+    }
+    function renderHistory() {
+      const list = getHistory();
+      const grid = el('div', { class: 'a1v-grid', role: 'list' });
+      const draw = (latest) => {
+        const items = list.map((it) => {
+          const newest = latest ? (it.cat && latest.byCat[it.cat]) || latest.byTitle[norm(it.title)] : NaN;
+          return { it, newest, updated: newest > latestEpOf(it.ep) };
+        }).sort((a, b) => b.updated - a.updated); // 有新集數的排前面
+        grid.replaceChildren(...items.map(({ it, updated, newest }) => {
+          const d = new Date(it.t);
+          const card = makeCard({ title: it.title, href: it.url, cat: it.cat, watched: it.ep, newEp: updated && pad2(newest), meta: `${d.getMonth() + 1}/${d.getDate()}` });
+          card.addEventListener('contextmenu', (e) => { e.preventDefault(); cardMenu(e, () => removeHistory(it, card)); });
+          return card;
+        }));
+      };
+      draw(null);
+      if (list.length) getAnimeList().then((latest) => { if (!stopped && latest && grid.isConnected) draw(latest); });
+      const clear = async () => { if (await confirmDialog('清除全部觀看紀錄？')) { store.set(K.hist, []); if (histView) renderHistory(); } };
+      histView.replaceChildren(
+        el('header', { class: 'entry-header a1v-hist-head' },
+          el('h2', { class: 'entry-title', id: 'a1v-hist-title', tabindex: '-1' }, '觀看紀錄'),
+          list.length ? el('button', { type: 'button', class: 'a1v-x', onclick: clear }, '清除') : null),
+        el('div', { class: 'entry-content' }, list.length ? grid : el('div', { class: 'a1v-empty' }, '尚無紀錄')));
+    }
+
+    // 觀看紀錄卡片右鍵選單
+    let menuEl = null;
+    const closeMenu = () => { if (menuEl) { menuEl.remove(); menuEl = null; } };
+    function cardMenu(e, onRemove) {
+      closeMenu();
+      const item = el('button', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); onRemove(); } }, '移除觀看紀錄');
+      menuEl = el('div', { class: 'a1v-menu', role: 'menu' }, item);
+      document.body.append(menuEl);
+      const { width: w, height: ht } = menuEl.getBoundingClientRect();
+      menuEl.style.left = Math.min(e.clientX, innerWidth - w - 8) + 'px';
+      menuEl.style.top = Math.min(e.clientY, innerHeight - ht - 8) + 'px';
+      item.focus();
+    }
+    function initCardMenu() {
+      ['mousedown', 'scroll', 'resize', 'blur'].forEach((t) => on(window, t, (e) => (t === 'blur' ? e.target === window : !(menuEl && menuEl.contains(e.target))) && closeMenu(), true));
+      on(document, 'keydown', (e) => { if (e.key === 'Escape' && menuEl) { e.preventDefault(); e.stopImmediatePropagation(); closeMenu(); } }, true);
+      undo.push(closeMenu);
+    }
+    function removeHistory(it, card) {
+      const same = (x) => (it.cat ? x.cat === it.cat : norm(x.title) === norm(it.title));
+      const rest = getHistory().filter((x) => !same(x));
+      store.set(K.hist, rest);
+      card.remove();
+      if (!rest.length && histView) renderHistory();
+    }
+
+    /* ---------- 舊的獨立腳本（Anime1 視覺化卡片介面）還開著：兩個一起跑會出現兩份卡片牆，讓它做、我們不接手 ---------- */
+    const oldScript = () => !!(document.getElementById('a1v-style') || document.getElementById('a1v-early'));
+    function standDown() {
+      if (stopped) return;
+      conflict = true;
+      stop();
+      let told = false;
+      try { told = sessionStorage.getItem('a1v_dup') === '1'; sessionStorage.setItem('a1v_dup', '1'); } catch (_) { /* 不能用就每次都提醒 */ }
+      if (!told) toast('舊的「Anime1 視覺化卡片介面」腳本還開著，整合包先不接手。請在篡改猴把舊的那支停用或刪除，重新整理後就由整合包處理。', { title: 'Anime1 卡片介面', timeout: 12000 });
+    }
+
+    /* ---------- 啟動 ---------- */
+    function main() {
+      if (stopped) return;
+      if (oldScript()) { standDown(); return; }
+      // 舊腳本比我們晚啟動也一樣
+      const dup = new MutationObserver(() => { if (oldScript()) standDown(); });
+      dup.observe(document.head, { childList: true });
+      dup.observe(root(), { childList: true });
+      undo.push(() => dup.disconnect());
+
+      cache = asObj(ls.get(L.cache, {}));
+      undo.push(() => { if (saveTimer) { clearTimeout(saveTimer); flushCache(); } });
+      const style = el('style', { id: 'mb-a1v-style' }, CSS);
+      document.head.append(style);
+      undo.push(() => style.remove());
+      io = new IntersectionObserver((entries) => entries.forEach((e) => {
+        if (e.isIntersecting) { io.unobserve(e.target); loadCover(e.target); }
+      }), { rootMargin: '300px 0px' });
+      undo.push(() => io.disconnect());
+      undo.push(() => { if (closeDialog) closeDialog(); });
+
+      applyCols();
+      initHistoryRecorder();
+      initEpisodeButtons();
+      initPosters();
+      initProgressTracker();
+      initCardMenu();
+      initHistoryMenu();
+      initHome();
+    }
+
+    function stop() {
+      if (stopped) return;
+      stopped = true;
+      for (const fn of undo.splice(0).reverse()) { try { fn(); } catch (e) { console.error('[MAOBOO] Anime1 卡片介面還原失敗', e); } }
+      // 舊腳本用的是同一組 class：它在跑的時候這些交給它，不拿掉
+      if (!conflict) {
+        hidden.forEach((n) => n.classList.remove('a1v-hide'));
+        marked.forEach(([n, c]) => n.classList.remove(c));
+      }
+      hidden.clear();
+      marked.length = 0;
+      if (!conflict && root()) {
+        root().classList.remove('a1v-pp', 'a1v-pc', 'a1v-wide');
+        root().style.removeProperty('--a1v-poster');
+        root().style.removeProperty('--a1v-cols');
+        document.querySelectorAll('.video-js.a1v-playing').forEach((v) => v.classList.remove('a1v-playing'));
+      }
+    }
+
+    // 網頁結構好了、OpenCC 也載好（最多等 5 秒，載不到就不轉簡體照樣跑）才開始；
+    // 再讓出一輪，舊的獨立腳本如果也在，這時候已經放好它的樣式（看得出來）
+    const domReady = new Promise((r) => { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', r, { once: true }); else r(); });
+    let occClosed = false; // 開始之後才載好的不用（同一頁裡標題的比對方式要前後一致）
+    const occReady = Promise.race([
+      loadOcc().then((c) => { if (!occClosed) occ = c; }, (e) => mtWarn('Anime1 卡片介面：繁轉簡載入失敗，封面可能比較難找到', e)),
+      new Promise((r) => setTimeout(r, 5000)),
+    ]);
+    Promise.all([domReady, occReady]).then(() => new Promise((r) => setTimeout(r, 0))).then(() => { occClosed = true; main(); })
+      .catch((e) => console.error('[MAOBOO] Anime1 卡片介面啟動失敗', e));
+
+    return {
+      stop,
+      onConfig(c) { cols = colsOf(c); if (!stopped && !conflict) applyCols(); },
+    };
+  }
+  /* #end-desktop-only */
+
   /* ======================================================================
    * 功能模組
    * 每個模組：start() 啟動並回傳 stop()；設定開關可以即時套用，不用重新整理
@@ -8870,6 +9900,25 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         };
       },
     },
+
+    /* #desktop-only */
+    /* ---------------- Anime1 卡片介面 ---------------- */
+    {
+      id: 'anime1',
+      group: 'video',
+      name: 'Anime1 卡片介面',
+      site: 'anime1.me',
+      desc: '動畫列表改成封面卡片牆，加上觀看紀錄、集數按鈕和續播。',
+      defaults: { cols: A1_COLS },
+      fields: [{ key: 'cols', label: '每排卡片數', type: 'number', min: 2, max: 16, step: 1, unit: '張' }],
+      frames: 'top',
+      phase: 'start',
+      match: () => location.protocol === 'https:' && HOST === 'anime1.me',
+      start(ctx) {
+        return startAnime1(ctx);
+      },
+    },
+    /* #end-desktop-only */
 
     /* ---------------- X 影片下載按鈕 ---------------- */
     {
