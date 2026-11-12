@@ -3,7 +3,8 @@
  * 從 src/maoboo.src.js 產生要給大家安裝的檔案。兩個檔案各自有版本號，各自發布，互不影響：
  *
  *   node tools/build.js full    整合包 maoboo.user.js（版本號、更新紀錄寫在 src/maoboo.src.js 的開頭）
- *   node tools/build.js manga   手機版漫畫翻譯 manga-mobile.user.js（版本號、更新紀錄在 src/manga.json）
+ *   node tools/build.js manga   手機版漫畫翻譯 manga-mobile.user.js（版本號、更新紀錄在 src/manga.json；
+ *                               原始碼裡 #desktop-only 到 #end-desktop-only 之間的功能不放進去）
  *   node tools/build.js all     兩個都產生
  *
  * 只發布其中一個時，只產生那一個；另一個檔案不動，用那個版本的人就不會收到更新。
@@ -73,8 +74,8 @@ function buildManga() {
   const version = String(info.version || '');
   if (!isVer(version)) throw new Error('手機版版本號不對：' + version);
   if (!info.changelog.length || info.changelog[0][0] !== version) throw new Error('手機版更新紀錄的第一筆要是 ' + version);
-  // 漫畫翻譯用不到 LINE 貼圖的網域，其他權限照整合包
-  const connects = meta('connect').filter((l) => !/line-scdn\.net/.test(l));
+  // 漫畫翻譯用不到 LINE 貼圖、Anime1 卡片介面（bgm.tv、AniList）的網域，其他權限照整合包
+  const connects = meta('connect').filter((l) => !/line-scdn\.net|api\.bgm\.tv|graphql\.anilist\.co/.test(l));
   const header = [
     '// ==UserScript==',
     '// @name         MAO BOO 漫畫翻譯（手機版）',
@@ -98,7 +99,11 @@ function buildManga() {
   const log = ['/* ==更新紀錄==', ...info.changelog.flatMap(([v, ...lines]) => lines.map((t, i) => ` * ${i ? ' '.repeat(v.length) : v}  ${t}`)), ' * ==/更新紀錄== */'].join('\n');
   const logRe = /\/\* ==更新紀錄==[\s\S]*?==\/更新紀錄== \*\//;
   if (!logRe.test(body)) throw new Error('找不到更新紀錄');
-  const out = header + body.replace(logRe, () => log).replace(marker, "  const EDITION = 'manga';");
+  // 只有整合包才有的功能（#desktop-only … #end-desktop-only 之間）整段拿掉：整合包加功能時，手機版的檔案一個字都不會變
+  const onlyRe = /^[ \t]*\/\* #desktop-only[^\n]*\*\/\n[\s\S]*?^[ \t]*\/\* #end-desktop-only \*\/\n\n?/gm; // 連後面的一行空白一起拿掉
+  const lean = body.replace(onlyRe, '');
+  if (/#(?:end-)?desktop-only/.test(lean)) throw new Error('#desktop-only 標記沒有成對');
+  const out = header + lean.replace(logRe, () => log).replace(marker, "  const EDITION = 'manga';");
   write('manga-mobile.user.js', out, version);
 }
 
