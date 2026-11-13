@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.30
+// @version      1.5.31
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -11,6 +11,7 @@
 // @icon         data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHAAAABwBAMAAAA0zul4AAAAElBMVEUzMzP////Z2dlmZmYAAAAAAAASXfmKAAAABnRSTlP/////AP8NmbZAAAABXklEQVR42t2Y0Y3DIBBEn09pYFugBVpwC67SLaQFWqAFWrgPMAZDEukUnTLZLwyyxNOwO7DLyhFGBBwJns7l+OGP8f8/3lqaBMSGaDanzHhGxNXRJ231PYw2YbOvYTTCheualdfTqqpj1u+gOb4gTSjVGLOKETBWdhwQyzhWSrCGUlHHrNo6jKmUfX0VYlxWjFBcMIeHLjvPNd9QKuro8IWs5fME3NRD9Bhdx9Vz9quHklqMqSgY8FVHX5Z7TaOmjss68cdZtISOJJmP4wntT28Uz0crBCOn7+52bfXRYrRm56FmIkNu9nVH+d0RPnar73xbjTFTU5ExXHxw5NxUveMGCcf+gm58MSv64+tctO7mo/rusElv6lE/QLfmPKK0y/11F2RM1d9nlPYl3tFSPo9coTTParr0HN3Q6TkJdfMxYdVFNhL3urLVeVf6IHreMebekZX3SpljL50eIcZfgJVnT1QZFQ0AAAAASUVORK5CYII=
 // @match        *://*/*
 // @run-at       document-start
+// @noframes
 // @sandbox      JavaScript
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -22,6 +23,8 @@
 // @grant        GM_openInTab
 // @grant        GM_info
 // @grant        unsafeWindow
+// @grant        GM_listValues
+// @grant        GM_deleteValues
 // @connect      raw.githubusercontent.com
 // @connect      generativelanguage.googleapis.com
 // @connect      api.anthropic.com
@@ -42,6 +45,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.31  減輕 iPhone 上 Tampermonkey 的負擔（針對有時打開漫畫網站，Tampermonkey 卻顯示「沒有腳本在執行」、「譯」也不出現）：手機版不再載入到網頁裡的每個小框架（廣告框），只在網頁本身執行一份；
+ *         翻過的圖改記在漫畫網站自己的儲存空間（每個網站最多 200 張），不再放進 Tampermonkey——它每開一個網頁都要先把腳本存的資料整包準備好，幾百張圖的譯文（好幾 MB）對手機太重。
+ *         更新後 Tampermonkey 裡舊的記錄會自動清掉一次，之前翻過的圖重看時會重翻一次；設定、金鑰、網站清單、用語表都不動。診斷報告多了 Tampermonkey 儲存空間的大小、腳本是網頁載入多久後才被執行的
  * 1.5.30  能力值視窗、系統訊息這種「每行一個 [項目]」（或「名稱：數值」）的方框，之前整個併成一段話翻、置中換行，看起來亂；現在一行一項分開翻、譯文保留換行、靠左排，AI 修正也照項目分開。普通對話框不變
  * 1.5.29  設定面板多了「重新讀取並翻譯」：這一話翻過的圖忘掉記住的結果，重新認字、重新翻譯（結果不對、改了設定時用）；之後捲到的圖也不用舊的結果。只在翻過的頁面上顯示；記住的原文語言和作品用語表不動
  * 1.5.28  AI 修正時會幫每部作品整理一張「用語表」（人名、招式、地名的譯法，和主要角色的口氣），之後每一批、下一話都附上照著翻，同一個名字不會前面叫「林墨宇」後面變「林莫予」；
@@ -140,6 +146,8 @@
   // 需要碰到網頁本身的 JavaScript（history、visibilityState）時用 PAGE
   const PAGE = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
   const IS_TOP = (() => { try { return window.top === window.self; } catch (_) { return false; } })();
+  /** 腳本開始執行時，網頁已經載入多久（毫秒）、載入到哪個階段：油猴（或瀏覽器的延伸功能）太晚才載入腳本時，診斷報告看得出來 */
+  const BOOT = (() => { try { return [Math.round(performance.now()), document.readyState]; } catch (_) { return [0, '']; } })();
   const HOST = (location.hostname || '').toLowerCase();
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const toPage = (fn) => (typeof exportFunction === 'function' ? exportFunction(fn, PAGE) : fn); // Firefox 相容
@@ -2013,6 +2021,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   const TESS_WORKER = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js';
   const TESS_CORE = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0';
   const MTC_MAX = 400; // 最多記住幾張圖的翻譯
+  const MTC_SITE_MAX = 200; // 手機版：每個網站最多記住幾張（記在網站自己的 IndexedDB）
   // 免費模式同時開幾個文字辨識程式（看電腦有幾個核心，最多 3 個）
   const MT_TESS_N = Math.max(1, Math.min((() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })() ? 2 : 3,
     Math.floor(((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2) / 2)));
@@ -3576,6 +3585,121 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const keep = new Set(mtPdAll().flatMap((a) => a.src.map((s) => s[1])));
     const keys = (await mtIdbDo('readonly', (st) => st.getAllKeys())) || [];
     for (const k of keys) if (!keep.has(k)) mtIdbDo('readwrite', (st) => st.delete(k));
+  }
+  /**
+   * 手機版：翻過的圖記在漫畫網站自己的 IndexedDB（整合包照舊記在油猴的儲存空間）。
+   * 油猴每開一個網頁（不管是不是漫畫網站）都要先把腳本存的資料整包準備好才執行腳本；幾百張圖的譯文有好幾 MB，
+   * 手機上的油猴負擔太重。放在網站這邊，油猴裡就只剩設定。
+   * 查、寫跟原本一樣是同步的：第一次要用時把這個網站記住的全部讀進記憶體（ready() 回傳的 Promise 等它），
+   * 之後都從記憶體拿，寫的時候順便存回去。IndexedDB 不能用（或太慢）時只記在記憶體，不影響翻譯。
+   * 每一筆存成 { t: 記住的時間, s: JSON 字串 }：字串比物件省記憶體，拿出來時再解開（每次都是新的一份，跟油猴的儲存一樣）
+   */
+  function mtSiteCache(max) {
+    const mem = new Map();
+    let dbP = null;
+    let failAt = 0;
+    function open() {
+      if (dbP) return dbP;
+      if (Date.now() - failAt < 30000) return Promise.resolve(null); // 剛剛才打不開：先不要一直試
+      const p = new Promise((resolve) => {
+        let req = null;
+        try { req = indexedDB.open('maoboo-mtc', 1); } catch (_) { resolve(null); return; }
+        let given = false; // 已經回報打不開了，之後才打開的連線不留著
+        req.onupgradeneeded = () => { try { req.result.createObjectStore('pages'); } catch (_) { /* 已經有了 */ } };
+        req.onsuccess = () => {
+          const db = req.result;
+          if (given) { try { db.close(); } catch (_) { /* 已經關了 */ } return; }
+          given = true;
+          // 連線斷了（手機把瀏覽器放到背景後常發生）、別的分頁要升級：下次要用時重新打開
+          const lost = () => { if (dbP === p) dbP = null; try { db.close(); } catch (_) { /* 已經關了 */ } };
+          db.onclose = lost;
+          db.onversionchange = lost;
+          resolve(db);
+        };
+        req.onerror = () => { given = true; resolve(null); };
+        req.onblocked = () => { given = true; resolve(null); };
+      });
+      dbP = p;
+      p.then((db) => { if (!db && dbP === p) { dbP = null; failAt = Date.now(); } });
+      return p;
+    }
+    /** 在一個交易裡做事：fn 回傳的函式在交易完成後呼叫，拿結果；失敗一律回 null，不丟錯 */
+    const run = (mode, fn) => open().then((db) => new Promise((resolve) => {
+      if (!db) { resolve(null); return; }
+      try {
+        const tx = db.transaction('pages', mode);
+        const out = fn(tx.objectStore('pages'));
+        tx.oncomplete = () => resolve(typeof out === 'function' ? out() : null);
+        tx.onerror = () => resolve(null);
+        tx.onabort = () => resolve(null);
+      } catch (_) {
+        dbP = null; // 連線已經斷了：下次重新打開
+        resolve(null);
+      }
+    }));
+    /** 超過上限：最舊的先忘掉（多清一成，不用每記一張就清一次） */
+    function trim() {
+      if (mem.size <= max) return;
+      const old = [...mem.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, mem.size - max + Math.ceil(max / 10)).map((e) => e[0]);
+      for (const k of old) mem.delete(k);
+      run('readwrite', (st) => { for (const k of old) st.delete(k); });
+    }
+    let started = false;
+    let loading = null;
+    return {
+      /** 還沒讀完：回傳 Promise（讀完、或等太久就結束）；讀完了回傳 null。翻譯第一張圖之前等它 */
+      ready() {
+        if (started) return loading;
+        started = true;
+        const load = run('readonly', (st) => {
+          const ks = st.getAllKeys();
+          const vs = st.getAll();
+          return () => [ks.result || [], vs.result || []];
+        }).then((got) => {
+          if (!got) return;
+          got[0].forEach((k, i) => {
+            const v = got[1][i];
+            if (!mem.has(k) && v && typeof v.s === 'string') mem.set(k, { t: Number(v.t) || 0, s: v.s });
+          });
+          trim();
+        }).catch(() => { /* 讀不到就當作沒有記住 */ });
+        // IndexedDB 卡住時不讓翻譯一直等：最多等 2.5 秒就先翻，之後讀到了照樣補進來
+        loading = Promise.race([load, new Promise((resolve) => setTimeout(resolve, 2500))]).then(() => { loading = null; });
+        return loading;
+      },
+      get(k) {
+        const e = mem.get(k);
+        if (!e) return null;
+        try { return JSON.parse(e.s); } catch (_) { return null; }
+      },
+      put(k, v) {
+        const e = { t: Number(v && v.t) || Date.now(), s: JSON.stringify(v) };
+        mem.set(k, e);
+        run('readwrite', (st) => { st.put(e, k); });
+        trim();
+      },
+      del(keys) {
+        for (const k of keys) mem.delete(k);
+        run('readwrite', (st) => { for (const k of keys) st.delete(k); });
+      },
+      size: () => mem.size,
+    };
+  }
+  /** 診斷用：油猴的儲存空間有幾筆、大約幾 KB（手機版才量得到；太大的話手機上的油猴會跑不動），和記住幾張翻過的圖 */
+  function mtStoreStat(site) {
+    let keys = null;
+    let kb = null;
+    try {
+      if (typeof GM_listValues === 'function') {
+        const ks = GM_listValues() || [];
+        let n = 0;
+        for (const k of ks) { const v = GM_getValue(k); n += k.length + (v === undefined ? 0 : JSON.stringify(v).length); }
+        keys = ks.length;
+        kb = Math.round(n / 1024);
+      }
+    } catch (_) { /* 量不到就算了 */ }
+    const idx = store.get('mtc.idx', null);
+    return [keys, kb, site ? site.size() : Array.isArray(idx) ? idx.length : 0];
   }
   async function mtSha256(buf) {
     if (typeof crypto === 'undefined' || !crypto.subtle) return '';
@@ -5933,10 +6057,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // v11：免費翻譯一時被擋（HTTP 429）時，漏翻的那幾段之前會被當成翻完記住（整張少幾句）：免費模式翻過的重翻一次
     const MTC_VER = 11;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
+    // 手機版記在漫畫網站自己的 IndexedDB（mtSiteCache），整合包記在油猴的儲存空間
+    const siteCache = EDITION === 'manga' ? mtSiteCache(MTC_SITE_MAX) : null;
+    const cacheRead = (k) => (siteCache ? siteCache.get(k) : store.get(k, null));
     function cacheGet(P) {
-      let v = store.get(cacheKeyOf(P), null);
+      let v = cacheRead(cacheKeyOf(P));
       for (let ver = MTC_VER - 1; ver >= 2 && !v; ver--) {
-        const old = store.get(cacheKeyOf(P, 'v' + ver), null);
+        const old = cacheRead(cacheKeyOf(P, 'v' + ver));
         if (old && old.v === ver && old.m && old.m !== 'free') v = old;
       }
       if (!v || !(v.v >= 2 && v.v <= MTC_VER) || !Array.isArray(v.b)) return null;
@@ -5955,9 +6082,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     function cachePut(P, model, w, h, blk, fx) {
       const k = cacheKeyOf(P);
       const r4 = (n) => Math.round(n * 10000) / 10000;
-      store.set(k, { v: MTC_VER, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, ex: P.seamExt ? P.seamExt.map(r4) : 0,
+      const val = { v: MTC_VER, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, ex: P.seamExt ? P.seamExt.map(r4) : 0,
         b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang, b.src || '', b.bub ? 1 : 0, r4(b.lh || 0), b.bg || '', b.shape || '', b.rows || 0,
-          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0) | (b.spiky ? 128 : 0) | (b.list ? 256 : 0), b.msrc || '']) });
+          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0) | (b.spiky ? 128 : 0) | (b.list ? 256 : 0), b.msrc || '']) };
+      if (siteCache) { siteCache.put(k, val); return; }
+      store.set(k, val);
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       idx = idx.filter((x) => x !== k);
@@ -7224,6 +7353,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       try {
         const st0 = mtEngineState(cfg());
         const fast = mode() === 'fast';
+        const wait = siteCache && siteCache.ready(); // 手機版：這個網站記住的翻譯第一次要先讀進來（之後是 null，不用等）
+        if (wait) { await wait; if (!alive()) return; }
         let hit = cacheGet(P);
         // 免費模式一個字都沒認到的舊結果不沿用（可能是那時候認字出了問題），重新辨識一次
         if (hit && hit.m === 'free' && !hit.blocks.length) hit = null;
@@ -8035,6 +8166,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     /** 忘掉一張圖記住的結果（每個版本的快取都清） */
     function cacheDrop(P) {
+      if (siteCache) {
+        const keys = [];
+        for (let ver = MTC_VER; ver >= 2; ver--) keys.push(cacheKeyOf(P, 'v' + ver));
+        siteCache.del(keys);
+        return;
+      }
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       let touched = false;
@@ -8273,6 +8410,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         pg: { on: pg.on, hidden: pg.hidden, dirs: pg.dirs ? pg.dirs.size : 0 }, c: counts(), views: views.size,
         // 這部作品的用語表有幾條、總共記了幾部作品（只有數量，不放內容）
         gloss: [mtGlossGet(seriesKey()).length, Object.keys(mtGlossAll()).length],
+        // 油猴的儲存空間：幾筆、大約幾 KB（手機版才量得到），記住幾張翻過的圖；腳本是網頁載入多久後才開始執行的
+        st: mtStoreStat(siteCache), boot: BOOT,
         // 每張圖：狀態、幾句、幾個圖片元素、g = 猜的、語言和認字信心（c92 = 平均 92）、幾個尖刺框（喊叫）
         pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => {
           const cs = P.blocks.map((b) => b.conf).filter((c) => typeof c === 'number');
@@ -9932,6 +10071,35 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const c = store.get('cfg.mangaTranslate', null);
     const k = c && String(c.claudeKey || '').trim();
     if (k && mtKeyBad(mtKeyHash(k))) mtMarkKey(mtKeyHash(k), false);
+  })();
+  // 手機版 1.5.31：翻過的圖改記在漫畫網站自己的儲存空間（mtSiteCache），之前記在油猴裡的幾百筆清掉，油猴的資料才會變小。
+  // 等網頁載入完再清；油猴能一次刪多筆（5.3 以上）就一次刪完，不能的話分批慢慢刪（一口氣送幾百個刪除，手機上的油猴會忙不過來）
+  (() => {
+    if (EDITION !== 'manga' || !IS_TOP || store.get('mt.cacheMoved', 0)) return;
+    const purge = () => {
+      if (store.get('mt.cacheMoved', 0)) return; // 別的分頁清過了
+      let keys = [];
+      try { if (typeof GM_listValues === 'function') keys = (GM_listValues() || []).filter((k) => /^mtc\./.test(k)); } catch (_) { keys = []; }
+      if (!keys.length) {
+        const idx = store.get('mtc.idx', null);
+        if (Array.isArray(idx)) keys = idx.filter((k) => typeof k === 'string' && /^mtc\./.test(k)).concat('mtc.idx'); // 清單最後才刪：中途關掉網頁，下次接著清
+      }
+      const done = () => store.set('mt.cacheMoved', 1);
+      if (!keys.length) { done(); return; }
+      if (typeof GM_deleteValues === 'function') {
+        try { GM_deleteValues(keys); done(); return; } catch (_) { /* 改成一筆一筆刪 */ }
+      }
+      let i = 0;
+      const step = () => {
+        for (const k of keys.slice(i, i + 20)) { try { GM_deleteValue(k); } catch (_) { /* 舊版管理器 */ } }
+        i += 20;
+        if (i < keys.length) setTimeout(step, 1000); else done();
+      };
+      step();
+    };
+    const kick = () => setTimeout(purge, 3000);
+    if (document.readyState === 'complete') kick();
+    else PAGE.addEventListener('load', kick, { once: true });
   })();
   installUiGuard();
   MODULES.forEach(syncModule);

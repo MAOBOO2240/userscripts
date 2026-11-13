@@ -4,7 +4,8 @@
  *
  *   node tools/build.js full    整合包 maoboo.user.js（版本號、更新紀錄寫在 src/maoboo.src.js 的開頭）
  *   node tools/build.js manga   手機版漫畫翻譯 manga-mobile.user.js（版本號、更新紀錄在 src/manga.json；
- *                               原始碼裡 #desktop-only 到 #end-desktop-only 之間的功能不放進去）
+ *                               原始碼裡 #desktop-only 到 #end-desktop-only 之間的功能不放進去；
+ *                               腳本資訊多了 @noframes 和清舊快取用的兩個 @grant）
  *   node tools/build.js all     兩個都產生
  *
  * 只發布其中一個時，只產生那一個；另一個檔案不動，用那個版本的人就不會收到更新。
@@ -90,8 +91,14 @@ function buildManga() {
     ...meta('icon'),
     ...meta('match'),
     ...meta('run-at'),
+    // 手機版只在網頁本身執行，不載入到網頁裡的每個小框架（廣告框）：漫畫翻譯本來就只在最上層做事，
+    // 每個框架都載入一份（半 MB 的程式加上存的資料）只是讓手機上的油猴更忙
+    '// @noframes',
     ...meta('sandbox'),
     ...meta('grant'),
+    // 清掉以前記在油猴裡的翻譯快取用（一次列出、一次刪多筆）；整合包用不到
+    '// @grant        GM_listValues',
+    '// @grant        GM_deleteValues',
     ...connects,
     '// ==/UserScript==',
   ].join('\n');
