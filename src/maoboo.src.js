@@ -8558,8 +8558,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
 
   /* #desktop-only：這一段只有整合包有，手機版產生時整段拿掉（tools/build.js） */
   /* ======================================================================
-   * Anime1 卡片介面（anime1.me）
+   * Anime1 卡片介面（anime1.me、anime1.in）
    * 動畫列表改成封面卡片牆（封面到 bgm.tv、AniList 找），加上觀看紀錄、集數按鈕、續播和播放器封面。
+   * anime1.in 是另一個網站（不是 anime1.me 換網址）：片庫、網址格式、表格欄位都不一樣，下面 IS_IN 的地方是它的寫法；
+   * 觀看紀錄、播放進度兩個網站分開記（集數編號對不起來）。它的播放器在同網站的 iframe 裡、封面本來就是那部動畫的，所以不換封面
    * 原本是獨立的腳本「Anime1 視覺化卡片介面」，整合進來時改了這幾件事：
    *   - 每排幾張改在設定面板調（原本在油猴選單）
    *   - 觀看紀錄、播放進度存在油猴裡；查到的封面、集數清單這些可以重抓的快取存在 anime1.me 自己的 localStorage
@@ -8593,9 +8595,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       minScore: 0.5, // 標題比對最低分（0~1）
       debug: false,
     };
-    // 使用者的資料存在油猴裡
-    const K = { hist: 'a1.history', prog: 'a1.progress' };
-    // 可以重抓的快取存在 anime1.me 的 localStorage
+    const IS_IN = HOST === 'anime1.in';
+    // 使用者的資料存在油猴裡（兩個網站分開）
+    const K = IS_IN ? { hist: 'a1in.history', prog: 'a1in.progress' } : { hist: 'a1.history', prog: 'a1.progress' };
+    // 可以重抓的快取存在網站自己的 localStorage
     const L = { cache: 'a1v_cover_cache_v2', list: 'a1v_animelist', eps: 'a1v_episodes', pp: 'a1v_page_poster', occ: 'a1v_opencc_1.4.2' };
     const RESTART_HASH = '#a1v-restart';
     const HISTORY_HASH = '#history';
@@ -8639,6 +8642,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     /* ---------- 播放器封面（一開始就做）：先蓋掉站方預設海報；這頁有快取就同步套上，直到影片真正開始播放 ---------- */
     const root = () => document.documentElement; // 一開始 <html> 可能還沒建立
     const pageKey = (() => {
+      if (IS_IN) return ''; // anime1.in：不換封面
       const m = location.pathname.match(/^\/(\d+)\/?$/) || location.search.match(/[?&]p=(\d+)/);
       const c = location.search.match(/[?&]cat=(\d+)/);
       return m ? m[1] : c ? 'c' + c[1] : '';
@@ -8684,7 +8688,19 @@ html.a1v-pc .video-js.a1v-playing .vjs-poster{display:none!important}`);
 
     const hueOf = (s) => { let x = 0; for (const c of s) x = (x * 31 + c.codePointAt(0)) >>> 0; return x % 360; };
     const pad2 = (n) => String(n).padStart(2, '0');
-    const postIdOfArt = (art) => (art && art.id.match(/^post-(\d+)$/) || [])[1];
+    const postIdOfArt = (art) => (art && art.id.match(IS_IN ? /^post-([\w-]+)$/ : /^post-(\d+)$/) || [])[1];
+    const sameHost = (href) => { try { return new URL(href, location.href).hostname === location.hostname; } catch (_) { return false; } };
+    // 作品代號：anime1.me 是 ?cat= 的數字；anime1.in 是作品頁網址 /代號/ 的代號
+    const catOfHref = (href) => {
+      if (!IS_IN) return (String(href || '').match(/[?&]cat=(\d+)/) || [])[1];
+      if (!href || !sameHost(href)) return undefined;
+      return (new URL(href, location.href).pathname.match(/^\/([\w-]+)\/$/) || [])[1];
+    };
+    // 「全集連結」（連到這部作品的列表）
+    const seriesLinkOf = (scope) => (IS_IN
+      ? [...scope.querySelectorAll('.entry-content a[href]')].find((a) => /全集連結/.test(a.textContent) && catOfHref(a.getAttribute('href')))
+      : scope.querySelector('a[href*="?cat="]'));
+    const isRealLink = (a) => !!a && !a.hasAttribute('disabled') && !/[?&]p=$|^\s*javascript:/i.test(a.getAttribute('href') || '');
     // 「連載中(08)」→8、「1-12」→12
     const latestEpOf = (eps) => { const n = String(eps || '').match(/\d+(?:\.\d+)?/g); return n ? Math.max(...n.map(Number)) : NaN; };
 
@@ -8983,6 +8999,7 @@ ${CONFIG.wideLayout ? `
 ${PLAYER_PAGES('#main')}{max-width:min(100%,${CONFIG.playerMaxWidth}px,calc(75vh * 16 / 9));margin-inline:auto}
 ${PLAYER_PAGES('.vjscontainer')},${PLAYER_PAGES('.player-space')}{width:100%;max-width:none;height:auto!important;aspect-ratio:16/9;margin:0 0 14px}
 ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe')}{width:100%!important;height:100%!important;border:0}
+${PLAYER_PAGES('iframe.vframe')}{display:block;width:100%!important;max-width:none;height:auto!important;aspect-ratio:16/9;border:0;margin:0}
 .a1v-under{display:flex;align-items:flex-start;gap:12px;margin:0 0 14px}
 .a1v-links{display:flex;justify-content:flex-end;margin:0 0 14px}
 .a1v-links br,.a1v-links a[href*="?cat="],.a1v-links a[disabled]{display:none!important}
@@ -9033,8 +9050,10 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
     }
 
     /* ---------- 首頁：DataTables 表格 → 卡片牆 ---------- */
+    // anime1.in 的「更新時間」：2026-11-13 → 11/13 更新
+    const updLabel = (d) => { const m = String(d || '').match(/^\d{4}-(\d{1,2})-(\d{1,2})/); return m ? `${+m[1]}/${+m[2]} 更新` : ''; };
     function initHome() {
-      const table = document.getElementById('table-list');
+      const table = IS_IN ? (document.body.classList.contains('home') ? document.querySelector('.entry-content table.tablepress') : null) : document.getElementById('table-list');
       if (!table) return;
       const grid = el('div', { class: 'a1v-grid', role: 'list' });
       hide(table);
@@ -9045,13 +9064,13 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
         const hist = historyIndex();
         grid.replaceChildren(...[...(table.tBodies[0] ? table.tBodies[0].rows : [])].map((tr) => {
           const td = [...tr.cells].map((c) => c.textContent.trim());
-          if (td.length < 5) return el('div', { class: 'a1v-empty' }, tr.textContent.trim()); // 載入中 / 無結果
+          if (td.length < (IS_IN ? 4 : 5)) return el('div', { class: 'a1v-empty' }, tr.textContent.trim()); // 載入中 / 無結果
           const a = tr.cells[0].querySelector('a');
           const hrefAttr = (a && a.getAttribute('href')) || '';
           const title = td[0].replace(/🔞/g, '').replace(/\s+/g, ' ').trim();
           const live = /連載中/.test(td[1]);
-          const external = !/^(https?:)?\/\/anime1\.me\//.test(hrefAttr);
-          const cat = (hrefAttr.match(/[?&]cat=(\d+)/) || [])[1];
+          const external = IS_IN ? !hrefAttr || !sameHost(hrefAttr) : !/^(https?:)?\/\/anime1\.me\//.test(hrefAttr);
+          const cat = catOfHref(hrefAttr);
           const seen = !external && ((cat && hist.byCat[cat]) || hist.byTitle[norm(title)]);
           const watchedN = seen ? latestEpOf(seen.ep) : NaN;
           const latestN = latestEpOf(td[1]);
@@ -9062,7 +9081,7 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
             external,
             cat,
             year: td[2],
-            meta: [td[2], td[3], td[4] !== '-' && td[4]].filter(Boolean).join(' · '),
+            meta: (IS_IN ? [td[2], updLabel(td[3])] : [td[2], td[3], td[4] !== '-' && td[4]]).filter(Boolean).join(' · '),
             badge: live ? td[1].replace(/連載中\(?(\d+)\)?/, '$1') : td[1],
             watched: seen && seen.ep,
             newEp: latestN > watchedN ? pad2(latestN) : null,
@@ -9111,8 +9130,8 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
       const a = t.querySelector('a');
       const postId = postIdOfArt(art) || '';
       const m = t.textContent.trim().match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
-      const catLink = art.querySelector('a[href*="?cat="]');
-      const cat = (catLink && (catLink.getAttribute('href').match(/[?&]cat=(\d+)/) || [])[1]) || (art.className.match(/\bcategory-(\d+)\b/) || [])[1] || '';
+      const catLink = seriesLinkOf(art);
+      const cat = (catLink && catOfHref(catLink.getAttribute('href'))) || (!IS_IN && (art.className.match(/\bcategory-(\d+)\b/) || [])[1]) || '';
       return {
         title: (m ? m[1] : t.textContent).trim(),
         ep: m ? m[2] : '',
@@ -9144,11 +9163,31 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
     }).filter(Boolean);
     const fetchText = (url) => fetch(url, { credentials: 'same-origin' }).then((r) => (r.ok ? r.text() : ''));
     const epsInflight = {};
-    function getEpisodes(cat, force = false) {
+    const epNum = (e) => { const n = parseFloat((String(e.ep).match(/\d+(?:\.\d+)?/) || [])[0]); return Number.isFinite(n) ? n : Infinity; };
+    // anime1.in：作品頁每頁 14 集、新的在前（/代號/page/2 是更舊的）。不長的整部抓；很長的抓第一頁，加上 need 那一集所在的那幾頁
+    async function fetchEpisodesIn(cat, need) {
+      const base = '/' + cat + '/';
+      const pageOf = (n) => (n > 1 ? `${base}page/${n}` : base);
+      const first = parseEpisodeList(await fetchText(pageOf(1)));
+      const map = new Map(first.map((e) => [e.id, e]));
+      const per = first.length;
+      const top = per ? epNum(first[0]) : NaN;
+      const want = new Set();
+      if (per && Number.isFinite(top)) {
+        const pages = Math.ceil(top / per);
+        if (pages <= 6) for (let n = 2; n <= pages; n++) want.add(n);
+        const n = need && !map.has(need.id) ? epNum(need) : NaN;
+        if (Number.isFinite(n) && n <= top) { const pg = Math.floor((top - n) / per) + 1; [pg - 1, pg, pg + 1].forEach((x) => x >= 2 && want.add(x)); }
+      }
+      for (const n of [...want].sort((a, b) => a - b).slice(0, 8)) parseEpisodeList(await fetchText(pageOf(n))).forEach((e) => map.set(e.id, e));
+      return [...map.values()].sort((a, b) => epNum(a) - epNum(b) || (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+    }
+    function getEpisodes(cat, force = false, need = null) {
       const c = asObj(ls.get(L.eps, {}))[cat];
       if (!force && c && Array.isArray(c.list) && Date.now() - c.t < CONFIG.epsTTL) return Promise.resolve(c.list);
       if (!epsInflight[cat]) {
         epsInflight[cat] = (async () => {
+          if (IS_IN) return fetchEpisodesIn(cat, need);
           const base = '/?cat=' + encodeURIComponent(cat);
           const [desc, asc] = (await Promise.all([fetchText(base), fetchText(base + '&order=ASC')])).map(parseEpisodeList);
           const map = new Map([...desc, ...asc].map((e) => [e.id, e]));
@@ -9163,15 +9202,16 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
               part.forEach((e) => map.set(e.id, e));
             }
           }
-          const list = [...map.values()].sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : a.id - b.id));
+          return [...map.values()].sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : a.id - b.id));
+        })().then((list) => {
           if (list.length) {
             const st = asObj(ls.get(L.eps, {}));
             st[cat] = { t: Date.now(), list };
-            Object.keys(st).sort((a, b) => st[b].t - st[a].t).slice(80).forEach((k) => delete st[k]); // 保留最近 80 部
+            Object.keys(st).sort((a, b) => (st[b].t || 0) - (st[a].t || 0)).slice(80).forEach((k) => delete st[k]); // 保留最近 80 部
             ls.set(L.eps, st);
           }
           return list;
-        })().catch((e) => { log('集數清單失敗', e); return c && Array.isArray(c.list) ? c.list : []; }).finally(() => delete epsInflight[cat]);
+        }).catch((e) => { log('集數清單失敗', e); return c && Array.isArray(c.list) ? c.list : []; }).finally(() => delete epsInflight[cat]);
       }
       return epsInflight[cat];
     }
@@ -9190,12 +9230,22 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
     async function resolveTarget(cat, title) {
       const hi = historyIndex();
       const seen = hi.byCat[cat] || hi.byTitle[norm(title)];
-      const last = seen && (seen.postId || (String(seen.url).match(/anime1\.me\/(\d+)/) || [])[1]);
+      const last = seen && (seen.postId || (!IS_IN && (String(seen.url).match(/anime1\.me\/(\d+)/) || [])[1]));
       if (last && !isFinished(getProgress()[last])) return '/' + last;
       const list = await getEpisodes(cat);
       if (!last) return list.length ? '/' + list[list.length - 1].id : null;
-      const next = list[list.findIndex((e) => e.id === last) + 1];
-      return next && list.some((e) => e.id === last) ? '/' + next.id : '/' + last + RESTART_HASH;
+      const i = list.findIndex((e) => e.id === last);
+      if (i >= 0) return list[i + 1] ? '/' + list[i + 1].id : '/' + last + RESTART_HASH;
+      if (IS_IN) { const next = await nextLinkOf('/' + last); if (next) return next; } // 很長的作品、上次看的那集不在清單裡：看那一集頁面上的「下一集」
+      return '/' + last + RESTART_HASH;
+    }
+    // 單集頁上的「下一集」（anime1.in 最新一集是 javascript:;）
+    async function nextLinkOf(url) {
+      const doc = new DOMParser().parseFromString(await fetchText(url), 'text/html');
+      const a = [...doc.querySelectorAll('article .entry-content a[href]')].find((x) => /下一集/.test(x.textContent));
+      if (!isRealLink(a) || !sameHost(a.getAttribute('href'))) return null;
+      const u = new URL(a.getAttribute('href'), location.href);
+      return /^\/[\w-]+$/.test(u.pathname) ? u.pathname : null;
     }
     // 滑過 / 聚焦時先改好 href（中鍵、新分頁也正確），點擊時重新計算
     function linkSmart(card, cat, title) {
@@ -9210,37 +9260,59 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
       });
     }
     // 每 5 秒 / 暫停 / 結束存進度；重開沒看完的集數跳回上次位置
+    // 影片元素（iframe 裡的元素不是這一頁的 HTMLMediaElement，用標籤名認）
+    const isMediaEl = (x) => !!x && /^(VIDEO|AUDIO)$/.test(x.tagName || '');
     function initProgressTracker() {
       const lastSave = new WeakMap();
       const resumed = new WeakSet();
-      const idOf = (v) => postIdOfArt(v.closest('article'));
-      const isMedia = (e) => e.target instanceof HTMLMediaElement;
-      const save = (v, ended) => {
-        const id = idOf(v);
-        if (!id || !(v.duration > 0)) return;
-        saveProgress(id, { t: Math.floor(v.currentTime), d: Math.floor(v.duration), ended });
-        lastSave.set(v, Date.now());
-      };
-      on(document, 'timeupdate', (e) => { if (isMedia(e) && !e.target.seeking && Date.now() - (lastSave.get(e.target) || 0) >= 5000) save(e.target, false); }, true);
-      on(document, 'pause', (e) => { if (isMedia(e) && !e.target.ended) save(e.target, false); }, true);
-      on(document, 'ended', (e) => { if (isMedia(e)) save(e.target, true); }, true);
       const restart = location.hash === RESTART_HASH;
       if (restart) history.replaceState(history.state, '', location.pathname + location.search);
-      if (!CONFIG.resume && !restart) return;
-      on(document, 'loadedmetadata', (e) => {
-        const v = e.target;
-        if (!isMedia(e) || resumed.has(v)) return;
-        resumed.add(v);
-        const p = getProgress()[idOf(v)];
-        if (restart) v.currentTime = 0;
-        else if (p && !isFinished(p) && p.t > 5 && p.t < v.duration - 5) v.currentTime = p.t;
-      }, true);
+      // 在一份文件上掛：每 5 秒 / 暫停 / 結束存進度，第一次載入影片時跳回上次的位置
+      const watch = (doc, idOf) => {
+        const isMedia = (e) => isMediaEl(e.target);
+        const save = (v, ended) => {
+          const id = idOf(v);
+          if (!id || !(v.duration > 0)) return;
+          saveProgress(id, { t: Math.floor(v.currentTime), d: Math.floor(v.duration), ended });
+          lastSave.set(v, Date.now());
+        };
+        on(doc, 'timeupdate', (e) => { if (isMedia(e) && !e.target.seeking && Date.now() - (lastSave.get(e.target) || 0) >= 5000) save(e.target, false); }, true);
+        on(doc, 'pause', (e) => { if (isMedia(e) && !e.target.ended) save(e.target, false); }, true);
+        on(doc, 'ended', (e) => { if (isMedia(e)) save(e.target, true); }, true);
+        if (!CONFIG.resume && !restart) return;
+        const resume = (v) => {
+          if (resumed.has(v)) return;
+          resumed.add(v);
+          const p = getProgress()[idOf(v)];
+          if (restart) v.currentTime = 0;
+          else if (p && !isFinished(p) && p.t > 5 && p.t < v.duration - 5) v.currentTime = p.t;
+        };
+        on(doc, 'loadedmetadata', (e) => { if (isMedia(e)) resume(e.target); }, true);
+        // 掛上去之前影片就已經讀好長度（例如 iframe 比我們早載入）：馬上處理，還沒開始播才跳
+        doc.querySelectorAll('video').forEach((v) => { if (v.readyState >= 1 && v.currentTime < 1) resume(v); });
+      };
+      if (!IS_IN) { watch(document, (v) => postIdOfArt(v.closest('article'))); return; }
+      // anime1.in：影片在同網站的 iframe（播放器頁）裡；每次 iframe 載入（換分流也是）就掛上去，按播放也記進觀看紀錄
+      const hooked = new WeakSet();
+      document.querySelectorAll('article.post iframe.vframe').forEach((f) => {
+        const art = f.closest('article');
+        const hook = () => {
+          let d = null;
+          try { d = f.contentDocument; } catch (_) { d = null; }
+          if (stopped || !d || hooked.has(d) || !sameHost(d.URL || '')) return;
+          hooked.add(d);
+          watch(d, () => postIdOfArt(art));
+          on(d, 'play', (e) => { if (isMediaEl(e.target)) recordHistory(parseArticle(art)); }, true);
+        };
+        on(f, 'load', hook);
+        hook();
+      });
     }
 
     /* ---------- 單集頁：播放器下方集數按鈕 +「下一集」；隱藏「全集連結」 ---------- */
-    const linksOf = (scope) => [...scope.querySelectorAll('.entry-content p')].filter((p) => p.querySelector('a[href*="?cat="]'));
+    const linksOf = (scope) => [...scope.querySelectorAll('.entry-content p')].filter((p) => (IS_IN ? [...p.querySelectorAll('a')].some((a) => /全集連結/.test(a.textContent)) : p.querySelector('a[href*="?cat="]')));
     function initEpisodeButtons() {
-      if (document.body.classList.contains('archive')) {
+      if (!IS_IN && document.body.classList.contains('archive')) {
         document.querySelectorAll('article.post').forEach((art) => linksOf(art).forEach((p) => {
           mark(p, 'a1v-links');
           p.querySelectorAll('a').forEach((a) => /下一集/.test(a.textContent) && mark(a, 'a1v-next'));
@@ -9249,19 +9321,23 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
       if (!document.body.classList.contains('single')) return;
       const art = document.querySelector('article.post');
       const info = parseArticle(art);
-      const anchor = art && (art.querySelector('.vjscontainer') || art.querySelector('.entry-content > *'));
+      const frame = art && IS_IN && art.querySelector('iframe.vframe');
+      const anchor = art && (frame ? frame.closest('p') || frame : art.querySelector('.vjscontainer') || art.querySelector('.entry-content > *'));
       if (!info || !info.cat || !anchor) return;
       const nav = el('nav', { class: 'a1v-eps', 'aria-label': info.title });
       const under = el('div', { class: 'a1v-under' }, nav);
       anchor.after(under);
       undo.push(() => under.remove());
       for (const p of linksOf(art)) {
-        hide(p);
         const next = [...p.querySelectorAll('a')].find((a) => /下一集/.test(a.textContent));
-        if (next && !next.hasAttribute('disabled') && !/[?&]p=$/.test(next.getAttribute('href') || '')) under.append(el('a', { class: 'a1v-next', href: next.href, rel: 'next' }, '下一集'));
+        if (isRealLink(next)) under.append(el('a', { class: 'a1v-next', href: next.href, rel: 'next' }, '下一集'));
+        // anime1.me 整段藏起來；anime1.in 這一段還有切換分流的按鈕，只藏「全集連結」「下一集」
+        if (!IS_IN) hide(p);
+        else p.querySelectorAll('a, br').forEach((x) => (x.tagName === 'BR' || /全集連結|下一集/.test(x.textContent)) && hide(x));
       }
-      getEpisodes(info.cat)
-        .then((list) => (list.some((e) => e.id === info.postId) ? list : getEpisodes(info.cat, true))) // 快取沒有這集 → 重抓
+      const need = { id: info.postId, ep: info.ep };
+      getEpisodes(info.cat, false, need)
+        .then((list) => (list.some((e) => e.id === info.postId) ? list : getEpisodes(info.cat, true, need))) // 快取沒有這集 → 重抓
         .then((list) => {
           if (stopped) return;
           const hist = historyIndex().byCat[info.cat];
@@ -9436,7 +9512,15 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
       const c = ls.get(L.list, null);
       if (c && c.byCat && c.byTitle && Date.now() - c.t < CONFIG.listTTL) return Promise.resolve(c);
       if (!listPromise) {
-        listPromise = fetch('/animelist.json', { credentials: 'omit' }).then((r) => r.json()).then((rows) => {
+        // anime1.in 沒有 animelist.json：讀首頁的表格（整張表都在網頁原始碼裡）
+        const rowsIn = () => fetchText('/').then((html) => {
+          const t = new DOMParser().parseFromString(html, 'text/html').querySelector('.entry-content table.tablepress');
+          return t && t.tBodies[0] ? [...t.tBodies[0].rows].filter((tr) => tr.cells.length >= 2).map((tr) => {
+            const a = tr.cells[0].querySelector('a');
+            return [(a && catOfHref(a.getAttribute('href'))) || 0, tr.cells[0].textContent.trim(), tr.cells[1].textContent.trim()];
+          }) : [];
+        });
+        listPromise = (IS_IN ? rowsIn() : fetch('/animelist.json', { credentials: 'omit' }).then((r) => r.json())).then((rows) => {
           const v = { t: Date.now(), byCat: {}, byTitle: {} };
           for (const [cat, title, eps] of rows) {
             const ep = latestEpOf(eps);
@@ -9460,7 +9544,8 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
         }).sort((a, b) => b.updated - a.updated); // 有新集數的排前面
         grid.replaceChildren(...items.map(({ it, updated, newest }) => {
           const d = new Date(it.t);
-          const card = makeCard({ title: it.title, href: it.url, cat: it.cat, watched: it.ep, newEp: updated && pad2(newest), meta: `${d.getMonth() + 1}/${d.getDate()}` });
+          const href = /^https:\/\//.test(String(it.url)) && sameHost(it.url) ? it.url : it.postId ? '/' + it.postId : '/';
+          const card = makeCard({ title: it.title, href, cat: it.cat, watched: it.ep, newEp: updated && pad2(newest), meta: `${d.getMonth() + 1}/${d.getDate()}` });
           card.addEventListener('contextmenu', (e) => { e.preventDefault(); cardMenu(e, () => removeHistory(it, card)); });
           return card;
         }));
@@ -9907,13 +9992,13 @@ ${PLAYER_PAGES('.vjscontainer .video-js')},${PLAYER_PAGES('.vjscontainer iframe'
       id: 'anime1',
       group: 'video',
       name: 'Anime1 卡片介面',
-      site: 'anime1.me',
+      site: 'anime1.me、anime1.in',
       desc: '動畫列表改成封面卡片牆，加上觀看紀錄、集數按鈕和續播。',
       defaults: { cols: A1_COLS },
       fields: [{ key: 'cols', label: '每排卡片數', type: 'number', min: 2, max: 16, step: 1, unit: '張' }],
       frames: 'top',
       phase: 'start',
-      match: () => location.protocol === 'https:' && HOST === 'anime1.me',
+      match: () => location.protocol === 'https:' && (HOST === 'anime1.me' || HOST === 'anime1.in'),
       start(ctx) {
         return startAnime1(ctx);
       },
