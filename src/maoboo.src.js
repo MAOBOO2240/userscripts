@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.6.0
+// @version      1.6.1
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、Anime1 卡片介面、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -45,6 +45,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.6.1  Anime1 卡片介面也支援 anime1.in（卡片牆、觀看紀錄、集數按鈕、續播；換分流也會接著播）。
+ *        anime1.in 是另一個網站，不是 anime1.me 換網址，觀看紀錄、播放進度兩個網站分開記；它的播放器封面本來就是那部動畫的，不另外換
  * 1.6.0  新功能：Anime1 卡片介面（anime1.me）。原本獨立的腳本「Anime1 視覺化卡片介面」整合進來：動畫列表改成封面卡片牆（封面自動到 bgm.tv、AniList 找）、
  *        觀看紀錄、播放器下方的集數按鈕、續播、播放器封面。每排幾張改在設定面板調（預設 8）；開關馬上生效，不用重新整理。
  *        封面、集數清單這些快取放在 anime1.me 自己的儲存空間，查封面用的繁轉簡（OpenCC）只在 anime1.me 才下載，其他網站不受影響。
