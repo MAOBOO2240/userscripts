@@ -235,7 +235,7 @@
 
   /** 手機（或很窄的視窗）：設定面板從下面滑上來、按鈕加大、輸入框的字 16px（iPhone 點了才不會把畫面放大）；p 加在每個選擇器前面 */
   const NARROW_CSS = (p) => `
-${p}.mb-toasts { bottom: 78px; }
+${p}.mb-toasts { bottom: calc(78px + var(--mt-lift, 0px)); }
 ${p}.mb-backdrop { align-items: flex-end; padding: 0; }
 ${p}.mb-panel { width: 100%; max-height: 92vh; max-height: 92dvh; border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
 ${p}.mb-head { padding: 12px 6px 12px 16px; }
@@ -265,7 +265,7 @@ ${p}.mb-foot { padding: 10px 16px; }
 button, input, select, output { font: inherit; }
 
 /* ---------- 通知 ---------- */
-.mb-toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; flex-direction: column;
+.mb-toasts { position: fixed; left: 50%; bottom: calc(24px + var(--mt-lift, 0px)); transform: translateX(-50%); display: flex; flex-direction: column;
   align-items: center; gap: 8px; width: max-content; max-width: calc(100vw - 32px); pointer-events: none; font-family: var(--font); }
 .mb-toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 540px; padding: 10px 8px 10px 16px;
   border-radius: 12px; background: var(--ink); color: #FFFFFF; font-size: 13.5px; line-height: 1.45;
@@ -406,7 +406,8 @@ button, input, select, output { font: inherit; }
 .mt-hover button[hidden] { display: none; }
 .mt-hover button.is-busy { cursor: progress; }
 .mt-hover button:focus-visible { outline: 2px solid #9DBAFF; outline-offset: -2px; border-radius: 16px; }
-.mt-chip { position: fixed; left: 16px; bottom: 16px; display: flex; align-items: center; gap: 4px; max-width: calc(100vw - 32px);
+/* --mt-lift／--mt-drop：手機上「譯」一直留在畫面上，它在最下面（最上面）那一帶時，狀態列和通知放在它的上面（下面） */
+.mt-chip { position: fixed; left: 16px; bottom: 16px; margin: var(--mt-drop, 0px) 0 var(--mt-lift, 0px); display: flex; align-items: center; gap: 4px; max-width: calc(100vw - 32px);
   height: 32px; padding: 0 3px 0 12px; box-sizing: border-box; border-radius: 16px; background: rgba(15, 22, 30, .86);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); color: #FFFFFF; font-family: var(--font); font-size: 12.5px;
   font-weight: 600; line-height: 1; box-shadow: 0 6px 18px rgba(0, 0, 0, .28); opacity: 0; pointer-events: none;
@@ -433,7 +434,9 @@ button, input, select, output { font: inherit; }
   box-shadow: 0 6px 18px rgba(0, 0, 0, .3); touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   transition: background-color .15s, box-shadow .15s; }
 .mt-fab.is-drag { background: rgba(15, 22, 30, .94); box-shadow: 0 0 0 3px rgba(157, 186, 255, .55), 0 12px 28px rgba(0, 0, 0, .42); cursor: grabbing; }
-@media (max-width: 640px) { .mb-toasts { bottom: 78px; } }
+/* 看不見的小點，固定在「版面」的右下角：量它的位置就知道「固定在畫面上」的東西是照多大的版面排的（兩指放大後，版面比看得到的範圍大） */
+.mt-vp { position: fixed; right: 0; bottom: 0; width: 0; height: 0; visibility: hidden; pointer-events: none; }
+@media (max-width: 640px) { .mb-toasts { bottom: calc(78px + var(--mt-lift, 0px)); } }
 
 /* ---------- 手機：手指好按、字不會太小 ---------- */
 @media (hover: none) and (pointer: coarse) {
@@ -2045,7 +2048,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   const TESS_WORKER = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js';
   const TESS_CORE = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0';
   const MTC_MAX = 400; // 最多記住幾張圖的翻譯
-  const MTC_SITE_MAX = 200; // 手機版：每個網站最多記住幾張（記在網站自己的 IndexedDB）
+  const MTC_SITE_MAX = 200; // 手機版：只記現在這一話的，最多幾張（記在網站自己的 IndexedDB）
   // 免費模式同時開幾個文字辨識程式（看電腦有幾個核心，最多 3 個）
   const MT_TESS_N = Math.max(1, Math.min((() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })() ? 2 : 3,
     Math.floor(((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2) / 2)));
@@ -3611,15 +3614,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     for (const k of keys) if (!keep.has(k)) mtIdbDo('readwrite', (st) => st.delete(k));
   }
   /**
-   * 手機版：翻過的圖記在漫畫網站自己的 IndexedDB（整合包照舊記在油猴的儲存空間）。
-   * 油猴每開一個網頁（不管是不是漫畫網站）都要先把腳本存的資料整包準備好才執行腳本；幾百張圖的譯文有好幾 MB，
-   * 手機上的油猴負擔太重。放在網站這邊，油猴裡就只剩設定。
-   * 查、寫跟原本一樣是同步的：第一次要用時把這個網站記住的全部讀進記憶體（ready() 回傳的 Promise 等它），
-   * 之後都從記憶體拿，寫的時候順便存回去。IndexedDB 不能用（或太慢）時只記在記憶體，不影響翻譯。
-   * 每一筆存成 { t: 記住的時間, s: JSON 字串 }：字串比物件省記憶體，拿出來時再解開（每次都是新的一份，跟油猴的儲存一樣）
+   * 手機版：翻過的圖記在漫畫網站自己的 IndexedDB（整合包照舊記在油猴的儲存空間），而且只記「現在這個網頁（這一話）」的：
+   * 換到別的網頁（下一話）就把之前記的全部忘掉，回頭看要重新翻譯。佔的空間最多就是一話。
+   * 留著這一話的，是因為手機常常把分頁收掉重新載入（或自己重新整理）：同一話不用整個重翻、重花額度。
+   * pageKey() 回傳現在這個網頁的代號（網址的路徑＋查詢字串；換頁不重新載入的網站，網址變了就算換頁）。
+   * 查、寫跟原本一樣是同步的：第一次要用時把記住的讀進記憶體（ready() 回傳的 Promise 等它），之後都從記憶體拿，寫的時候順便存回去。
+   * IndexedDB 不能用（或太慢）時只記在記憶體，不影響翻譯。
+   * 每一筆存成 { t: 記住的時間, s: JSON 字串, u: 哪一個網頁 }：字串比物件省記憶體，拿出來時再解開（每次都是新的一份，跟油猴的儲存一樣）
    */
-  function mtSiteCache(max) {
+  function mtSiteCache(max, pageKey) {
     const mem = new Map();
+    let cur = null; // 記憶體裡現在留的是哪一個網頁的
     let dbP = null;
     let failAt = 0;
     function open() {
@@ -3661,12 +3666,22 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         resolve(null);
       }
     }));
-    /** 超過上限：最舊的先忘掉（多清一成，不用每記一張就清一次） */
+    const drop = (keys) => { if (keys.length) run('readwrite', (st) => { for (const k of keys) st.delete(k); }); };
+    /** 換了網頁（下一話）：之前記的都忘掉，記憶體和資料庫都是 */
+    function roll() {
+      const now = pageKey();
+      if (now === cur) return;
+      cur = now;
+      const gone = [];
+      for (const [k, e] of mem) if (e.u !== now) { mem.delete(k); gone.push(k); }
+      drop(gone);
+    }
+    /** 一話的圖比上限還多：最舊的先忘掉（多清一成，不用每記一張就清一次） */
     function trim() {
       if (mem.size <= max) return;
       const old = [...mem.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, mem.size - max + Math.ceil(max / 10)).map((e) => e[0]);
       for (const k of old) mem.delete(k);
-      run('readwrite', (st) => { for (const k of old) st.delete(k); });
+      drop(old);
     }
     let started = false;
     let loading = null;
@@ -3681,10 +3696,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           return () => [ks.result || [], vs.result || []];
         }).then((got) => {
           if (!got) return;
+          roll();
+          const gone = [];
           got[0].forEach((k, i) => {
             const v = got[1][i];
-            if (!mem.has(k) && v && typeof v.s === 'string') mem.set(k, { t: Number(v.t) || 0, s: v.s });
+            // 別的網頁（上一話）留下來的、格式不對的：刪掉
+            if (!v || typeof v.s !== 'string' || v.u !== cur) gone.push(k);
+            else if (!mem.has(k)) mem.set(k, { t: Number(v.t) || 0, s: v.s, u: v.u });
           });
+          drop(gone);
           trim();
         }).catch(() => { /* 讀不到就當作沒有記住 */ });
         // IndexedDB 卡住時不讓翻譯一直等：最多等 2.5 秒就先翻，之後讀到了照樣補進來
@@ -3692,22 +3712,34 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         return loading;
       },
       get(k) {
+        roll();
         const e = mem.get(k);
         if (!e) return null;
         try { return JSON.parse(e.s); } catch (_) { return null; }
       },
       put(k, v) {
-        const e = { t: Number(v && v.t) || Date.now(), s: JSON.stringify(v) };
+        roll();
+        const e = { t: Number(v && v.t) || Date.now(), s: JSON.stringify(v), u: cur };
         mem.set(k, e);
         run('readwrite', (st) => { st.put(e, k); });
         trim();
       },
       del(keys) {
         for (const k of keys) mem.delete(k);
-        run('readwrite', (st) => { for (const k of keys) st.delete(k); });
+        drop(keys);
       },
+      /** 網址變了（換頁不重新載入網頁的網站）：有在用的話，馬上把上一頁記的忘掉，不用等下一次翻譯 */
+      sync() { if (started) roll(); },
       size: () => mem.size,
     };
+  }
+  /**
+   * 記憶體裡記的圖太多時要忘掉哪些：只挑已經不在網頁上（沒有 <img> 在顯示它）、沒有在翻譯、也沒在等 AI 修正的，
+   * 從最早的開始，忘到剩 keep 張為止（還在網頁上的、正在處理的都不動，所以可能剩得比 keep 多）
+   */
+  function mtPrunePick(list, keep) {
+    const idle = list.filter((P) => !P.els.size && P.state !== 'busy' && P.fix !== 'busy' && P.fix !== 'wait').sort((a, b) => a.order - b.order);
+    return idle.slice(0, Math.max(0, Math.min(idle.length, list.length - keep)));
   }
   /** 診斷用：油猴的儲存空間有幾筆、大約幾 KB（手機版才量得到；太大的話手機上的油猴會跑不動），和記住幾張翻過的圖 */
   function mtStoreStat(site) {
@@ -5622,9 +5654,18 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           key: k, url, els: new Set(), gen: 0, state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', step: '', fix: '', lang: '', w0: 0, h0: 0,
           engines: new Set(), shown: true, order: order++, noRef: false, langP: null, started: 0, queued: false, guess: false, userCancel: false,
         };
+        if (pages.size >= 400) prunePages(); // 先清再加：剛做好的這一張還沒連上 <img>，不能被當成「已經不在網頁上」清掉
         pages.set(k, P);
       } else if (P.state !== 'busy') P.url = url; // 有簽章的網址會更新
       return P;
+    }
+    /** 換頁不重新載入網頁的網站看久了，會累積很多已經不在網頁上的圖：滿 400 張時忘掉一些（留 300 張，見 mtPrunePick） */
+    function prunePages() {
+      for (const P of mtPrunePick([...pages.values()], 300)) {
+        P.gen++;
+        if (P.fixHold) { unlater(P.fixHold); P.fixHold = 0; }
+        pages.delete(P.key);
+      }
     }
     function bindImg(img) {
       const url = mtRealUrl(img);
@@ -6081,8 +6122,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // v11：免費翻譯一時被擋（HTTP 429）時，漏翻的那幾段之前會被當成翻完記住（整張少幾句）：免費模式翻過的重翻一次
     const MTC_VER = 11;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
-    // 手機版記在漫畫網站自己的 IndexedDB（mtSiteCache），整合包記在油猴的儲存空間
-    const siteCache = EDITION === 'manga' ? mtSiteCache(MTC_SITE_MAX) : null;
+    // 手機版記在漫畫網站自己的 IndexedDB，而且只記現在這一話的（mtSiteCache）；整合包記在油猴的儲存空間
+    const siteCache = EDITION === 'manga' ? mtSiteCache(MTC_SITE_MAX, () => strHash(location.pathname + location.search)) : null;
     const cacheRead = (k) => (siteCache ? siteCache.get(k) : store.get(k, null));
     function cacheGet(P) {
       let v = cacheRead(cacheKeyOf(P));
@@ -7817,7 +7858,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       watchPage();
       pageScan();
       pg.mo = new MutationObserver(() => { if (!pg.scanT) pg.scanT = later(() => { pg.scanT = 0; pageScan(); }, 500); });
-      pg.mo.observe(document.body || document.documentElement, { childList: true, subtree: true });
+      // 看整個網頁（不是只看 <body>）：換頁時把整個 <body> 換掉的網站，新的一頁的圖才會被發現
+      pg.mo.observe(document.documentElement, { childList: true, subtree: true });
       watchResources();
       if (!nearOn) { nearOn = true; listen(PAGE, 'pointermove', onNear, { passive: true }); }
       liveSet(true);
@@ -7859,7 +7901,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     function afterPageChange() {
       chip(true);
-      fabSync();
+      fabSafe();
       renderMenu();
       placeHover();
     }
@@ -7888,7 +7930,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     /* ---------- 狀態列：有工作時才出現、閒置後收起，並避開網站自己的按鈕 ---------- */
     let chipEl = null;
     let chipHideT = 0;
-    let placeAt = 0;
     function fixedUi(el) {
       let clickable = false;
       for (let e = el, up = 0; e && e !== document.body && up < 8; e = e.parentElement, up++) {
@@ -7948,20 +7989,26 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     /** 依序試左下、右下、右上、左上，放在沒有網站按鈕的角落 */
     function placeCorner(el, force) {
-      if (!el || (!force && Date.now() - placeAt < 1500)) return;
-      placeAt = Date.now();
+      if (!el || (!force && Date.now() - (el.placedAt || 0) < 1500)) return;
+      el.placedAt = Date.now();
       // 介面放大時（網頁整頁縮小顯示），大小和離邊緣的距離都跟著放大
       const z = uiZ;
       const w = (el.offsetWidth || 260) * z;
       const hh = (el.offsetHeight || 40) * z;
       const m = 16 * z;
+      // 手機上「譯」在最下面（最上面）那一帶時，狀態列實際上放在它的上面（下面）：要看的是那個位置有沒有網站的按鈕
+      const host = el !== fab && uiRoot ? uiRoot.host : null;
+      const lift = host ? (host.mtLift || 0) * z : 0;
+      const drop = host ? (host.mtDrop || 0) * z : 0;
       const corners = [['left', 'bottom'], ['right', 'bottom'], ['right', 'top'], ['left', 'top']];
       let pick = corners[0];
       for (const c of corners) {
         const x = c[0] === 'left' ? m : innerWidth - m - w;
-        const y = c[1] === 'bottom' ? innerHeight - m - hh : m;
+        const y = c[1] === 'bottom' ? innerHeight - m - hh - lift : m + drop;
         if (!siteUiAt(x, y, w, hh)) { pick = c; break; }
       }
+      el.corner = pick;
+      el.at = null;
       el.style.left = pick[0] === 'left' ? '16px' : 'auto';
       el.style.right = pick[0] === 'right' ? '16px' : 'auto';
       el.style.top = pick[1] === 'top' ? (TOUCH ? 'calc(16px + env(safe-area-inset-top, 0px))' : '16px') : 'auto';
@@ -8088,7 +8135,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         unlater(chipHideT);
         chipHideT = 0;
         chipEl.classList.add('is-on');
-        if (fab) fabSync();
       }
       if (!active && !pg.hidden && chipEl.classList.contains('is-on')) hideChipLater(4000);
       if (chipEl.classList.contains('is-on')) placeCorner(chipEl, force);
@@ -8102,7 +8148,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       unlater(chipHideT);
       chipHideT = 0;
       if (chipEl) chipEl.classList.remove('is-on');
-      fabSync();
     }
     /** 沒在翻譯時收起狀態列；滑鼠停在上面時先不收 */
     function hideChipLater(ms) {
@@ -8115,7 +8160,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const c = counts();
         if (hover || pg.hidden || c.busy || c.fixBusy || c.fixWait || c.seam || c.err) { hideChipLater(1500); return; }
         chipEl.classList.remove('is-on');
-        fabSync();
       }, ms);
     }
     // 收起後，滑鼠移到那個角落附近會再出現
@@ -8234,8 +8278,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
 
     /* ---------- 觸控裝置：「譯」按鈕 ---------- */
+    // 清單裡的網站一定有「譯」，而且一直留在畫面上：網頁上有沒有圖、有沒有在翻譯、狀態列有沒有出現都不收起來（狀態列會讓開）。
+    // 網站把我們的介面移出網頁（換頁時整頁重畫的網站）就放回去；跑到畫面外就放回來；兩指放大網頁時跟著看得到的範圍走。每 2 秒檢查一次（fabKeep）
     let fab = null;
-    let fabT = 0;
+    let fabProbe = null;
+    let fabKeepT = 0;
+    let fabNewAt = 0;
+    let fabHome = null; // 沒放大時，按鈕中心在畫面寬、高的幾成（放大時照這個位置跟著畫面走）
     /** 使用者拖過的位置（每個網站各自記住）：按鈕中心在畫面寬、高的幾成，轉向或縮放後還是在差不多的地方 */
     const fabSaved = () => {
       const p = (store.get('mt.fabPos', {}) || {})[HOST];
@@ -8249,42 +8298,125 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (keys.length > 200) keys.slice(0, keys.length - 200).forEach((k) => { delete m[k]; });
       store.set('mt.fabPos', m);
     }
+    /**
+     * 「譯」在畫面上的位置和大小（網頁的 px）。介面沒放大時直接量；介面放大時（網頁整頁縮小顯示，用 CSS zoom 放大）
+     * 各瀏覽器「量」到的數字不一樣（有的是放大前的，還會被捲動位置影響），改照我們自己放的位置算
+     */
+    function fabVis() {
+      const z = uiZ;
+      if (z === 1) {
+        const r = fab.getBoundingClientRect();
+        if (r.width > 0) return { left: r.left, top: r.top, width: r.width, height: r.height };
+      }
+      const w = (fab.offsetWidth || 52) * z;
+      const hh = (fab.offsetHeight || 52) * z;
+      const at = fab.at;
+      const c = fab.corner || ['left', 'bottom'];
+      return {
+        left: at ? at.l * z : (c[0] === 'left' ? 16 * z : innerWidth - 16 * z - w),
+        top: at ? at.t * z : (c[1] === 'top' ? 16 * z : innerHeight - 16 * z - hh),
+        width: w,
+        height: hh,
+      };
+    }
     /** 把「譯」的左上角放在畫面上的 (x, y)，不超出畫面 */
     function fabMoveTo(x, y) {
-      const r = fab.getBoundingClientRect();
-      const m = 8 * uiZ;
-      const cx = Math.max(m, Math.min(innerWidth - (r.width || 52) - m, x));
-      const cy = Math.max(m, Math.min(innerHeight - (r.height || 52) - m, y));
-      const set = (L, T) => Object.assign(fab.style, { left: L + 'px', top: T + 'px', right: 'auto', bottom: 'auto' });
-      // 介面放大（zoom）時 left／top 也會跟著放大：除回去；實際位置對不上（各瀏覽器處理 zoom 的方式不同）就照量到的比例再修正一次
-      const L = cx / uiZ;
-      const T = cy / uiZ;
-      set(L, T);
-      const r2 = fab.getBoundingClientRect();
-      if (L > 1 && T > 1 && (Math.abs(r2.left - cx) > 1 || Math.abs(r2.top - cy) > 1)) {
-        const fx = r2.left / L;
-        const fy = r2.top / T;
-        if (fx > 0.2 && fy > 0.2) set(cx / fx, cy / fy);
+      const z = uiZ;
+      const w = (fab.offsetWidth || 52) * z;
+      const hh = (fab.offsetHeight || 52) * z;
+      const m = 8 * z;
+      const cx = Math.max(m, Math.min(innerWidth - w - m, x));
+      const cy = Math.max(m, Math.min(innerHeight - hh - m, y));
+      // 介面放大（zoom）時 left／top 也會跟著放大：除回去
+      fab.at = { l: cx / z, t: cy / z };
+      fab.corner = null;
+      Object.assign(fab.style, { left: `${fab.at.l}px`, top: `${fab.at.t}px`, right: 'auto', bottom: 'auto' });
+    }
+    /** 「譯」放好之後：記下它在畫面的哪裡；它在最下面（最上面）那一帶時，狀態列和通知放到它的上面（下面），不會疊在一起 */
+    function fabPlaced() {
+      const host = uiRoot && uiRoot.host;
+      if (!host) return;
+      let lift = 0;
+      let drop = 0;
+      if (fab && fab.isConnected && !fab.zoomed && innerWidth > 0 && innerHeight > 0) {
+        const r = fabVis();
+        const z = uiZ;
+        const bottom = r.top + r.height;
+        fabHome = { x: (r.left + r.width / 2) / innerWidth, y: (r.top + r.height / 2) / innerHeight };
+        if (bottom > innerHeight - 140 * z) lift = Math.max(0, Math.round((innerHeight - r.top - 8 * z) / z));
+        else if (r.top < 140 * z) drop = Math.max(0, Math.round((bottom - 8 * z) / z));
       }
+      if (lift === host.mtLift && drop === host.mtDrop) return;
+      host.mtLift = lift;
+      host.mtDrop = drop;
+      if (lift) host.style.setProperty('--mt-lift', `${lift}px`); else host.style.removeProperty('--mt-lift');
+      if (drop) host.style.setProperty('--mt-drop', `${drop}px`); else host.style.removeProperty('--mt-drop');
     }
     let fabVp = '';
     /** 有拖過就放在記住的位置，沒有就放在角落（避開網站自己的按鈕） */
     function placeFab(force) {
-      if (!fab) return;
+      if (!fab || fab.zoomed || fab.classList.contains('is-drag')) return; // 放大中跟著畫面走、拖曳中跟著手指走
       const p = fabSaved();
-      if (!p) { placeCorner(fab, force); return; }
-      const vp = `${innerWidth}x${innerHeight}x${uiZ}`;
-      if (!force && vp === fabVp) return;
-      fabVp = vp;
-      const r = fab.getBoundingClientRect();
-      fabMoveTo(p.x * innerWidth - r.width / 2, p.y * innerHeight - r.height / 2);
+      if (!p) {
+        const at = fab.placedAt;
+        placeCorner(fab, force);
+        if (fab.placedAt === at) return; // 才剛看過，這次沒有重新選
+      } else {
+        const vp = `${innerWidth}x${innerHeight}x${uiZ}`;
+        if (!force && vp === fabVp) return;
+        fabVp = vp;
+        fabMoveTo(p.x * innerWidth - (fab.offsetWidth || 52) * uiZ / 2, p.y * innerHeight - (fab.offsetHeight || 52) * uiZ / 2);
+      }
+      fabPlaced();
+    }
+    /**
+     * 兩指放大網頁時，「固定」在畫面上的東西其實是固定在放大前的版面上：按鈕常常在看不到的地方（放大超過原本大小時還會跟著變大）。
+     * 看得到的範圍（visualViewport）比版面窄就是放大中：改成跟著看得到的範圍走，大小維持原來的樣子；回到沒放大就放回原位。
+     * 回傳現在是不是放大中
+     */
+    function fabZoom() {
+      if (!fab) return false;
+      const vv = window.visualViewport;
+      const s = vv ? vv.scale : 1;
+      // 版面有多寬：量固定在版面右下角的那個小點；量不到就用網頁的寬度
+      let lw = fabProbe && fabProbe.isConnected ? fabProbe.getBoundingClientRect().left : 0;
+      if (!(lw > 0)) lw = document.documentElement ? document.documentElement.clientWidth : 0;
+      const zoomed = !!vv && vv.width > 0 && vv.height > 0 && s > 0 && (lw > 0 ? vv.width < lw * 0.98 : s > 1.02);
+      if (!zoomed) {
+        if (fab.zoomed) {
+          fab.zoomed = false;
+          fab.style.transform = '';
+          fabVp = '';
+          placeFab(true);
+        }
+        return false;
+      }
+      const z = uiZ;
+      const t = s > 1.02 ? 1 / s : 1; // 放大超過原本大小：按鈕縮回去（比原本小的時候，介面本來就有另外放大）
+      const w = (fab.offsetWidth || 52) * z;
+      const hh = (fab.offsetHeight || 52) * z;
+      const home = fabHome || { x: 0.9, y: 0.9 };
+      const mx = w * t / 2 + 8 / s;
+      const my = hh * t / 2 + 8 / s;
+      const cx = vv.offsetLeft + Math.max(mx, Math.min(vv.width - mx, home.x * vv.width));
+      const cy = vv.offsetTop + Math.max(my, Math.min(vv.height - my, home.y * vv.height));
+      Object.assign(fab.style, { left: `${(cx - w / 2) / z}px`, top: `${(cy - hh / 2) / z}px`, right: 'auto', bottom: 'auto', transform: t === 1 ? '' : `scale(${t})` });
+      fab.at = null;
+      fab.corner = null;
+      if (!fab.zoomed) { fab.zoomed = true; fabPlaced(); }
+      return true;
+    }
+    /** 按鈕整個在畫面裡（轉向、網址列伸縮之後可能跑到外面） */
+    function fabSeen() {
+      const r = fabVis();
+      return r.left >= -1 && r.top >= -1 && r.left + r.width <= innerWidth + 1 && r.top + r.height <= innerHeight + 1;
     }
     /** 按住「譯」拖曳：移動超過一點點才算拖曳，放開後記住位置；沒有移動就是一般的點一下 */
     function fabDrag(el) {
       let st = null;
       el.addEventListener('pointerdown', (e) => {
-        if (e.button > 0) return;
-        const r = el.getBoundingClientRect();
+        if (e.button > 0 || el.zoomed) return; // 網頁放大中不拖（位置是跟著畫面算的）
+        const r = fabVis();
         st = { id: e.pointerId, x0: e.clientX, y0: e.clientY, l: r.left, t: r.top, moved: false };
         try { el.setPointerCapture(e.pointerId); } catch (_) { /* 舊瀏覽器 */ }
       });
@@ -8304,40 +8436,73 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         el.classList.remove('is-drag');
         if (!moved) return;
         el.dragAt = Date.now(); // 放開時跟著來的 click 不算點一下
-        const r = el.getBoundingClientRect();
+        if (el.zoomed) return; // 拖到一半網頁被放大：這次不記
+        const r = fabVis();
         const k = (v) => Math.round(Math.max(0, Math.min(1, v)) * 1000) / 1000;
         fabSave({ x: k((r.left + r.width / 2) / innerWidth), y: k((r.top + r.height / 2) / innerHeight) });
         fabVp = `${innerWidth}x${innerHeight}x${uiZ}`;
+        fabPlaced();
       };
       el.addEventListener('pointerup', end);
       el.addEventListener('pointercancel', end);
     }
-    /** 手機沒有滑鼠：還沒開始時按「譯」開始翻譯；翻譯中狀態列收起後，按「譯」把狀態列叫出來。按住可以拖到別的地方 */
+    function fabGone() {
+      if (fabProbe) { fabProbe.remove(); fabProbe = null; }
+      if (fab) { fab.remove(); fab = null; fabPlaced(); }
+    }
+    /**
+     * 手機沒有滑鼠，全靠「譯」：還沒開始時按它開始翻譯；翻譯中按它把狀態列叫出來（收起狀態列按狀態列上的 ×）。按住可以拖到別的地方。
+     * 不在了就做一個、被移出網頁就放回去、跑到畫面外就放回來
+     */
     function fabSync() {
-      const chipHidden = pg.on && (!chipEl || !chipEl.classList.contains('is-on'));
-      const want = isTouch && (pg.on ? chipHidden : siteOn() && [...document.images].some((img) => img.naturalWidth >= 200 && img.naturalHeight >= 200));
-      if (want && !fab) {
-        const r = ui();
-        if (!r) return;
+      if (!isTouch || stopped || !siteOn()) {
+        if (fabKeepT) { clearInterval(fabKeepT); fabKeepT = 0; } // 不在清單裡的網站不用一直檢查（加進清單時 onConfig 會再來）
+        fabGone();
+        return;
+      }
+      fabKeep();
+      const r = ui(); // 我們的介面被網站移出網頁時，這裡會放回去
+      if (!r) return;
+      if (!fab) {
         fab = h('button', {
           type: 'button', class: 'mt-fab', text: '譯', 'aria-label': '漫畫翻譯（按住可以拖曳）',
           onclick: (e) => {
             e.stopPropagation();
-            if (Date.now() - (fab.dragAt || 0) < 600) return;
-            if (pg.on) { pg.chipOff = false; chip(true); fabSync(); } else { warmLocal(); pageToggle(true); }
+            if (Date.now() - (fab.dragAt || 0) < 600) return; // 拖曳放開時跟著來的點擊不算
+            if (pg.on) { pg.chipOff = false; chip(true); } else { warmLocal(); pageToggle(true); }
           },
         });
         fabDrag(fab);
-        r.root.append(fab);
-        placeFab(true);
-      } else if (!want && fab) { fab.remove(); fab = null; }
+        fabProbe = h('i', { class: 'mt-vp', 'aria-hidden': 'true' });
+        fabNewAt = Date.now();
+      }
+      if (fabProbe.parentNode !== r.root) r.root.append(fabProbe);
+      if (fab.parentNode !== r.root) { r.root.append(fab); fabVp = ''; placeFab(true); }
+      if (fabZoom()) return;
+      if (!fabSeen()) { fabVp = ''; placeFab(true); }
+      // 剛打開網頁時網站自己的按鈕還沒畫好：頭 20 秒多看幾次要不要換角落（之後只在捲動時看）
+      else if (Date.now() - fabNewAt < 20000) placeFab(false);
+      fabPlaced();
     }
-    function fabWatch() {
-      if (!isTouch || !siteOn()) return;
-      unlater(fabT);
-      const until = Date.now() + 60000;
-      const tick = () => { fabSync(); if (!fab && Date.now() < until) fabT = later(tick, 2000); };
-      fabT = later(tick, 800);
+    let lastUrl = location.pathname + location.search;
+    let fabErr = false;
+    /** 「譯」出了意料之外的錯也不能拖累別的：記到診斷報告裡（只記第一次），下一次檢查再試 */
+    function fabSafe() {
+      try { fabSync(); } catch (e) { if (!fabErr) { fabErr = true; mtWarn('漫畫翻譯（「譯」按鈕）', e); } }
+    }
+    function fabKeep() {
+      if (fabKeepT) return;
+      fabKeepT = setInterval(() => {
+        if (stopped) return;
+        fabSafe();
+        // 換頁不重新載入網頁的網站：網址變了就當作打開了新的一頁——上一頁記住的翻譯忘掉，要不要自動開始翻譯重新看一次
+        const u = location.pathname + location.search;
+        if (u === lastUrl) return;
+        lastUrl = u;
+        fabNewAt = Date.now();
+        if (siteCache) siteCache.sync();
+        autoWatch();
+      }, 2000);
     }
 
     /* ---------- 鍵盤、滑鼠 ---------- */
@@ -8370,10 +8535,23 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       pageToggle();
     }, true);
     // 網站的浮動按鈕常常捲動後才出現：捲動時偶爾重新選位置
-    listen(PAGE, 'scroll', () => { if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); if (fab) placeFab(false); }, { capture: true, passive: true });
-    // 轉向、兩指縮放之後：拖過的「譯」放回記住的位置（介面大小也可能變了）
-    if (window.visualViewport) listen(window.visualViewport, 'resize', () => { if (fab && fabSaved()) placeFab(false); }, { passive: true });
-    listen(PAGE, 'resize', () => { if (fab && fabSaved()) placeFab(false); }, { passive: true });
+    listen(PAGE, 'scroll', () => { if (fab) placeFab(false); if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); }, { capture: true, passive: true });
+    // 轉向、兩指縮放、放大後移動畫面：放大中「譯」跟著看得到的範圍走；沒放大時拖過的放回記住的位置（介面大小也可能變了）
+    let vvRaf = 0;
+    const onViewport = () => {
+      if (vvRaf || !fab) return;
+      vvRaf = requestAnimationFrame(() => {
+        vvRaf = 0;
+        if (!fab || stopped) return;
+        syncUiZoom(); // 介面要不要放大先算好（位置是照放大後的大小算的）
+        if (!fabZoom()) { placeFab(false); fabPlaced(); }
+      });
+    };
+    if (window.visualViewport) {
+      listen(window.visualViewport, 'resize', onViewport, { passive: true });
+      listen(window.visualViewport, 'scroll', onViewport, { passive: true });
+    }
+    listen(PAGE, 'resize', onViewport, { passive: true });
 
     /* ---------- 回報問題：這一頁的翻譯狀況整理成一段文字（手機上看不到主控台，複製起來貼給開發者） ---------- */
     function diagText(test) {
@@ -8436,6 +8614,15 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         gloss: [mtGlossGet(seriesKey()).length, Object.keys(mtGlossAll()).length],
         // 油猴的儲存空間：幾筆、大約幾 KB（手機版才量得到），記住幾張翻過的圖；腳本是網頁載入多久後才開始執行的
         st: mtStoreStat(siteCache), boot: BOOT,
+        // 「譯」按鈕：在不在網頁上、量到的位置（hr 是我們整個介面的原點，正常是 0,0）、怎麼放的（角落／拖過／放大中跟著畫面）、
+        // 狀態列讓開多少、每 2 秒的檢查有沒有在跑、出過錯沒；vp：看得到的範圍（左、上、寬、高）和版面的寬度；pn：記憶體裡記了幾張圖
+        fab: fab ? {
+          conn: fab.isConnected, host: !!(uiRoot && uiRoot.host.isConnected), r: R(fab.getBoundingClientRect()), hr: uiRoot ? R(uiRoot.host.getBoundingClientRect()).slice(0, 2) : null,
+          at: fab.zoomed ? 'zoom' : fab.corner ? fab.corner.join('-') : 'free',
+          lift: uiRoot ? [uiRoot.host.mtLift || 0, uiRoot.host.mtDrop || 0] : null, keep: !!fabKeepT, err: fabErr,
+        } : (isTouch && siteOn() ? 'none' : 'off'),
+        vp: vv ? [Math.round(vv.offsetLeft), Math.round(vv.offsetTop), Math.round(vv.width), Math.round(vv.height), fabProbe && fabProbe.isConnected ? Math.round(fabProbe.getBoundingClientRect().left) : null] : null,
+        pn: pages.size,
         // 每張圖：狀態、幾句、幾個圖片元素、g = 猜的、語言和認字信心（c92 = 平均 92）、幾個尖刺框（喊叫）
         pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => {
           const cs = P.blocks.map((b) => b.conf).filter((c) => typeof c === 'number');
@@ -8589,15 +8776,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
 
     syncHover();
-    fabWatch();
+    fabSafe();
     autoWatch();
 
     return {
       onConfig() {
         syncHover();
         placeHover();
-        fabSync();
-        fabWatch();
+        fabSafe();
         autoWatch();
         setStatus();
         chainFail = 0;
@@ -8639,6 +8825,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         cancelAnimationFrame(alignRaf);
         cancelAnimationFrame(statusRaf);
         cancelAnimationFrame(nearRaf);
+        cancelAnimationFrame(vvRaf);
+        clearInterval(fabKeepT);
         clearInterval(tick);
         srcMo.disconnect();
         ovIO.disconnect();
@@ -8652,7 +8840,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         pages.clear();
         if (hv) hv.el.remove();
         if (chipEl) chipEl.remove();
-        if (fab) fab.remove();
+        fabGone();
         resetWorkers();
       },
     };
