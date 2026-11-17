@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.6.1
+// @version      1.6.2
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、Anime1 卡片介面、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -45,6 +45,11 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.6.2  漫畫翻譯加快一點、比較省記憶體：判斷原文語言時，沒有字的圖（封面）不再多下載、載入其他語言的模型；很長的旁白一批少認幾行，不會一次佔掉上百 MB。
+ *        認字程式和讀圖同時準備（iPhone、iPad 維持原本的順序），每次打開網頁第一句譯文快一點；重看翻過的一話時，接縫上沒有字的不再重抓圖、重新認字。
+ *        Gemini 被限制過而調低的每分鐘次數，順利時會慢慢調回預設值（之前只降不升）；Claude 修正不會因為思考佔掉字數上限而漏修幾句；
+ *        診斷報告多了認字各階段花的時間（只寫在報告裡，畫面上不顯示）。
+ *        手機版 1.5.31、1.5.32 的改動也一起進來：觸控裝置的「譯」一直留在畫面上；換頁不重新載入的網站，換頁後也會自動開始、找得到新的圖；看很多話之後，已經不在網頁上的圖不再佔記憶體
  * 1.6.1  Anime1 卡片介面也支援 anime1.in（卡片牆、觀看紀錄、集數按鈕、續播；換分流也會接著播）。
  *        anime1.in 是另一個網站，不是 anime1.me 換網址，觀看紀錄、播放進度兩個網站分開記；它的播放器封面本來就是那部動畫的，不另外換
  * 1.6.0  新功能：Anime1 卡片介面（anime1.me）。原本獨立的腳本「Anime1 視覺化卡片介面」整合進來：動畫列表改成封面卡片牆（封面自動到 bgm.tv、AniList 找）、
@@ -170,6 +175,8 @@
   // 需要碰到網頁本身的 JavaScript（history、visibilityState）時用 PAGE
   const PAGE = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
   const IS_TOP = (() => { try { return window.top === window.self; } catch (_) { return false; } })();
+  /** 腳本開始執行時，網頁已經載入多久（毫秒）、載入到哪個階段：油猴（或瀏覽器的延伸功能）太晚才載入腳本時，診斷報告看得出來 */
+  const BOOT = (() => { try { return [Math.round(performance.now()), document.readyState]; } catch (_) { return [0, '']; } })();
   const HOST = (location.hostname || '').toLowerCase();
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const toPage = (fn) => (typeof exportFunction === 'function' ? exportFunction(fn, PAGE) : fn); // Firefox 相容
@@ -233,7 +240,7 @@
 
   /** 手機（或很窄的視窗）：設定面板從下面滑上來、按鈕加大、輸入框的字 16px（iPhone 點了才不會把畫面放大）；p 加在每個選擇器前面 */
   const NARROW_CSS = (p) => `
-${p}.mb-toasts { bottom: 78px; }
+${p}.mb-toasts { bottom: calc(78px + var(--mt-lift, 0px)); }
 ${p}.mb-backdrop { align-items: flex-end; padding: 0; }
 ${p}.mb-panel { width: 100%; max-height: 92vh; max-height: 92dvh; border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
 ${p}.mb-head { padding: 12px 6px 12px 16px; }
@@ -263,7 +270,7 @@ ${p}.mb-foot { padding: 10px 16px; }
 button, input, select, output { font: inherit; }
 
 /* ---------- 通知 ---------- */
-.mb-toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; flex-direction: column;
+.mb-toasts { position: fixed; left: 50%; bottom: calc(24px + var(--mt-lift, 0px)); transform: translateX(-50%); display: flex; flex-direction: column;
   align-items: center; gap: 8px; width: max-content; max-width: calc(100vw - 32px); pointer-events: none; font-family: var(--font); }
 .mb-toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 540px; padding: 10px 8px 10px 16px;
   border-radius: 12px; background: var(--ink); color: #FFFFFF; font-size: 13.5px; line-height: 1.45;
@@ -404,7 +411,8 @@ button, input, select, output { font: inherit; }
 .mt-hover button[hidden] { display: none; }
 .mt-hover button.is-busy { cursor: progress; }
 .mt-hover button:focus-visible { outline: 2px solid #9DBAFF; outline-offset: -2px; border-radius: 16px; }
-.mt-chip { position: fixed; left: 16px; bottom: 16px; display: flex; align-items: center; gap: 4px; max-width: calc(100vw - 32px);
+/* --mt-lift／--mt-drop：手機上「譯」一直留在畫面上，它在最下面（最上面）那一帶時，狀態列和通知放在它的上面（下面） */
+.mt-chip { position: fixed; left: 16px; bottom: 16px; margin: var(--mt-drop, 0px) 0 var(--mt-lift, 0px); display: flex; align-items: center; gap: 4px; max-width: calc(100vw - 32px);
   height: 32px; padding: 0 3px 0 12px; box-sizing: border-box; border-radius: 16px; background: rgba(15, 22, 30, .86);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); color: #FFFFFF; font-family: var(--font); font-size: 12.5px;
   font-weight: 600; line-height: 1; box-shadow: 0 6px 18px rgba(0, 0, 0, .28); opacity: 0; pointer-events: none;
@@ -431,7 +439,9 @@ button, input, select, output { font: inherit; }
   box-shadow: 0 6px 18px rgba(0, 0, 0, .3); touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   transition: background-color .15s, box-shadow .15s; }
 .mt-fab.is-drag { background: rgba(15, 22, 30, .94); box-shadow: 0 0 0 3px rgba(157, 186, 255, .55), 0 12px 28px rgba(0, 0, 0, .42); cursor: grabbing; }
-@media (max-width: 640px) { .mb-toasts { bottom: 78px; } }
+/* 看不見的小點，固定在「版面」的右下角：量它的位置就知道「固定在畫面上」的東西是照多大的版面排的（兩指放大後，版面比看得到的範圍大） */
+.mt-vp { position: fixed; right: 0; bottom: 0; width: 0; height: 0; visibility: hidden; pointer-events: none; }
+@media (max-width: 640px) { .mb-toasts { bottom: calc(78px + var(--mt-lift, 0px)); } }
 
 /* ---------- 手機：手指好按、字不會太小 ---------- */
 @media (hover: none) and (pointer: coarse) {
@@ -2043,6 +2053,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
   const TESS_WORKER = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/worker.min.js';
   const TESS_CORE = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@7.0.0';
   const MTC_MAX = 400; // 最多記住幾張圖的翻譯
+  const MTC_SITE_MAX = 200; // 手機版：只記現在這一話的，最多幾張（記在網站自己的 IndexedDB）
   // 免費模式同時開幾個文字辨識程式（看電腦有幾個核心，最多 3 個）
   const MT_TESS_N = Math.max(1, Math.min((() => { try { return matchMedia('(hover: none)').matches; } catch (_) { return false; } })() ? 2 : 3,
     Math.floor(((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2) / 2)));
@@ -3607,6 +3618,150 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const keys = (await mtIdbDo('readonly', (st) => st.getAllKeys())) || [];
     for (const k of keys) if (!keep.has(k)) mtIdbDo('readwrite', (st) => st.delete(k));
   }
+  /**
+   * 手機版：翻過的圖記在漫畫網站自己的 IndexedDB（整合包照舊記在油猴的儲存空間），而且只記「現在這個網頁（這一話）」的：
+   * 換到別的網頁（下一話）就把之前記的全部忘掉，回頭看要重新翻譯。佔的空間最多就是一話。
+   * 留著這一話的，是因為手機常常把分頁收掉重新載入（或自己重新整理）：同一話不用整個重翻、重花額度。
+   * pageKey() 回傳現在這個網頁的代號（網址的路徑＋查詢字串；換頁不重新載入的網站，網址變了就算換頁）。
+   * 查、寫跟原本一樣是同步的：第一次要用時把記住的讀進記憶體（ready() 回傳的 Promise 等它），之後都從記憶體拿，寫的時候順便存回去。
+   * IndexedDB 不能用（或太慢）時只記在記憶體，不影響翻譯。
+   * 每一筆存成 { t: 記住的時間, s: JSON 字串, u: 哪一個網頁 }：字串比物件省記憶體，拿出來時再解開（每次都是新的一份，跟油猴的儲存一樣）
+   */
+  function mtSiteCache(max, pageKey) {
+    const mem = new Map();
+    let cur = null; // 記憶體裡現在留的是哪一個網頁的
+    let dbP = null;
+    let failAt = 0;
+    function open() {
+      if (dbP) return dbP;
+      if (Date.now() - failAt < 30000) return Promise.resolve(null); // 剛剛才打不開：先不要一直試
+      const p = new Promise((resolve) => {
+        let req = null;
+        try { req = indexedDB.open('maoboo-mtc', 1); } catch (_) { resolve(null); return; }
+        let given = false; // 已經回報打不開了，之後才打開的連線不留著
+        req.onupgradeneeded = () => { try { req.result.createObjectStore('pages'); } catch (_) { /* 已經有了 */ } };
+        req.onsuccess = () => {
+          const db = req.result;
+          if (given) { try { db.close(); } catch (_) { /* 已經關了 */ } return; }
+          given = true;
+          // 連線斷了（手機把瀏覽器放到背景後常發生）、別的分頁要升級：下次要用時重新打開
+          const lost = () => { if (dbP === p) dbP = null; try { db.close(); } catch (_) { /* 已經關了 */ } };
+          db.onclose = lost;
+          db.onversionchange = lost;
+          resolve(db);
+        };
+        req.onerror = () => { given = true; resolve(null); };
+        req.onblocked = () => { given = true; resolve(null); };
+      });
+      dbP = p;
+      p.then((db) => { if (!db && dbP === p) { dbP = null; failAt = Date.now(); } });
+      return p;
+    }
+    /** 在一個交易裡做事：fn 回傳的函式在交易完成後呼叫，拿結果；失敗一律回 null，不丟錯 */
+    const run = (mode, fn) => open().then((db) => new Promise((resolve) => {
+      if (!db) { resolve(null); return; }
+      try {
+        const tx = db.transaction('pages', mode);
+        const out = fn(tx.objectStore('pages'));
+        tx.oncomplete = () => resolve(typeof out === 'function' ? out() : null);
+        tx.onerror = () => resolve(null);
+        tx.onabort = () => resolve(null);
+      } catch (_) {
+        dbP = null; // 連線已經斷了：下次重新打開
+        resolve(null);
+      }
+    }));
+    const drop = (keys) => { if (keys.length) run('readwrite', (st) => { for (const k of keys) st.delete(k); }); };
+    /** 換了網頁（下一話）：之前記的都忘掉，記憶體和資料庫都是 */
+    function roll() {
+      const now = pageKey();
+      if (now === cur) return;
+      cur = now;
+      const gone = [];
+      for (const [k, e] of mem) if (e.u !== now) { mem.delete(k); gone.push(k); }
+      drop(gone);
+    }
+    /** 一話的圖比上限還多：最舊的先忘掉（多清一成，不用每記一張就清一次） */
+    function trim() {
+      if (mem.size <= max) return;
+      const old = [...mem.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, mem.size - max + Math.ceil(max / 10)).map((e) => e[0]);
+      for (const k of old) mem.delete(k);
+      drop(old);
+    }
+    let started = false;
+    let loading = null;
+    return {
+      /** 還沒讀完：回傳 Promise（讀完、或等太久就結束）；讀完了回傳 null。翻譯第一張圖之前等它 */
+      ready() {
+        if (started) return loading;
+        started = true;
+        const load = run('readonly', (st) => {
+          const ks = st.getAllKeys();
+          const vs = st.getAll();
+          return () => [ks.result || [], vs.result || []];
+        }).then((got) => {
+          if (!got) return;
+          roll();
+          const gone = [];
+          got[0].forEach((k, i) => {
+            const v = got[1][i];
+            // 別的網頁（上一話）留下來的、格式不對的：刪掉
+            if (!v || typeof v.s !== 'string' || v.u !== cur) gone.push(k);
+            else if (!mem.has(k)) mem.set(k, { t: Number(v.t) || 0, s: v.s, u: v.u });
+          });
+          drop(gone);
+          trim();
+        }).catch(() => { /* 讀不到就當作沒有記住 */ });
+        // IndexedDB 卡住時不讓翻譯一直等：最多等 2.5 秒就先翻，之後讀到了照樣補進來
+        loading = Promise.race([load, new Promise((resolve) => setTimeout(resolve, 2500))]).then(() => { loading = null; });
+        return loading;
+      },
+      get(k) {
+        roll();
+        const e = mem.get(k);
+        if (!e) return null;
+        try { return JSON.parse(e.s); } catch (_) { return null; }
+      },
+      put(k, v) {
+        roll();
+        const e = { t: Number(v && v.t) || Date.now(), s: JSON.stringify(v), u: cur };
+        mem.set(k, e);
+        run('readwrite', (st) => { st.put(e, k); });
+        trim();
+      },
+      del(keys) {
+        for (const k of keys) mem.delete(k);
+        drop(keys);
+      },
+      /** 網址變了（換頁不重新載入網頁的網站）：有在用的話，馬上把上一頁記的忘掉，不用等下一次翻譯 */
+      sync() { if (started) roll(); },
+      size: () => mem.size,
+    };
+  }
+  /**
+   * 記憶體裡記的圖太多時要忘掉哪些：只挑已經不在網頁上（沒有 <img> 在顯示它）、沒有在翻譯、也沒在等 AI 修正的，
+   * 從最早的開始，忘到剩 keep 張為止（還在網頁上的、正在處理的都不動，所以可能剩得比 keep 多）
+   */
+  function mtPrunePick(list, keep) {
+    const idle = list.filter((P) => !P.els.size && P.state !== 'busy' && P.fix !== 'busy' && P.fix !== 'wait').sort((a, b) => a.order - b.order);
+    return idle.slice(0, Math.max(0, Math.min(idle.length, list.length - keep)));
+  }
+  /** 診斷用：油猴的儲存空間有幾筆、大約幾 KB（手機版才量得到；太大的話手機上的油猴會跑不動），和記住幾張翻過的圖 */
+  function mtStoreStat(site) {
+    let keys = null;
+    let kb = null;
+    try {
+      if (typeof GM_listValues === 'function') {
+        const ks = GM_listValues() || [];
+        let n = 0;
+        for (const k of ks) { const v = GM_getValue(k); n += k.length + (v === undefined ? 0 : JSON.stringify(v).length); }
+        keys = ks.length;
+        kb = Math.round(n / 1024);
+      }
+    } catch (_) { /* 量不到就算了 */ }
+    const idx = store.get('mtc.idx', null);
+    return [keys, kb, site ? site.size() : Array.isArray(idx) ? idx.length : 0];
+  }
   async function mtSha256(buf) {
     if (typeof crypto === 'undefined' || !crypto.subtle) return '';
     const d = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
@@ -4449,9 +4604,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       items.sort((a, b) => a.tw - b.tw);
       const res = new Array(boxes.length);
       for (let k = 0; k < items.length;) {
-        // 寬度差不多的一起認（補邊比較少）
+        // 寬度差不多的一起認（補邊比較少）。很長的行一批少放幾個（行數 × 寬度不超過 4096）：
+        // 模型的輸出是「行數 × 寬度 × 字典大小」，8 行長的旁白一起認會一次佔掉上百 MB，手機容易記憶體不足；寬度 512 以下的照舊一批 8 個
         const grp = [];
-        while (k < items.length && grp.length < 8 && (!grp.length || items[k].tw <= grp[0].tw * 2.5)) grp.push(items[k++]);
+        while (k < items.length && grp.length < 8 && (!grp.length || (items[k].tw <= grp[0].tw * 2.5 && (grp.length + 1) * Math.max(160, items[k].tw) <= 4096))) grp.push(items[k++]);
         const BW = Math.max(160, grp[grp.length - 1].tw);
         const N = grp.length;
         const plane = HH * BW;
@@ -4538,12 +4694,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           await load(m.key, m.bytes, m.dict, m.langs);
           post({ type: 'ok', id: m.id });
         } else if (m.type === 'ocr') {
+          // 診斷用：各階段花多久（毫秒）。只在「複製診斷資訊」時才量，只寫進診斷報告的文字，畫面上不顯示
+          const tm = m.opts && m.opts.stats ? [performance.now()] : null;
           const bmp = await createImageBitmap(m.blob);
           try {
+            if (tm) tm.push(performance.now());
             const boxes = m.boxes || await detect(bmp, m.opts || {});
+            if (tm) tm.push(performance.now());
             if (m.opts && m.opts.detOnly) { post({ type: 'ok', id: m.id, boxes, stats: typeof m.opts.stats === 'object' ? m.opts.stats : undefined }); return; }
             post({ type: 'progress', id: m.id, frac: 0.4 });
             const lines = boxes.length ? await recognize(bmp, boxes, m.rec, (f) => post({ type: 'progress', id: m.id, frac: 0.4 + 0.6 * f }), m.opts || {}) : [];
+            if (tm) tm.push(performance.now());
             // 對話框：只用認得出字的字框來找（放射狀的光線、花紋被當成字框時，常認成 TTT、lll 這種字，不算）
             const real = (t) => {
               const c = String(t || '').replace(/[\s\p{P}\p{S}]/gu, '');
@@ -4556,6 +4717,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
             // 其他有認出東西的字框（Y—?、單一個字母）：在對話框裡面的話一起蓋白底
             const bubs = bubbles(bmp, boxes.filter((b, i) => sure(i)), boxes.filter((b, i) => !sure(i) && lines[i] && lines[i].conf >= 0.3 && /[\p{L}\p{N}]/u.test(lines[i].text || '')));
             const stats = m.opts && typeof m.opts.stats === 'object' ? m.opts.stats : undefined;
+            // dec：圖片解碼；det：找字；rec：認字；bub：找對話框
+            if (tm && stats) {
+              tm.push(performance.now());
+              const dt = (i) => Math.round(tm[i + 1] - tm[i]);
+              stats.t = { dec: dt(0), det: dt(1), rec: dt(2), bub: dt(3) };
+            }
             post({ type: 'ok', id: m.id, boxes, bubbles: bubs, lines: boxes.map((b, i) => Object.assign({}, b, lines[i])), stats });
           } finally { if (bmp.close) bmp.close(); }
         }
@@ -5504,9 +5671,18 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           key: k, url, els: new Set(), gen: 0, state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', step: '', fix: '', lang: '', w0: 0, h0: 0,
           engines: new Set(), shown: true, order: order++, noRef: false, langP: null, started: 0, queued: false, guess: false, userCancel: false,
         };
+        if (pages.size >= 400) prunePages(); // 先清再加：剛做好的這一張還沒連上 <img>，不能被當成「已經不在網頁上」清掉
         pages.set(k, P);
       } else if (P.state !== 'busy') P.url = url; // 有簽章的網址會更新
       return P;
+    }
+    /** 換頁不重新載入網頁的網站看久了，會累積很多已經不在網頁上的圖：滿 400 張時忘掉一些（留 300 張，見 mtPrunePick） */
+    function prunePages() {
+      for (const P of mtPrunePick([...pages.values()], 300)) {
+        P.gen++;
+        if (P.fixHold) { unlater(P.fixHold); P.fixHold = 0; }
+        pages.delete(P.key);
+      }
     }
     function bindImg(img) {
       const url = mtRealUrl(img);
@@ -5564,7 +5740,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     function resetPage(P) {
       P.gen++;
       if (P.fixHold) { unlater(P.fixHold); P.fixHold = 0; }
-      Object.assign(P, { state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', step: '', fix: '', shown: true, langP: null, queued: false, cutT: false, cutB: false, seamExt: null });
+      Object.assign(P, { state: 'idle', blocks: [], done: 0, total: 0, note: '', error: '', step: '', fix: '', shown: true, langP: null, queued: false, cutT: false, cutB: false, seamExt: null, snT: false, snB: false });
       render(P);
       setStatus();
     }
@@ -5738,6 +5914,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         for (const b of prim) { const m = mir.find((x) => x.src === b.src); if (m) { b.twin = m; b.twinP = L; } }
         return true;
       }
+      // 之前（快取裡）已經認過這個接縫、上面沒有字：不用再重抓兩張圖、重新認一次
+      if (U.snB && L.snT) return false;
       const code = MT_OCR_OF[(U.blocks.concat(L.blocks).find((b) => b.lang) || {}).lang] || U.lang || L.lang;
       if (!code || !MT_LANG[code]) return false;
       seamRun++;
@@ -5792,7 +5970,16 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (cfg().sfx !== 'translate') groups = groups.filter((x) => !mtIsSfx(x, groups, code, W));
       // 接縫上的字：範圍跨過接縫、或貼著接縫的（對話框的話看整個框）
       const seam = groups.filter((x) => x.y0 < A + 3 && x.y1 > A - 3);
-      if (!seam.length) return false;
+      if (!seam.length) {
+        // 接縫上沒有字：記下來（跟著這兩張圖的翻譯一起記住），重看這一話時不用再重抓整張圖、重新認字
+        U.snB = true;
+        L.snT = true;
+        // 只更新免費模式翻的（記住的結果本來就是這樣存的）；其他的只記在這次開啟期間
+        for (const P of [U, L]) {
+          if (P.w0 && !P.error && P.state === 'done' && (P.engines.has('free') || P.engines.has('ms'))) cachePut(P, 'free', P.w0, P.h0, false, !fixLines(P).length);
+        }
+        return false;
+      }
       const zh = await mtFreeTranslate(seam.map((x) => x.text), code);
       if (U.gen !== gu || L.gen !== gl) return false;
       const inU = (x) => ({ x0: x.x0 / W, x1: x.x1 / W, y0: (HU - A + x.y0) / HU, y1: (HU - A + x.y1) / HU });
@@ -5963,10 +6150,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     // v11：免費翻譯一時被擋（HTTP 429）時，漏翻的那幾段之前會被當成翻完記住（整張少幾句）：免費模式翻過的重翻一次
     const MTC_VER = 11;
     const cacheKeyOf = (P, ver = 'v' + MTC_VER) => 'mtc.' + strHash([location.host, P.key, cfg().sfx, ver].join('|'));
+    // 手機版記在漫畫網站自己的 IndexedDB，而且只記現在這一話的（mtSiteCache）；整合包記在油猴的儲存空間
+    const siteCache = EDITION === 'manga' ? mtSiteCache(MTC_SITE_MAX, () => strHash(location.pathname + location.search)) : null;
+    const cacheRead = (k) => (siteCache ? siteCache.get(k) : store.get(k, null));
     function cacheGet(P) {
-      let v = store.get(cacheKeyOf(P), null);
+      let v = cacheRead(cacheKeyOf(P));
       for (let ver = MTC_VER - 1; ver >= 2 && !v; ver--) {
-        const old = store.get(cacheKeyOf(P, 'v' + ver), null);
+        const old = cacheRead(cacheKeyOf(P, 'v' + ver));
         if (old && old.v === ver && old.m && old.m !== 'free') v = old;
       }
       if (!v || !(v.v >= 2 && v.v <= MTC_VER) || !Array.isArray(v.b)) return null;
@@ -5975,7 +6165,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (img.complete && img.naturalWidth && v.w && v.h && Math.abs(img.naturalWidth / img.naturalHeight - v.w / v.h) > 0.02) return null;
       }
       return {
-        m: v.m || '', t: v.t || 0, blk: !!v.blk, fx: !!v.fx, w: v.w || 0, h: v.h || 0, ct: !!v.ct, cb: !!v.cb,
+        m: v.m || '', t: v.t || 0, blk: !!v.blk, fx: !!v.fx, w: v.w || 0, h: v.h || 0, ct: !!v.ct, cb: !!v.cb, sn: Number(v.sn) || 0,
         ex: Array.isArray(v.ex) && v.ex.length === 2 ? v.ex.map((x) => Math.min(1, Math.max(0, Number(x) || 0))) : null,
         blocks: v.b.map((a) => ({ x0: a[0], y0: a[1], x1: a[2], y1: a[3], zh: String(a[4] || ''), vertical: !!a[5], lang: a[6] || '', src: a[7] || '',
           bub: !!a[8], lh: Number(a[9]) || 0, bg: typeof a[10] === 'string' ? a[10] : '', shape: typeof a[11] === 'string' ? a[11] : '', rows: Array.isArray(a[12]) ? a[12] : null,
@@ -5985,9 +6175,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     function cachePut(P, model, w, h, blk, fx) {
       const k = cacheKeyOf(P);
       const r4 = (n) => Math.round(n * 10000) / 10000;
-      store.set(k, { v: MTC_VER, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, ex: P.seamExt ? P.seamExt.map(r4) : 0,
+      // sn：接縫已經認過、上面沒有字（1 = 上緣、2 = 下緣）
+      const val = { v: MTC_VER, t: Date.now(), m: model, w, h, blk: blk ? 1 : 0, fx: fx ? 1 : 0, ct: P.cutT ? 1 : 0, cb: P.cutB ? 1 : 0, sn: (P.snT ? 1 : 0) | (P.snB ? 2 : 0), ex: P.seamExt ? P.seamExt.map(r4) : 0,
         b: P.blocks.map((b) => [r4(b.x0), r4(b.y0), r4(b.x1), r4(b.y1), b.zh, b.vertical ? 1 : 0, b.lang, b.src || '', b.bub ? 1 : 0, r4(b.lh || 0), b.bg || '', b.shape || '', b.rows || 0,
-          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0) | (b.spiky ? 128 : 0) | (b.list ? 256 : 0), b.msrc || '']) });
+          (b.ct ? 1 : 0) | (b.cb ? 2 : 0) | (b.blank ? 4 : 0) | (b.xs ? 8 : 0) | (b.fixed ? 16 : 0) | (b.seam ? 32 : 0) | (b.mirror ? 64 : 0) | (b.spiky ? 128 : 0) | (b.list ? 256 : 0), b.msrc || '']) };
+      if (siteCache) { siteCache.put(k, val); return; }
+      store.set(k, val);
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       idx = idx.filter((x) => x !== k);
@@ -6306,7 +6499,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         : { type: 'text', text: x.text }));
       const body = {
         model,
-        max_tokens: opts.maxTokens || 8192,
+        // 上限包含模型的思考（這幾個模型預設都會先思考再回答）：設太低會在譯文還沒寫完就被截斷，那幾句就沒修正到。
+        // 這只是上限，實際用多少算多少，調高不會多花錢
+        max_tokens: Math.max(opts.maxTokens || 8192, 16000),
         system: opts.system || (mtSystemPrompt(cfg().sfx === 'translate')
           + '\nAnswer with JSON only, in the form {"items":[{"image":1,"box_2d":[ymin,xmin,ymax,xmax],"lang":"en","vertical":false,"zh":"..."}]}.'),
         messages: [{ role: 'user', content }],
@@ -6572,7 +6767,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     /* ---------- 免費模式的認字：PaddleOCR（背景執行緒，同時開幾個；載入失敗才用 Tesseract） ---------- */
     // lite：英文用省記憶體的 tiny 模型（iPhone 一開始就用；其他裝置載入 small 記憶體不足時改用，並記住）
     // bad：這個模型載入不了（例如日文的大模型在 iPhone 記憶體不足）：只有那個語言改用 Tesseract，其他語言照常用 PaddleOCR
-    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [], checked: {}, bad: {}, lite: IOS || !!store.get('mt.pdLite', false) };
+    const pd = { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', gen: 0, queue: [], checked: {}, bad: {}, warm: null, lite: IOS || !!store.get('mt.pdLite', false) };
     /** 這個語言用哪個認字模型，和它的 key（共用同一個模型的語言 key 一樣） */
     const pdEntry = (lang) => (pd.lite && MT_PD_LITE[lang]) || MT_PD[lang];
     const pdKey = (lang) => pdEntry(lang).key || lang;
@@ -6659,9 +6854,10 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (!pd.langP[key]) {
           const files = Promise.all([get(a), get(a.dict)]);
           const tag = (e) => { throw Object.assign(e instanceof Error ? e : new Error(String(e)), { model: key }); }; // 這個模型本身下載不到、載入不了
+          const ready = pd.ready; // 等的是現在這一次的準備（它失敗的話這裡也要跟著失敗，不能當成模型已經載入）
           pd.langP[key] = (async () => {
             const [m, d] = await files.catch(tag);
-            await pd.ready;
+            await ready;
             if (gen !== pd.gen) throw mtErr('cancel');
             preparing();
             const txt = new TextDecoder().decode(d.buf);
@@ -6698,10 +6894,32 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       const r = pd.queue.shift();
       if (r) r();
     }
+    /**
+     * 提早準備認字程式：確定這張圖要認字時就開始，和下載圖片、切片同時進行（之前要等第一張圖切完才開始，兩段時間是加起來的）。
+     * iPhone、iPad 不提早（記憶體緊，維持原本的順序）。失敗記下來，第一個 pdRun 照原本的方式處理，不會多試一次
+     */
+    function pdWarm() {
+      if (IOS || pd.failed || paused() || (pd.warm && pd.warm.gen === pd.gen)) return;
+      const set = cfg().ocrLang;
+      const langs = store.get('mt.lang', {}) || {};
+      // 和 imageLang、detectLang 第一個會用的語言一樣，不會多載入別的模型
+      const lang = [set && set !== 'auto' ? set : '', mtHostLang(), langs[seriesKey()], langs[HOST], 'eng'].find((l) => l && MT_LANG[l]);
+      const key = pdKey(lang);
+      if (pd.bad[key]) return;
+      const w = { gen: pd.gen, key, err: null };
+      pd.warm = w;
+      pdReady(lang, null).then(() => pdSelfCheck(lang)).catch((e) => { w.err = e || new Error('PaddleOCR 載入失敗'); });
+    }
     /** 一段圖：找字＋認字（同一段圖換語言再認時，不用重新找字） */
     async function pdRun(s, lang, P) {
       const prev = P && P.step;
       try {
+        // 提早準備時已經失敗：照原本的方式丟出（只一次），不重新下載、重新載入
+        const w = pd.warm;
+        if (w && w.err) {
+          pd.warm = null;
+          if (w.gen === pd.gen && w.err.kind !== 'cancel' && (!w.err.model || w.key === pdKey(lang))) throw w.err;
+        }
         await orCancel(pdReady(lang, P));
         await orCancel(pdSelfCheck(lang));
       } catch (e) {
@@ -6776,7 +6994,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       pd.gen++;
       mtPdLoading.clear(); // 卡住的下載不要再等，重新下載
       pd.workers.forEach((wk) => wk.die(mtErr('cancel')));
-      Object.assign(pd, { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', checked: {}, bad: {} });
+      Object.assign(pd, { workers: [], ready: null, ok: false, langP: {}, langOk: {}, failed: '', checked: {}, bad: {}, warm: null });
       pd.queue.splice(0).forEach((r) => r());
     }
 
@@ -6871,6 +7089,9 @@ ${NARROW_CSS(':host([data-narrow]) ')}
             const lang = order[k];
             let groups = [];
             try { groups = await ocrRun(s, lang, plan, P, true); } catch (e) { if (lang === 'eng') throw e; continue; }
+            // 這一段連一個字框都沒有（找字不分語言，換語言也認不到）：直接看下一段，不用為了它下載、載入其他語言的模型
+            // （第一段常常是沒有字的封面；之前會因此多載入韓文模型，iPhone 還會去載入載不動的日文大模型）
+            if (!pd.failed && Array.isArray(s.boxes) && !s.boxes.length) break;
             // 找到的字框大多是直的（多半是日文漫畫）：接下來先試日文
             const bx = s.boxes || [];
             if (k === 0 && bx.length >= 2 && bx.filter((b) => b.y1 - b.y0 >= (b.x1 - b.x0) * 1.5).length * 2 >= bx.length && order.indexOf('jpn') > 1) {
@@ -7206,6 +7427,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       setStatus();
       const s = ms(model);
       s.lat = s.lat * 0.6 + (Date.now() - t0) * 0.4;
+      // 之前被限制過、調低了每分鐘次數的模型：這次順利完成就慢慢調回原本的預設值（之前只會降不會回升，用久了連畫面上的修正都要排隊）。
+      // 最多回到預設值，不會比沒被限制過的時候送得更多
+      if (!mtIsClaude(model)) {
+        const def = /-lite$/.test(model) ? 12 : 8;
+        const cur = rpmOf(model);
+        if (cur < def) setRpm(model, Math.min(def, cur + 0.5));
+      }
       setStatus();
     }
     function onFixError(model, batch, e) {
@@ -7245,7 +7473,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     async function translateP(P) {
       if (stopped || P.state === 'busy') return;
       const gen = ++P.gen;
-      Object.assign(P, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '', step: '排隊中', fix: '', engines: new Set(), started: Date.now(), langP: null, queued: true, cutT: false, cutB: false, seamExt: null });
+      Object.assign(P, { state: 'busy', blocks: [], done: 0, total: 0, error: '', note: '', step: '排隊中', fix: '', engines: new Set(), started: Date.now(), langP: null, queued: true, cutT: false, cutB: false, seamExt: null, snT: false, snB: false });
       render(P);
       bump();
       setStatus();
@@ -7254,6 +7482,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       try {
         const st0 = mtEngineState(cfg());
         const fast = mode() === 'fast';
+        const wait = siteCache && siteCache.ready(); // 手機版：這個網站記住的翻譯第一次要先讀進來（之後是 null，不用等）
+        if (wait) { await wait; if (!alive()) return; }
         let hit = cacheGet(P);
         // 免費模式一個字都沒認到的舊結果不沿用（可能是那時候認字出了問題），重新辨識一次
         if (hit && hit.m === 'free' && !hit.blocks.length) hit = null;
@@ -7262,7 +7492,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         if (hit && (fast || hit.m !== 'free' || hit.blk || st0.kind !== 'ai')) {
           if (hit.m) P.engines.add(hit.m);
           if (hit.fx) P.engines.add('fix');
-          Object.assign(P, { blocks: hit.blocks, state: 'done', done: 1, total: 1, step: '', w0: hit.w, h0: hit.h, fix: hit.fx ? 'done' : '', cutT: hit.ct, cutB: hit.cb, seamExt: hit.ex });
+          Object.assign(P, { blocks: hit.blocks, state: 'done', done: 1, total: 1, step: '', w0: hit.w, h0: hit.h, fix: hit.fx ? 'done' : '', cutT: hit.ct, cutB: hit.cb, seamExt: hit.ex, snT: !!(hit.sn & 1), snB: !!(hit.sn & 2) });
           render(P);
           const fixIt = fast && hit.m === 'free' && !hit.fx && st0.kind === 'ai'; // 上次還沒修正完
           stitchAround(P).finally(() => { if (fixIt && P.gen === gen) fixWhenReady(P); });
@@ -7270,6 +7500,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           return;
         }
         const useImage = !fast && st0.kind === 'ai';
+        if (!useImage) pdWarm(); // 沒有記住的結果、要認字：認字程式和讀圖同時準備（記住的結果在上面就結束了，不會白載入）
         const job = await prepQ(P, async () => {
           if (!alive()) return null;
           step(P, '讀取圖片');
@@ -7692,7 +7923,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       watchPage();
       pageScan();
       pg.mo = new MutationObserver(() => { if (!pg.scanT) pg.scanT = later(() => { pg.scanT = 0; pageScan(); }, 500); });
-      pg.mo.observe(document.body || document.documentElement, { childList: true, subtree: true });
+      // 看整個網頁（不是只看 <body>）：換頁時把整個 <body> 換掉的網站，新的一頁的圖才會被發現
+      pg.mo.observe(document.documentElement, { childList: true, subtree: true });
       watchResources();
       if (!nearOn) { nearOn = true; listen(PAGE, 'pointermove', onNear, { passive: true }); }
       liveSet(true);
@@ -7734,7 +7966,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     function afterPageChange() {
       chip(true);
-      fabSync();
+      fabSafe();
       renderMenu();
       placeHover();
     }
@@ -7763,7 +7995,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     /* ---------- 狀態列：有工作時才出現、閒置後收起，並避開網站自己的按鈕 ---------- */
     let chipEl = null;
     let chipHideT = 0;
-    let placeAt = 0;
     function fixedUi(el) {
       let clickable = false;
       for (let e = el, up = 0; e && e !== document.body && up < 8; e = e.parentElement, up++) {
@@ -7823,20 +8054,26 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     /** 依序試左下、右下、右上、左上，放在沒有網站按鈕的角落 */
     function placeCorner(el, force) {
-      if (!el || (!force && Date.now() - placeAt < 1500)) return;
-      placeAt = Date.now();
+      if (!el || (!force && Date.now() - (el.placedAt || 0) < 1500)) return;
+      el.placedAt = Date.now();
       // 介面放大時（網頁整頁縮小顯示），大小和離邊緣的距離都跟著放大
       const z = uiZ;
       const w = (el.offsetWidth || 260) * z;
       const hh = (el.offsetHeight || 40) * z;
       const m = 16 * z;
+      // 手機上「譯」在最下面（最上面）那一帶時，狀態列實際上放在它的上面（下面）：要看的是那個位置有沒有網站的按鈕
+      const host = el !== fab && uiRoot ? uiRoot.host : null;
+      const lift = host ? (host.mtLift || 0) * z : 0;
+      const drop = host ? (host.mtDrop || 0) * z : 0;
       const corners = [['left', 'bottom'], ['right', 'bottom'], ['right', 'top'], ['left', 'top']];
       let pick = corners[0];
       for (const c of corners) {
         const x = c[0] === 'left' ? m : innerWidth - m - w;
-        const y = c[1] === 'bottom' ? innerHeight - m - hh : m;
+        const y = c[1] === 'bottom' ? innerHeight - m - hh - lift : m + drop;
         if (!siteUiAt(x, y, w, hh)) { pick = c; break; }
       }
+      el.corner = pick;
+      el.at = null;
       el.style.left = pick[0] === 'left' ? '16px' : 'auto';
       el.style.right = pick[0] === 'right' ? '16px' : 'auto';
       el.style.top = pick[1] === 'top' ? (TOUCH ? 'calc(16px + env(safe-area-inset-top, 0px))' : '16px') : 'auto';
@@ -7963,7 +8200,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         unlater(chipHideT);
         chipHideT = 0;
         chipEl.classList.add('is-on');
-        if (fab) fabSync();
       }
       if (!active && !pg.hidden && chipEl.classList.contains('is-on')) hideChipLater(4000);
       if (chipEl.classList.contains('is-on')) placeCorner(chipEl, force);
@@ -7977,7 +8213,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       unlater(chipHideT);
       chipHideT = 0;
       if (chipEl) chipEl.classList.remove('is-on');
-      fabSync();
     }
     /** 沒在翻譯時收起狀態列；滑鼠停在上面時先不收 */
     function hideChipLater(ms) {
@@ -7990,7 +8225,6 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const c = counts();
         if (hover || pg.hidden || c.busy || c.fixBusy || c.fixWait || c.seam || c.err) { hideChipLater(1500); return; }
         chipEl.classList.remove('is-on');
-        fabSync();
       }, ms);
     }
     // 收起後，滑鼠移到那個角落附近會再出現
@@ -8065,6 +8299,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     /** 忘掉一張圖記住的結果（每個版本的快取都清） */
     function cacheDrop(P) {
+      if (siteCache) {
+        const keys = [];
+        for (let ver = MTC_VER; ver >= 2; ver--) keys.push(cacheKeyOf(P, 'v' + ver));
+        siteCache.del(keys);
+        return;
+      }
       let idx = store.get('mtc.idx', []);
       if (!Array.isArray(idx)) idx = [];
       let touched = false;
@@ -8103,8 +8343,13 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
 
     /* ---------- 觸控裝置：「譯」按鈕 ---------- */
+    // 清單裡的網站一定有「譯」，而且一直留在畫面上：網頁上有沒有圖、有沒有在翻譯、狀態列有沒有出現都不收起來（狀態列會讓開）。
+    // 網站把我們的介面移出網頁（換頁時整頁重畫的網站）就放回去；跑到畫面外就放回來；兩指放大網頁時跟著看得到的範圍走。每 2 秒檢查一次（fabKeep）
     let fab = null;
-    let fabT = 0;
+    let fabProbe = null;
+    let fabKeepT = 0;
+    let fabNewAt = 0;
+    let fabHome = null; // 沒放大時，按鈕中心在畫面寬、高的幾成（放大時照這個位置跟著畫面走）
     /** 使用者拖過的位置（每個網站各自記住）：按鈕中心在畫面寬、高的幾成，轉向或縮放後還是在差不多的地方 */
     const fabSaved = () => {
       const p = (store.get('mt.fabPos', {}) || {})[HOST];
@@ -8118,42 +8363,125 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (keys.length > 200) keys.slice(0, keys.length - 200).forEach((k) => { delete m[k]; });
       store.set('mt.fabPos', m);
     }
+    /**
+     * 「譯」在畫面上的位置和大小（網頁的 px）。介面沒放大時直接量；介面放大時（網頁整頁縮小顯示，用 CSS zoom 放大）
+     * 各瀏覽器「量」到的數字不一樣（有的是放大前的，還會被捲動位置影響），改照我們自己放的位置算
+     */
+    function fabVis() {
+      const z = uiZ;
+      if (z === 1) {
+        const r = fab.getBoundingClientRect();
+        if (r.width > 0) return { left: r.left, top: r.top, width: r.width, height: r.height };
+      }
+      const w = (fab.offsetWidth || 52) * z;
+      const hh = (fab.offsetHeight || 52) * z;
+      const at = fab.at;
+      const c = fab.corner || ['left', 'bottom'];
+      return {
+        left: at ? at.l * z : (c[0] === 'left' ? 16 * z : innerWidth - 16 * z - w),
+        top: at ? at.t * z : (c[1] === 'top' ? 16 * z : innerHeight - 16 * z - hh),
+        width: w,
+        height: hh,
+      };
+    }
     /** 把「譯」的左上角放在畫面上的 (x, y)，不超出畫面 */
     function fabMoveTo(x, y) {
-      const r = fab.getBoundingClientRect();
-      const m = 8 * uiZ;
-      const cx = Math.max(m, Math.min(innerWidth - (r.width || 52) - m, x));
-      const cy = Math.max(m, Math.min(innerHeight - (r.height || 52) - m, y));
-      const set = (L, T) => Object.assign(fab.style, { left: L + 'px', top: T + 'px', right: 'auto', bottom: 'auto' });
-      // 介面放大（zoom）時 left／top 也會跟著放大：除回去；實際位置對不上（各瀏覽器處理 zoom 的方式不同）就照量到的比例再修正一次
-      const L = cx / uiZ;
-      const T = cy / uiZ;
-      set(L, T);
-      const r2 = fab.getBoundingClientRect();
-      if (L > 1 && T > 1 && (Math.abs(r2.left - cx) > 1 || Math.abs(r2.top - cy) > 1)) {
-        const fx = r2.left / L;
-        const fy = r2.top / T;
-        if (fx > 0.2 && fy > 0.2) set(cx / fx, cy / fy);
+      const z = uiZ;
+      const w = (fab.offsetWidth || 52) * z;
+      const hh = (fab.offsetHeight || 52) * z;
+      const m = 8 * z;
+      const cx = Math.max(m, Math.min(innerWidth - w - m, x));
+      const cy = Math.max(m, Math.min(innerHeight - hh - m, y));
+      // 介面放大（zoom）時 left／top 也會跟著放大：除回去
+      fab.at = { l: cx / z, t: cy / z };
+      fab.corner = null;
+      Object.assign(fab.style, { left: `${fab.at.l}px`, top: `${fab.at.t}px`, right: 'auto', bottom: 'auto' });
+    }
+    /** 「譯」放好之後：記下它在畫面的哪裡；它在最下面（最上面）那一帶時，狀態列和通知放到它的上面（下面），不會疊在一起 */
+    function fabPlaced() {
+      const host = uiRoot && uiRoot.host;
+      if (!host) return;
+      let lift = 0;
+      let drop = 0;
+      if (fab && fab.isConnected && !fab.zoomed && innerWidth > 0 && innerHeight > 0) {
+        const r = fabVis();
+        const z = uiZ;
+        const bottom = r.top + r.height;
+        fabHome = { x: (r.left + r.width / 2) / innerWidth, y: (r.top + r.height / 2) / innerHeight };
+        if (bottom > innerHeight - 140 * z) lift = Math.max(0, Math.round((innerHeight - r.top - 8 * z) / z));
+        else if (r.top < 140 * z) drop = Math.max(0, Math.round((bottom - 8 * z) / z));
       }
+      if (lift === host.mtLift && drop === host.mtDrop) return;
+      host.mtLift = lift;
+      host.mtDrop = drop;
+      if (lift) host.style.setProperty('--mt-lift', `${lift}px`); else host.style.removeProperty('--mt-lift');
+      if (drop) host.style.setProperty('--mt-drop', `${drop}px`); else host.style.removeProperty('--mt-drop');
     }
     let fabVp = '';
     /** 有拖過就放在記住的位置，沒有就放在角落（避開網站自己的按鈕） */
     function placeFab(force) {
-      if (!fab) return;
+      if (!fab || fab.zoomed || fab.classList.contains('is-drag')) return; // 放大中跟著畫面走、拖曳中跟著手指走
       const p = fabSaved();
-      if (!p) { placeCorner(fab, force); return; }
-      const vp = `${innerWidth}x${innerHeight}x${uiZ}`;
-      if (!force && vp === fabVp) return;
-      fabVp = vp;
-      const r = fab.getBoundingClientRect();
-      fabMoveTo(p.x * innerWidth - r.width / 2, p.y * innerHeight - r.height / 2);
+      if (!p) {
+        const at = fab.placedAt;
+        placeCorner(fab, force);
+        if (fab.placedAt === at) return; // 才剛看過，這次沒有重新選
+      } else {
+        const vp = `${innerWidth}x${innerHeight}x${uiZ}`;
+        if (!force && vp === fabVp) return;
+        fabVp = vp;
+        fabMoveTo(p.x * innerWidth - (fab.offsetWidth || 52) * uiZ / 2, p.y * innerHeight - (fab.offsetHeight || 52) * uiZ / 2);
+      }
+      fabPlaced();
+    }
+    /**
+     * 兩指放大網頁時，「固定」在畫面上的東西其實是固定在放大前的版面上：按鈕常常在看不到的地方（放大超過原本大小時還會跟著變大）。
+     * 看得到的範圍（visualViewport）比版面窄就是放大中：改成跟著看得到的範圍走，大小維持原來的樣子；回到沒放大就放回原位。
+     * 回傳現在是不是放大中
+     */
+    function fabZoom() {
+      if (!fab) return false;
+      const vv = window.visualViewport;
+      const s = vv ? vv.scale : 1;
+      // 版面有多寬：量固定在版面右下角的那個小點；量不到就用網頁的寬度
+      let lw = fabProbe && fabProbe.isConnected ? fabProbe.getBoundingClientRect().left : 0;
+      if (!(lw > 0)) lw = document.documentElement ? document.documentElement.clientWidth : 0;
+      const zoomed = !!vv && vv.width > 0 && vv.height > 0 && s > 0 && (lw > 0 ? vv.width < lw * 0.98 : s > 1.02);
+      if (!zoomed) {
+        if (fab.zoomed) {
+          fab.zoomed = false;
+          fab.style.transform = '';
+          fabVp = '';
+          placeFab(true);
+        }
+        return false;
+      }
+      const z = uiZ;
+      const t = s > 1.02 ? 1 / s : 1; // 放大超過原本大小：按鈕縮回去（比原本小的時候，介面本來就有另外放大）
+      const w = (fab.offsetWidth || 52) * z;
+      const hh = (fab.offsetHeight || 52) * z;
+      const home = fabHome || { x: 0.9, y: 0.9 };
+      const mx = w * t / 2 + 8 / s;
+      const my = hh * t / 2 + 8 / s;
+      const cx = vv.offsetLeft + Math.max(mx, Math.min(vv.width - mx, home.x * vv.width));
+      const cy = vv.offsetTop + Math.max(my, Math.min(vv.height - my, home.y * vv.height));
+      Object.assign(fab.style, { left: `${(cx - w / 2) / z}px`, top: `${(cy - hh / 2) / z}px`, right: 'auto', bottom: 'auto', transform: t === 1 ? '' : `scale(${t})` });
+      fab.at = null;
+      fab.corner = null;
+      if (!fab.zoomed) { fab.zoomed = true; fabPlaced(); }
+      return true;
+    }
+    /** 按鈕整個在畫面裡（轉向、網址列伸縮之後可能跑到外面） */
+    function fabSeen() {
+      const r = fabVis();
+      return r.left >= -1 && r.top >= -1 && r.left + r.width <= innerWidth + 1 && r.top + r.height <= innerHeight + 1;
     }
     /** 按住「譯」拖曳：移動超過一點點才算拖曳，放開後記住位置；沒有移動就是一般的點一下 */
     function fabDrag(el) {
       let st = null;
       el.addEventListener('pointerdown', (e) => {
-        if (e.button > 0) return;
-        const r = el.getBoundingClientRect();
+        if (e.button > 0 || el.zoomed) return; // 網頁放大中不拖（位置是跟著畫面算的）
+        const r = fabVis();
         st = { id: e.pointerId, x0: e.clientX, y0: e.clientY, l: r.left, t: r.top, moved: false };
         try { el.setPointerCapture(e.pointerId); } catch (_) { /* 舊瀏覽器 */ }
       });
@@ -8173,40 +8501,73 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         el.classList.remove('is-drag');
         if (!moved) return;
         el.dragAt = Date.now(); // 放開時跟著來的 click 不算點一下
-        const r = el.getBoundingClientRect();
+        if (el.zoomed) return; // 拖到一半網頁被放大：這次不記
+        const r = fabVis();
         const k = (v) => Math.round(Math.max(0, Math.min(1, v)) * 1000) / 1000;
         fabSave({ x: k((r.left + r.width / 2) / innerWidth), y: k((r.top + r.height / 2) / innerHeight) });
         fabVp = `${innerWidth}x${innerHeight}x${uiZ}`;
+        fabPlaced();
       };
       el.addEventListener('pointerup', end);
       el.addEventListener('pointercancel', end);
     }
-    /** 手機沒有滑鼠：還沒開始時按「譯」開始翻譯；翻譯中狀態列收起後，按「譯」把狀態列叫出來。按住可以拖到別的地方 */
+    function fabGone() {
+      if (fabProbe) { fabProbe.remove(); fabProbe = null; }
+      if (fab) { fab.remove(); fab = null; fabPlaced(); }
+    }
+    /**
+     * 手機沒有滑鼠，全靠「譯」：還沒開始時按它開始翻譯；翻譯中按它把狀態列叫出來（收起狀態列按狀態列上的 ×）。按住可以拖到別的地方。
+     * 不在了就做一個、被移出網頁就放回去、跑到畫面外就放回來
+     */
     function fabSync() {
-      const chipHidden = pg.on && (!chipEl || !chipEl.classList.contains('is-on'));
-      const want = isTouch && (pg.on ? chipHidden : siteOn() && [...document.images].some((img) => img.naturalWidth >= 200 && img.naturalHeight >= 200));
-      if (want && !fab) {
-        const r = ui();
-        if (!r) return;
+      if (!isTouch || stopped || !siteOn()) {
+        if (fabKeepT) { clearInterval(fabKeepT); fabKeepT = 0; } // 不在清單裡的網站不用一直檢查（加進清單時 onConfig 會再來）
+        fabGone();
+        return;
+      }
+      fabKeep();
+      const r = ui(); // 我們的介面被網站移出網頁時，這裡會放回去
+      if (!r) return;
+      if (!fab) {
         fab = h('button', {
           type: 'button', class: 'mt-fab', text: '譯', 'aria-label': '漫畫翻譯（按住可以拖曳）',
           onclick: (e) => {
             e.stopPropagation();
-            if (Date.now() - (fab.dragAt || 0) < 600) return;
-            if (pg.on) { pg.chipOff = false; chip(true); fabSync(); } else { warmLocal(); pageToggle(true); }
+            if (Date.now() - (fab.dragAt || 0) < 600) return; // 拖曳放開時跟著來的點擊不算
+            if (pg.on) { pg.chipOff = false; chip(true); } else { warmLocal(); pageToggle(true); }
           },
         });
         fabDrag(fab);
-        r.root.append(fab);
-        placeFab(true);
-      } else if (!want && fab) { fab.remove(); fab = null; }
+        fabProbe = h('i', { class: 'mt-vp', 'aria-hidden': 'true' });
+        fabNewAt = Date.now();
+      }
+      if (fabProbe.parentNode !== r.root) r.root.append(fabProbe);
+      if (fab.parentNode !== r.root) { r.root.append(fab); fabVp = ''; placeFab(true); }
+      if (fabZoom()) return;
+      if (!fabSeen()) { fabVp = ''; placeFab(true); }
+      // 剛打開網頁時網站自己的按鈕還沒畫好：頭 20 秒多看幾次要不要換角落（之後只在捲動時看）
+      else if (Date.now() - fabNewAt < 20000) placeFab(false);
+      fabPlaced();
     }
-    function fabWatch() {
-      if (!isTouch || !siteOn()) return;
-      unlater(fabT);
-      const until = Date.now() + 60000;
-      const tick = () => { fabSync(); if (!fab && Date.now() < until) fabT = later(tick, 2000); };
-      fabT = later(tick, 800);
+    let lastUrl = location.pathname + location.search;
+    let fabErr = false;
+    /** 「譯」出了意料之外的錯也不能拖累別的：記到診斷報告裡（只記第一次），下一次檢查再試 */
+    function fabSafe() {
+      try { fabSync(); } catch (e) { if (!fabErr) { fabErr = true; mtWarn('漫畫翻譯（「譯」按鈕）', e); } }
+    }
+    function fabKeep() {
+      if (fabKeepT) return;
+      fabKeepT = setInterval(() => {
+        if (stopped) return;
+        fabSafe();
+        // 換頁不重新載入網頁的網站：網址變了就當作打開了新的一頁——上一頁記住的翻譯忘掉，要不要自動開始翻譯重新看一次
+        const u = location.pathname + location.search;
+        if (u === lastUrl) return;
+        lastUrl = u;
+        fabNewAt = Date.now();
+        if (siteCache) siteCache.sync();
+        autoWatch();
+      }, 2000);
     }
 
     /* ---------- 鍵盤、滑鼠 ---------- */
@@ -8239,10 +8600,23 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       pageToggle();
     }, true);
     // 網站的浮動按鈕常常捲動後才出現：捲動時偶爾重新選位置
-    listen(PAGE, 'scroll', () => { if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); if (fab) placeFab(false); }, { capture: true, passive: true });
-    // 轉向、兩指縮放之後：拖過的「譯」放回記住的位置（介面大小也可能變了）
-    if (window.visualViewport) listen(window.visualViewport, 'resize', () => { if (fab && fabSaved()) placeFab(false); }, { passive: true });
-    listen(PAGE, 'resize', () => { if (fab && fabSaved()) placeFab(false); }, { passive: true });
+    listen(PAGE, 'scroll', () => { if (fab) placeFab(false); if (chipEl && chipEl.classList.contains('is-on')) placeCorner(chipEl, false); }, { capture: true, passive: true });
+    // 轉向、兩指縮放、放大後移動畫面：放大中「譯」跟著看得到的範圍走；沒放大時拖過的放回記住的位置（介面大小也可能變了）
+    let vvRaf = 0;
+    const onViewport = () => {
+      if (vvRaf || !fab) return;
+      vvRaf = requestAnimationFrame(() => {
+        vvRaf = 0;
+        if (!fab || stopped) return;
+        syncUiZoom(); // 介面要不要放大先算好（位置是照放大後的大小算的）
+        if (!fabZoom()) { placeFab(false); fabPlaced(); }
+      });
+    };
+    if (window.visualViewport) {
+      listen(window.visualViewport, 'resize', onViewport, { passive: true });
+      listen(window.visualViewport, 'scroll', onViewport, { passive: true });
+    }
+    listen(PAGE, 'resize', onViewport, { passive: true });
 
     /* ---------- 回報問題：這一頁的翻譯狀況整理成一段文字（手機上看不到主控台，複製起來貼給開發者） ---------- */
     function diagText(test) {
@@ -8303,6 +8677,17 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         pg: { on: pg.on, hidden: pg.hidden, dirs: pg.dirs ? pg.dirs.size : 0 }, c: counts(), views: views.size,
         // 這部作品的用語表有幾條、總共記了幾部作品（只有數量，不放內容）
         gloss: [mtGlossGet(seriesKey()).length, Object.keys(mtGlossAll()).length],
+        // 油猴的儲存空間：幾筆、大約幾 KB（手機版才量得到），記住幾張翻過的圖；腳本是網頁載入多久後才開始執行的
+        st: mtStoreStat(siteCache), boot: BOOT,
+        // 「譯」按鈕：在不在網頁上、量到的位置（hr 是我們整個介面的原點，正常是 0,0）、怎麼放的（角落／拖過／放大中跟著畫面）、
+        // 狀態列讓開多少、每 2 秒的檢查有沒有在跑、出過錯沒；vp：看得到的範圍（左、上、寬、高）和版面的寬度；pn：記憶體裡記了幾張圖
+        fab: fab ? {
+          conn: fab.isConnected, host: !!(uiRoot && uiRoot.host.isConnected), r: R(fab.getBoundingClientRect()), hr: uiRoot ? R(uiRoot.host.getBoundingClientRect()).slice(0, 2) : null,
+          at: fab.zoomed ? 'zoom' : fab.corner ? fab.corner.join('-') : 'free',
+          lift: uiRoot ? [uiRoot.host.mtLift || 0, uiRoot.host.mtDrop || 0] : null, keep: !!fabKeepT, err: fabErr,
+        } : (isTouch && siteOn() ? 'none' : 'off'),
+        vp: vv ? [Math.round(vv.offsetLeft), Math.round(vv.offsetTop), Math.round(vv.width), Math.round(vv.height), fabProbe && fabProbe.isConnected ? Math.round(fabProbe.getBoundingClientRect().left) : null] : null,
+        pn: pages.size,
         // 每張圖：狀態、幾句、幾個圖片元素、g = 猜的、語言和認字信心（c92 = 平均 92）、幾個尖刺框（喊叫）
         pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => {
           const cs = P.blocks.map((b) => b.conf).filter((c) => typeof c === 'number');
@@ -8456,15 +8841,14 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
 
     syncHover();
-    fabWatch();
+    fabSafe();
     autoWatch();
 
     return {
       onConfig() {
         syncHover();
         placeHover();
-        fabSync();
-        fabWatch();
+        fabSafe();
         autoWatch();
         setStatus();
         chainFail = 0;
@@ -8506,6 +8890,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         cancelAnimationFrame(alignRaf);
         cancelAnimationFrame(statusRaf);
         cancelAnimationFrame(nearRaf);
+        cancelAnimationFrame(vvRaf);
+        clearInterval(fabKeepT);
         clearInterval(tick);
         srcMo.disconnect();
         ovIO.disconnect();
@@ -8519,7 +8905,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         pages.clear();
         if (hv) hv.el.remove();
         if (chipEl) chipEl.remove();
-        if (fab) fab.remove();
+        fabGone();
         resetWorkers();
       },
     };
@@ -11090,6 +11476,35 @@ ${PLAYER_PAGES('iframe.vframe')}{display:block;width:100%!important;max-width:no
     const c = store.get('cfg.mangaTranslate', null);
     const k = c && String(c.claudeKey || '').trim();
     if (k && mtKeyBad(mtKeyHash(k))) mtMarkKey(mtKeyHash(k), false);
+  })();
+  // 手機版 1.5.31：翻過的圖改記在漫畫網站自己的儲存空間（mtSiteCache），之前記在油猴裡的幾百筆清掉，油猴的資料才會變小。
+  // 等網頁載入完再清；油猴能一次刪多筆（5.3 以上）就一次刪完，不能的話分批慢慢刪（一口氣送幾百個刪除，手機上的油猴會忙不過來）
+  (() => {
+    if (EDITION !== 'manga' || !IS_TOP || store.get('mt.cacheMoved', 0)) return;
+    const purge = () => {
+      if (store.get('mt.cacheMoved', 0)) return; // 別的分頁清過了
+      let keys = [];
+      try { if (typeof GM_listValues === 'function') keys = (GM_listValues() || []).filter((k) => /^mtc\./.test(k)); } catch (_) { keys = []; }
+      if (!keys.length) {
+        const idx = store.get('mtc.idx', null);
+        if (Array.isArray(idx)) keys = idx.filter((k) => typeof k === 'string' && /^mtc\./.test(k)).concat('mtc.idx'); // 清單最後才刪：中途關掉網頁，下次接著清
+      }
+      const done = () => store.set('mt.cacheMoved', 1);
+      if (!keys.length) { done(); return; }
+      if (typeof GM_deleteValues === 'function') {
+        try { GM_deleteValues(keys); done(); return; } catch (_) { /* 改成一筆一筆刪 */ }
+      }
+      let i = 0;
+      const step = () => {
+        for (const k of keys.slice(i, i + 20)) { try { GM_deleteValue(k); } catch (_) { /* 舊版管理器 */ } }
+        i += 20;
+        if (i < keys.length) setTimeout(step, 1000); else done();
+      };
+      step();
+    };
+    const kick = () => setTimeout(purge, 3000);
+    if (document.readyState === 'complete') kick();
+    else PAGE.addEventListener('load', kick, { once: true });
   })();
   installUiGuard();
   MODULES.forEach(syncModule);
