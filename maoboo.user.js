@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.6.2
+// @version      1.6.3
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、Anime1 卡片介面、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -45,7 +45,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
- * 1.6.2  漫畫翻譯加快一點、比較省記憶體：判斷原文語言時，沒有字的圖（封面）不再多下載、載入其他語言的模型；很長的旁白一批少認幾行，不會一次佔掉上百 MB。
+ * 1.6.3  漫畫翻譯：喊出來的兩個字的台詞（例如 PRINCE PHILIP?!）字很大、尖刺對話框又沒被認出來時，之前會被當成狀聲詞跳過不翻；現在照台詞翻。
+ *        已經翻過的那一話要在設定面板按「重新讀取並翻譯」才會補上
+ * 1.6.2漫畫翻譯加快一點、比較省記憶體：判斷原文語言時，沒有字的圖（封面）不再多下載、載入其他語言的模型；很長的旁白一批少認幾行，不會一次佔掉上百 MB。
  *        認字程式和讀圖同時準備（iPhone、iPad 維持原本的順序），每次打開網頁第一句譯文快一點；重看翻過的一話時，接縫上沒有字的不再重抓圖、重新認字。
  *        Gemini 被限制過而調低的每分鐘次數，順利時會慢慢調回預設值（之前只降不升）；Claude 修正不會因為思考佔掉字數上限而漏修幾句；
  *        診斷報告多了認字各階段花的時間（只寫在報告裡，畫面上不顯示）。
@@ -5360,7 +5362,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (!words.length || words.length > 2 || words.join('').length > 16) return false;
       const known = words.every(mtSfxWord);
       if (g.bub) return big && known;
-      return big || known || raw.some((w) => /(.)\1\1/.test(w)); // AAAH、HMMM、ZZZ
+      const long = raw.some((w) => /(.)\1\1/.test(w)); // AAAH、HMMM、ZZZ
+      // 兩個不同的完整單字（各 5 個字母以上、有母音，例如 PRINCE PHILIP?!），又都不是常見的狀聲詞、沒有拉長音：
+      // 是喊出來的台詞（字很大，尖刺對話框又沒被認出來），不能只因為字大就當成狀聲詞跳過
+      if (words.length === 2 && !long && !words.some(mtSfxWord) && raw.every((w) => w.length >= 5 && /[aeiouy]/.test(w))) return false;
+      return big || known || long;
     }
     const core = t.replace(/[\s\p{P}\p{S}]/gu, '');
     const n = [...core].length;

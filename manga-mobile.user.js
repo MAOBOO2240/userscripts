@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 漫畫翻譯（手機版）
 // @namespace    https://github.com/mao-boo/userscripts/manga
-// @version      1.5.33
+// @version      1.5.34
 // @description  把漫畫圖片裡的英文、日文、韓文翻成繁體中文，用白底蓋住原文；手機上點角落的「譯」就能翻譯整話。這是 MAO BOO 油猴整合包裡的漫畫翻譯單獨拿出來的版本，給手機用。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -45,6 +45,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.5.34  喊出來的兩個字的台詞（例如 PRINCE PHILIP?!）字很大、尖刺對話框又沒被認出來時，之前會被當成狀聲詞跳過不翻；現在照台詞翻。
+ *         已經翻過的那一話要在設定面板按「重新讀取並翻譯」才會補上
  * 1.5.33  比較省記憶體、加快一點：判斷原文語言時，沒有字的圖（封面）不再多下載、載入其他語言的模型（之前會多載韓文模型，iPhone 還會去載入載不動的日文大模型）；很長的旁白一批少認幾行，認字時不會一次佔掉上百 MB。
  *         重看翻過的一話時，接縫上沒有字的不再重抓整張圖、重新認字；Android 上認字程式和讀圖同時準備，第一句譯文快一點（iPhone、iPad 維持原本的順序）。
  *         Gemini 被限制過而調低的每分鐘次數，順利時會慢慢調回預設值（之前只降不升）；Claude 修正不會因為思考佔掉字數上限而漏修幾句；診斷報告多了認字各階段花的時間（只寫在報告裡，畫面上不顯示）
@@ -5338,7 +5340,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (!words.length || words.length > 2 || words.join('').length > 16) return false;
       const known = words.every(mtSfxWord);
       if (g.bub) return big && known;
-      return big || known || raw.some((w) => /(.)\1\1/.test(w)); // AAAH、HMMM、ZZZ
+      const long = raw.some((w) => /(.)\1\1/.test(w)); // AAAH、HMMM、ZZZ
+      // 兩個不同的完整單字（各 5 個字母以上、有母音，例如 PRINCE PHILIP?!），又都不是常見的狀聲詞、沒有拉長音：
+      // 是喊出來的台詞（字很大，尖刺對話框又沒被認出來），不能只因為字大就當成狀聲詞跳過
+      if (words.length === 2 && !long && !words.some(mtSfxWord) && raw.every((w) => w.length >= 5 && /[aeiouy]/.test(w))) return false;
+      return big || known || long;
     }
     const core = t.replace(/[\s\p{P}\p{S}]/gu, '');
     const n = [...core].length;
