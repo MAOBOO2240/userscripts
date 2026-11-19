@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.6.4
+// @version      1.6.5
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、Anime1 卡片介面、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -45,6 +45,9 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.6.5  漫畫翻譯：把漫畫圖設成點不到的網站（Kakao 網漫、Kakao Page、Lezhin、mgread）滑到圖上不會出現「翻譯」，現在會出現；
+ *        包子漫畫（baozimh.com）的每一話其實開在 twmanga.com，加進網站清單（清單裡有 baozimh.com 的會自動加上）；
+ *        那邊還沒捲到的頁整話翻譯時也先翻好；mgread 還沒載入的頁也找得到網址，整話翻譯可以先翻
  * 1.6.4  漫畫翻譯支援把漫畫畫在 canvas 上的閱讀器（GigaViewer：となりのヤングジャンプ、少年ジャンプ＋、コミックDAYS 這類網站）：
  *        之前這些網站沒有 <img>，滑到圖上不會出現「翻譯」；現在照樣有，圖庫裡打亂的原圖會先拼回來再翻，整話翻譯也包含還沒翻到的頁
  * 1.6.3  漫畫翻譯：喊出來的兩個字的台詞（例如 PRINCE PHILIP?!）字很大、尖刺對話框又沒被認出來時，之前會被當成狀聲詞跳過不翻；現在照台詞翻。
@@ -2035,10 +2038,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    * → 白底蓋在原文上
    * ==================================================================== */
 
-  const MT_SITES = ['kingofshojo.com', 'ezmanga.org', 'comix.to', 'telltome.net', 'mgread.io', 'g-mh.org', 'baozimh.org', 'bzmh.org', 'baozimh.com',
+  const MT_SITES = ['kingofshojo.com', 'ezmanga.org', 'comix.to', 'telltome.net', 'mgread.io', 'g-mh.org', 'baozimh.org', 'bzmh.org', 'baozimh.com', 'twmanga.com',
     'comic.naver.com', 'webtoon.kakao.com', 'page.kakao.com', 'webtoons.com', 'lezhin.com', 'toptoon.com', 'bomtoon.com', 'nhentai.net'];
   // 後來才加進預設清單的網站：改過網站清單的人（清單存在設定裡，不會自己多出新的預設網站），啟動時幫忙加一次
-  const MT_SITES_ADDED = ['mgread.io'];
+  const MT_SITES_ADDED = ['mgread.io', 'twmanga.com'];
+  // 跟著別的網站一起加的：清單裡有後面那個才加（包子漫畫 baozimh.com 的每一話其實在 twmanga.com 上）
+  const MT_SITES_WITH = { 'twmanga.com': 'baozimh.com' };
   const MT_FONT = '"Microsoft JhengHei", "PingFang TC", "Noto Sans TC", "Noto Sans CJK TC", "Source Han Sans TC", "Heiti TC", sans-serif';
   const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta';
   // 拿不到模型清單時用這份；順序就是優先順序
@@ -2692,7 +2697,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
 
   /* ---------- 圖片擷取與切片 ---------- */
 
-  const MT_LAZY_ATTRS = ['data-src', 'data-original', 'data-lazy-src', 'data-lazy', 'data-url', 'data-img', 'data-image', 'data-echo', 'data-cfsrc', 'data-pagespeed-lazy-src'];
+  const MT_LAZY_ATTRS = ['data-src', 'data-original', 'data-original-src', 'data-lazy-src', 'data-lazy', 'data-url', 'data-img', 'data-image', 'data-echo', 'data-cfsrc', 'data-pagespeed-lazy-src'];
   const mtAbs = (u) => { try { return new URL(u, location.href).href; } catch (_) { return ''; } };
   const mtPlaceholder = (u) => !u || /^(about|javascript):/i.test(u) || (/^data:/i.test(u) && u.length < 1000);
   function mtSrcsetBest(ss) {
@@ -7846,6 +7851,16 @@ ${NARROW_CSS(':host([data-narrow]) ')}
           if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return eligible(g) ? g : null;
         }
       }
+      // 網站讓漫畫圖點不到（pointer-events: none，例如 Kakao、Lezhin、mgread）：滑鼠指到的是包著圖的那一層，
+      // 找直接放在那一層（或下一層）裡、在滑鼠底下的圖
+      const hit = new Set(list.slice(0, 8));
+      for (const im of document.images) {
+        if (im.naturalWidth < 200) continue;
+        const p = im.parentElement;
+        if (!p || !(hit.has(p) || (p.parentElement && hit.has(p.parentElement)))) continue;
+        const r = im.getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom && eligible(im)) return im;
+      }
       return null;
     }
     function onMove(e) {
@@ -7995,6 +8010,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       if (!giga.size) {
         if (bigs.length === 1) guessNext(bigs[0]); // 一次只顯示一張圖的閱讀器
         scanScripts();
+        // AMP 網頁（例如包子漫畫）：還沒捲到的頁只有 <amp-img src>，裡面的 <img> 捲到附近才做；網址先拿來翻
+        for (const a of document.querySelectorAll('amp-img[src]')) considerUrl(mtAbs(a.getAttribute('src')), false);
       }
       setStatus();
     }
@@ -11593,7 +11610,7 @@ ${PLAYER_PAGES('iframe.vframe')}{display:block;width:100%!important;max-width:no
     if (!fresh.length) return;
     const cur = store.get('cfg.mangaTranslate', null);
     if (cur && Array.isArray(cur.sites)) {
-      const add = fresh.filter((x) => !mtSiteMatch(cur.sites, x));
+      const add = fresh.filter((x) => !mtSiteMatch(cur.sites, x) && (!MT_SITES_WITH[x] || mtSiteMatch(cur.sites, MT_SITES_WITH[x])));
       if (add.length) store.set('cfg.mangaTranslate', Object.assign({}, cur, { sites: cur.sites.concat(add) }));
     }
     store.set('mt.sitesAdded', done.concat(fresh));
