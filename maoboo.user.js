@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.6.3
+// @version      1.6.4
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、Anime1 卡片介面、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -45,6 +45,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.6.4  漫畫翻譯支援把漫畫畫在 canvas 上的閱讀器（GigaViewer：となりのヤングジャンプ、少年ジャンプ＋、コミックDAYS 這類網站）：
+ *        之前這些網站沒有 <img>，滑到圖上不會出現「翻譯」；現在照樣有，圖庫裡打亂的原圖會先拼回來再翻，整話翻譯也包含還沒翻到的頁
  * 1.6.3  漫畫翻譯：喊出來的兩個字的台詞（例如 PRINCE PHILIP?!）字很大、尖刺對話框又沒被認出來時，之前會被當成狀聲詞跳過不翻；現在照台詞翻。
  *        已經翻過的那一話要在設定面板按「重新讀取並翻譯」才會補上
  * 1.6.2漫畫翻譯加快一點、比較省記憶體：判斷原文語言時，沒有字的圖（封面）不再多下載、載入其他語言的模型；很長的旁白一批少認幾行，不會一次佔掉上百 MB。
@@ -2704,9 +2706,11 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     return best;
   }
+  /** 圖片現在顯示的網址。canvas 閱讀器的看不見的圖用我們放的網址（瀏覽器給的 currentSrc 會去掉後面「要拼回來」的記號） */
+  const mtCur = (img) => (img.mbGiga ? img.getAttribute('src') : img.currentSrc) || '';
   /** 圖片真正的網址：已載入就用目前顯示的；延遲載入的圖從 data-src 這類屬性找，才能先下載先翻譯 */
   function mtRealUrl(img) {
-    const cur = img.currentSrc || '';
+    const cur = mtCur(img);
     if (img.complete && img.naturalWidth >= 50 && cur && !mtPlaceholder(cur)) return mtAbs(cur);
     for (const a of MT_LAZY_ATTRS) {
       const v = (img.getAttribute(a) || '').trim();
@@ -2720,10 +2724,35 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     const src = (img.getAttribute('src') || '').trim();
     return src && !mtPlaceholder(src) ? mtAbs(src) : '';
   }
+  /**
+   * 用 <canvas> 顯示漫畫的閱讀器（GigaViewer：となりのヤングジャンプ、少年ジャンプ＋、コミックDAYS…）：
+   * 圖庫裡的原圖切成 4×4 格、格子對調（沿著左上到右下的對角線翻過去）存放，網頁再拼回來畫在 <canvas> 上。
+   * 網址後面加上這個記號的，抓到之後要先拼回來（mtGigaFix）才能認字
+   */
+  const MT_GIGA = '#mb-giga';
+  async function mtGigaFix(bmp) {
+    const w = bmp.width;
+    const h = bmp.height;
+    const D = 4;
+    const cw = Math.floor(w / (D * 8)) * 8; // 格子的寬高是 8 的倍數，右邊、下面多出來的一條沒有打亂
+    const ch = Math.floor(h / (D * 8)) * 8;
+    const c = mtCanvas(w, h);
+    const g = c.getContext('2d');
+    g.drawImage(bmp, 0, 0);
+    if (cw > 0 && ch > 0) {
+      for (let e = 0; e < D * D; e++) {
+        const t = (e % D) * D + Math.floor(e / D);
+        g.drawImage(bmp, (e % D) * cw, Math.floor(e / D) * ch, cw, ch, (t % D) * cw, Math.floor(t / D) * ch, cw, ch);
+      }
+    }
+    if (typeof bmp.close === 'function') bmp.close();
+    return createImageBitmap(c);
+  }
   /** 同一張圖的代號：去掉網址裡每次都會變的簽章、時間參數，換網域的圖庫也認得出是同一張 */
   function mtUrlKey(url) {
     let u;
     try { u = new URL(url); } catch (_) { return String(url); }
+    if (u.hash === MT_GIGA) return mtUrlKey(url.slice(0, -MT_GIGA.length)) + MT_GIGA; // 要拼回來的圖：和網站原本打亂的那張分開記
     if (u.protocol === 'data:') return 'd:' + strHash(url);
     if (u.protocol === 'blob:') return url;
     const keep = [];
@@ -2799,6 +2828,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    */
   async function mtCaptureUrl(url, img, noRef) {
     if (!url) throw new Error('找不到圖片網址');
+    if (url.endsWith(MT_GIGA)) return mtGigaFix(await mtCaptureUrl(url.slice(0, -MT_GIGA.length), null, noRef));
     let u;
     try { u = new URL(url); } catch (_) { throw new Error('圖片網址無法辨識'); }
     const inline = u.protocol === 'data:' || u.protocol === 'blob:';
@@ -5713,8 +5743,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     const shouldShow = (P) => P.shown && !(pg.on && pg.hidden);
     /** 圖片現在顯示的就是翻好的那張（延遲載入的圖還是預留的空白圖時，先不蓋譯文） */
-    const ready = (img, P) => img.complete && img.naturalWidth > 1 && !mtPlaceholder(img.currentSrc || '')
-      && mtUrlKey(mtAbs(img.currentSrc || img.getAttribute('src') || '')) === P.key;
+    const ready = (img, P) => img.complete && img.naturalWidth > 1 && !mtPlaceholder(mtCur(img))
+      && mtUrlKey(mtAbs(mtCur(img) || img.getAttribute('src') || '')) === P.key;
     function render(P) {
       for (const img of P.els) {
         const V = views.get(img);
@@ -5931,7 +5961,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     async function seamRead(U, L, code) {
       const gu = U.gen;
       const gl = L.gen;
-      const imgOf = (P) => [...P.els].find((i) => i.isConnected && i.complete && i.naturalWidth && mtAbs(i.currentSrc) === P.url) || null;
+      const imgOf = (P) => [...P.els].find((i) => i.isConnected && i.complete && i.naturalWidth && mtAbs(mtCur(i)) === P.url) || null;
       const ext = (P, i) => (P.seamExt ? P.seamExt[i] : 1);
       const su = stripTake(U, 'B');
       const sl = stripTake(L, 'T');
@@ -7510,7 +7540,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         const job = await prepQ(P, async () => {
           if (!alive()) return null;
           step(P, '讀取圖片');
-          const img = [...P.els].find((i) => i.isConnected && i.complete && i.naturalWidth && mtAbs(i.currentSrc) === P.url) || null;
+          const img = [...P.els].find((i) => i.isConnected && i.complete && i.naturalWidth && mtAbs(mtCur(i)) === P.url) || null;
           const bmp = await mtCaptureUrl(P.url, img, P.noRef || pg.noRefDirs.has(mtDirOf(P.url)));
           try {
             if (bmp.width < 200 || bmp.height < 200) return { small: true };
@@ -7697,6 +7727,84 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       }, true);
     }
 
+    /* ---------- 用 <canvas> 顯示漫畫的閱讀器（GigaViewer） ---------- */
+    // 每一頁沒有 <img> 可以翻：在頁面裡放一張看不見、點不到的 <img>（網址是原圖，加上要拼回來的記號），
+    // 跟那一頁的 canvas 一樣大、疊在同一個位置。翻譯、譯文層、滑鼠按鈕都照一般的圖處理。
+    // 還沒畫出來的頁（網站翻到附近才做 canvas）大小是 0，整話翻譯時照樣會先翻好
+    const giga = new Map(); // 頁面區塊 → 看不見的圖
+    let gigaT = 0;
+    let gigaJson = '';
+    let gigaPages = null;
+    function gigaOf(canvas) {
+      const g = canvas.parentElement && giga.get(canvas.parentElement);
+      return g && g.isConnected ? g : null;
+    }
+    /** 放好、對好每一頁的看不見的圖；回傳這一頁是不是 canvas 閱讀器 */
+    function gigaSync() {
+      if (stopped) return false;
+      const ej = document.getElementById('episode-json');
+      const raw = ej ? ej.getAttribute('data-value') || '' : '';
+      if (raw !== gigaJson) {
+        gigaJson = raw;
+        gigaPages = null;
+        try {
+          const ps = JSON.parse(raw).readableProduct.pageStructure;
+          // 打亂的方法只認得 baku（沒打亂的照原圖）；不認得的不處理，免得翻到打亂的圖
+          if (Array.isArray(ps.pages) && (!ps.choJuGiga || ps.choJuGiga === 'baku')) gigaPages = { list: ps.pages, mark: ps.choJuGiga ? MT_GIGA : '' };
+        } catch (_) { /* 不是 canvas 閱讀器 */ }
+      }
+      const areas = gigaPages ? document.querySelectorAll('.js-page-area') : [];
+      if (!gigaPages || areas.length !== gigaPages.list.length) { if (giga.size) gigaClear(); return false; } // 頁面和清單對不上就不猜
+      areas.forEach((a, i) => {
+        const p = gigaPages.list[i];
+        if (!p || p.type !== 'main' || typeof p.src !== 'string' || !/^https?:/i.test(p.src)) return;
+        let g = giga.get(a);
+        if (!g || g.parentNode !== a) {
+          g = document.createElement('img');
+          g.className = 'maoboo-giga';
+          g.mbGiga = true;
+          g.alt = '';
+          g.setAttribute('aria-hidden', 'true');
+          g.decoding = 'async';
+          for (const [k, v] of [['position', 'absolute'], ['display', 'block'], ['opacity', '0'], ['pointer-events', 'none'], ['margin', '0'], ['padding', '0'], ['border', '0'],
+            ['max-width', 'none'], ['max-height', 'none'], ['min-width', '0'], ['min-height', '0'], ['transform', 'none'], ['left', '0'], ['top', '0'], ['width', '0'], ['height', '0']]) g.style.setProperty(k, v, 'important');
+          a.append(g);
+          giga.set(a, g);
+        }
+        const c = [...a.children].find((x) => x.tagName === 'CANVAS');
+        // 網站畫好的頁（圖已經在瀏覽器裡）才放網址；整話翻譯時全部都放。不然一打開就會多下載整話的圖
+        const want = p.src + gigaPages.mark;
+        if (g.getAttribute('src') !== want && (c || pg.on)) g.src = want;
+        let box = [0, 0, 0, 0];
+        if (c) {
+          const cr = c.getBoundingClientRect();
+          const ar = a.getBoundingClientRect();
+          if (cr.width > 0 && cr.height > 0) box = [cr.left - ar.left - a.clientLeft, cr.top - ar.top - a.clientTop, cr.width, cr.height];
+        }
+        const px = box.map((v) => `${Math.round(v * 10) / 10}px`);
+        if (g.mbBox !== px.join()) {
+          g.mbBox = px.join();
+          g.style.setProperty('left', px[0], 'important');
+          g.style.setProperty('top', px[1], 'important');
+          g.style.setProperty('width', px[2], 'important');
+          g.style.setProperty('height', px[3], 'important');
+        }
+      });
+      for (const [a, g] of giga) if (!a.isConnected) { g.remove(); giga.delete(a); }
+      return giga.size > 0;
+    }
+    function gigaClear() {
+      for (const g of giga.values()) g.remove();
+      giga.clear();
+    }
+    /** 有 #episode-json 的網頁才看（每秒對一次位置：網站翻到附近才做 canvas、視窗大小變了 canvas 也會跟著變） */
+    function gigaWatch() {
+      if (gigaT || stopped || !document.getElementById('episode-json')) return;
+      gigaSync();
+      gigaT = setInterval(gigaSync, 1000);
+      listen(PAGE, 'resize', () => { if (!stopped) gigaSync(); }, { passive: true });
+    }
+
     /* ---------- 滑到圖片上出現的按鈕 ---------- */
     let hv = null;
     let hoverImg = null;
@@ -7731,6 +7839,12 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       for (let i = 0; i < list.length && i < 8; i++) {
         if (ourHosts.has(list[i])) return null; // 被我們自己的面板、通知蓋住
         if (list[i].tagName === 'IMG') return eligible(list[i]) ? list[i] : null;
+        // canvas 閱讀器：指到的是 canvas，或是包著它的頁面區塊（網站常讓 canvas 點不到）；要在那一頁的範圍裡
+        const g = giga.size ? (list[i].tagName === 'CANVAS' ? gigaOf(list[i]) : giga.get(list[i])) : null;
+        if (g && g.isConnected) {
+          const r = g.getBoundingClientRect();
+          if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return eligible(g) ? g : null;
+        }
       }
       return null;
     }
@@ -7835,6 +7949,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     }
     /** 找出閱讀器裡的圖：和已經顯示的漫畫圖在同一個區塊裡的，包含還沒載入、隱藏中的 */
     function readerImages() {
+      if (gigaSync()) return [...giga.values()].filter((g) => g.isConnected);
       const all = [...document.images];
       const anchors = new Set(all.filter(eligibleLoaded));
       const box = new Set();
@@ -7876,13 +7991,16 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         }
         queueP(V.P);
       }
-      if (bigs.length === 1) guessNext(bigs[0]); // 一次只顯示一張圖的閱讀器
-      scanScripts();
+      // canvas 閱讀器每一頁都已經有了；圖庫裡的原圖是打亂的，不能照網址猜、照資源清單加
+      if (!giga.size) {
+        if (bigs.length === 1) guessNext(bigs[0]); // 一次只顯示一張圖的閱讀器
+        scanScripts();
+      }
       setStatus();
     }
     /** 圖庫裡同一個資料夾的其他圖（閱讀器預先載入的下一頁、頁面程式裡的圖片清單）也先翻 */
     function considerUrl(u, guess) {
-      if (!pg.on || !u || !/^https?:/i.test(u)) return;
+      if (!pg.on || giga.size || !u || !/^https?:/i.test(u)) return;
       const d = mtDirOf(u);
       if (!d || !pg.dirs.has(d) || !/\.(jpe?g|png|webp|avif|gif|bmp)(?:[?#]|$)/i.test(u)) return;
       const k = mtUrlKey(u);
@@ -8654,7 +8772,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         for (let e = img.parentElement, k = 0; e && k < 4 && e !== document.body; e = e.parentElement, k++) o.up.push(desc(e) + ' ' + sty(e));
         if (V) {
           const P = V.P;
-          o.P = { st: P.state, b: P.blocks.length, shown: P.shown, guess: P.guess, keyOk: mtUrlKey(mtAbs(img.currentSrc || src)) === P.key, ready: ready(img, P), err: P.error || undefined };
+          o.P = { st: P.state, b: P.blocks.length, shown: P.shown, guess: P.guess, keyOk: mtUrlKey(mtAbs(mtCur(img) || src)) === P.key, ready: ready(img, P), err: P.error || undefined };
           const ov = V.overlay;
           if (ov) {
             const hs = ov.host;
@@ -8694,6 +8812,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         } : (isTouch && siteOn() ? 'none' : 'off'),
         vp: vv ? [Math.round(vv.offsetLeft), Math.round(vv.offsetTop), Math.round(vv.width), Math.round(vv.height), fabProbe && fabProbe.isConnected ? Math.round(fabProbe.getBoundingClientRect().left) : null] : null,
         pn: pages.size,
+        gg: giga.size, // 用 <canvas> 顯示的閱讀器：放了幾張看不見的圖（一般網站是 0）
         // 每張圖：狀態、幾句、幾個圖片元素、g = 猜的、語言和認字信心（c92 = 平均 92）、幾個尖刺框（喊叫）
         pages: [...pages.values()].filter((P) => P.queued || P.blocks.length).slice(0, 12).map((P) => {
           const cs = P.blocks.map((b) => b.conf).filter((c) => typeof c === 'number');
@@ -8849,6 +8968,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
     syncHover();
     fabSafe();
     autoWatch();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', gigaWatch, { once: true }); else gigaWatch();
+    later(gigaWatch, 3000); // 閱讀器的資料比較晚放進網頁時
 
     return {
       onConfig() {
@@ -8899,6 +9020,8 @@ ${NARROW_CSS(':host([data-narrow]) ')}
         cancelAnimationFrame(vvRaf);
         clearInterval(fabKeepT);
         clearInterval(tick);
+        clearInterval(gigaT);
+        gigaClear();
         srcMo.disconnect();
         ovIO.disconnect();
         ro.disconnect();
