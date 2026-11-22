@@ -2831,6 +2831,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    * 取得圖片像素：畫面上已載入、同網域的直接讀；其他先用一般下載（可用瀏覽器快取），
    * 圖庫不允許跨站讀取時改用油猴下載。還沒顯示的圖（延遲載入、下一頁）也能先下載。
    */
+  const MT_NOREF_BAD = new Set();
   async function mtCaptureUrl(url, img, noRef) {
     if (!url) throw new Error('找不到圖片網址');
     if (url.endsWith(MT_GIGA)) return mtGigaFix(await mtCaptureUrl(url.slice(0, -MT_GIGA.length), null, noRef));
@@ -2842,13 +2843,21 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       try { return await createImageBitmap(img); } catch (_) { /* 改用下載 */ }
     }
     let blob = null;
-    const ac = typeof AbortController === 'function' ? new AbortController() : null;
-    const to = ac ? setTimeout(() => ac.abort(), 30000) : 0;
-    try {
-      const res = await fetch(url, Object.assign(inline ? {} : { mode: 'cors', credentials: same ? 'include' : 'omit', cache: 'force-cache' }, ac ? { signal: ac.signal } : {}));
-      if (res.ok) blob = await res.blob();
-    } catch (_) { /* 圖庫不允許跨站讀取，改用油猴下載 */ } finally { clearTimeout(to); }
-    if ((!blob || !blob.size) && !inline) blob = await mtGmBlob(url, noRef ? '' : location.href);
+    // 有些圖庫（例如 comix.to 的）只收「不帶來源網址」的請求，網站自己的 <img> 也是這樣載入的（referrerpolicy="no-referrer"）：
+    // 照網頁的方式抓；一般的抓法失敗時也用不帶來源的再試一次。都不行才用油猴下載（圖庫網域不在清單裡時，油猴會跳出要不要允許的畫面）
+    const tries = inline ? [''] : noRef ? ['no-referrer'] : MT_NOREF_BAD.has(u.host) ? [''] : ['', 'no-referrer'];
+    for (const rp of tries) {
+      const ac = typeof AbortController === 'function' ? new AbortController() : null;
+      const to = ac ? setTimeout(() => ac.abort(), 30000) : 0;
+      try {
+        const res = await fetch(url, Object.assign(inline ? {} : { mode: 'cors', credentials: same ? 'include' : 'omit', cache: 'force-cache' }, rp ? { referrerPolicy: rp } : {}, ac ? { signal: ac.signal } : {}));
+        if (res.ok) blob = await res.blob();
+      } catch (_) { /* 圖庫不允許跨站讀取 */ } finally { clearTimeout(to); }
+      if (blob && blob.size) break;
+      blob = null;
+      if (rp && !noRef) MT_NOREF_BAD.add(u.host); // 這個圖庫不帶來源也不行：之後不用多試這一次
+    }
+    if (!blob && !inline) blob = await mtGmBlob(url, noRef ? '' : location.href);
     if (!blob) throw new Error('讀不到圖片');
     try { return await createImageBitmap(blob); } catch (_) { throw new Error('圖片格式無法讀取'); }
   }
