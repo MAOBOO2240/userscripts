@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MAO BOO 油猴整合包
 // @namespace    https://github.com/mao-boo/userscripts
-// @version      1.6.5
+// @version      1.6.6
 // @description  整合影片快轉、短影片（YouTube Shorts、IG／FB Reels）自動下一部、影片音量記憶（Threads／X／IG／FB）、Anime1 卡片介面、漫畫翻譯、X 影片下載、LINE 貼圖下載、隱藏 FB／Threads 推薦內容、網址追蹤參數清除、手機版轉電腦版；每個功能都能在選單裡個別開關，並會自動更新。
 // @author       MAO BOO
 // @homepageURL  https://github.com/MAOBOO2240/userscripts
@@ -45,6 +45,8 @@
 // ==/UserScript==
 
 /* ==更新紀錄==
+ * 1.6.6  X 改版後影片下載按鈕不見了：新版的貼文下面那排按鈕整個換了寫法，照新的結構把下載鈕放回書籤左邊（舊版介面照樣支援）
+ *        漫畫翻譯：圖庫只收不帶來源網址請求的網站（comix.to）照網站的方式抓圖，不用再經過 Tampermonkey 下載
  * 1.6.5  漫畫翻譯：把漫畫圖設成點不到的網站（Kakao 網漫、Kakao Page、Lezhin、mgread）滑到圖上不會出現「翻譯」，現在會出現；
  *        包子漫畫（baozimh.com）的每一話其實開在 twmanga.com，加進網站清單（清單裡有 baozimh.com 的會自動加上）；
  *        那邊還沒捲到的頁整話翻譯時也先翻好；mgread 還沒載入的頁也找得到網址，整話翻譯可以先翻
@@ -2831,6 +2833,7 @@ ${NARROW_CSS(':host([data-narrow]) ')}
    * 取得圖片像素：畫面上已載入、同網域的直接讀；其他先用一般下載（可用瀏覽器快取），
    * 圖庫不允許跨站讀取時改用油猴下載。還沒顯示的圖（延遲載入、下一頁）也能先下載。
    */
+  const MT_NOREF_BAD = new Set();
   async function mtCaptureUrl(url, img, noRef) {
     if (!url) throw new Error('找不到圖片網址');
     if (url.endsWith(MT_GIGA)) return mtGigaFix(await mtCaptureUrl(url.slice(0, -MT_GIGA.length), null, noRef));
@@ -2842,13 +2845,21 @@ ${NARROW_CSS(':host([data-narrow]) ')}
       try { return await createImageBitmap(img); } catch (_) { /* 改用下載 */ }
     }
     let blob = null;
-    const ac = typeof AbortController === 'function' ? new AbortController() : null;
-    const to = ac ? setTimeout(() => ac.abort(), 30000) : 0;
-    try {
-      const res = await fetch(url, Object.assign(inline ? {} : { mode: 'cors', credentials: same ? 'include' : 'omit', cache: 'force-cache' }, ac ? { signal: ac.signal } : {}));
-      if (res.ok) blob = await res.blob();
-    } catch (_) { /* 圖庫不允許跨站讀取，改用油猴下載 */ } finally { clearTimeout(to); }
-    if ((!blob || !blob.size) && !inline) blob = await mtGmBlob(url, noRef ? '' : location.href);
+    // 有些圖庫（例如 comix.to 的）只收「不帶來源網址」的請求，網站自己的 <img> 也是這樣載入的（referrerpolicy="no-referrer"）：
+    // 照網頁的方式抓；一般的抓法失敗時也用不帶來源的再試一次。都不行才用油猴下載（圖庫網域不在清單裡時，油猴會跳出要不要允許的畫面）
+    const tries = inline ? [''] : noRef ? ['no-referrer'] : MT_NOREF_BAD.has(u.host) ? [''] : ['', 'no-referrer'];
+    for (const rp of tries) {
+      const ac = typeof AbortController === 'function' ? new AbortController() : null;
+      const to = ac ? setTimeout(() => ac.abort(), 30000) : 0;
+      try {
+        const res = await fetch(url, Object.assign(inline ? {} : { mode: 'cors', credentials: same ? 'include' : 'omit', cache: 'force-cache' }, rp ? { referrerPolicy: rp } : {}, ac ? { signal: ac.signal } : {}));
+        if (res.ok) blob = await res.blob();
+      } catch (_) { /* 圖庫不允許跨站讀取 */ } finally { clearTimeout(to); }
+      if (blob && blob.size) break;
+      blob = null;
+      if (rp && !noRef) MT_NOREF_BAD.add(u.host); // 這個圖庫不帶來源也不行：之後不用多試這一次
+    }
+    if (!blob && !inline) blob = await mtGmBlob(url, noRef ? '' : location.href);
     if (!blob) throw new Error('讀不到圖片');
     try { return await createImageBitmap(blob); } catch (_) { throw new Error('圖片格式無法讀取'); }
   }
@@ -10554,7 +10565,16 @@ ${PLAYER_PAGES('iframe.vframe')}{display:block;width:100%!important;max-width:no
         const getTweetUrl = (article) => {
           const t = article.querySelector('time');
           const a = t && t.closest('a');
-          return (a && a.href) || null;
+          if (a && a.href) return a.href;
+          // 新版介面沒有 <time>：用「查看統計」的連結（一定是這則貼文自己的，引用的貼文沒有），再不然找第一個貼文連結
+          const an = article.querySelector('a[href$="/analytics"]');
+          const m = an && /^(.*\/status\/\d+)\/analytics$/.exec(an.href);
+          if (m) return m[1];
+          for (const l of article.querySelectorAll('a[href*="/status/"]')) {
+            const k = /^https?:\/\/[^/]+\/[^/]+\/status\/\d+/.exec(l.href);
+            if (k) return k[0];
+          }
+          return null;
         };
         /** 透過 SVG 路徑找「分享」按鈕 */
         const findShareButton = (article) => {
@@ -10594,14 +10614,47 @@ ${PLAYER_PAGES('iframe.vframe')}{display:block;width:100%!important;max-width:no
           dlContainer.appendChild(dlWrapper);
           return dlContainer;
         }
+        /** 新版介面（2026 年底改版）：貼文下面那排按鈕是 <button class="x-engagement-button">，最右邊一組是「書籤、分享」。做一顆一樣的放在書籤左邊 */
+        function makeButtonNew(shareBtn, tweetUrl) {
+          const box = document.createElement('div');
+          box.className = 'mao-boo-dl-container';
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = shareBtn.className;
+          btn.setAttribute('aria-label', '下載影片');
+          btn.title = '下載影片';
+          const pill = document.createElement('span');
+          const sharePill = shareBtn.querySelector('span');
+          if (sharePill) pill.className = sharePill.className;
+          const svg = document.createElementNS(SVG_NS, 'svg');
+          for (const [k, v] of [['fill', 'currentColor'], ['viewBox', '0 0 24 24'], ['display', 'flex'], ['width', '1em'], ['height', '1em'], ['aria-hidden', 'true']]) svg.setAttribute(k, v);
+          const path = document.createElementNS(SVG_NS, 'path');
+          path.setAttribute('d', downloadSvgPath);
+          svg.appendChild(path);
+          pill.appendChild(svg);
+          btn.appendChild(pill);
+          btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            PAGE.open(`https://cobalt.tools/?u=${encodeURIComponent(tweetUrl)}`, '_blank');
+          });
+          box.appendChild(btn);
+          return box;
+        }
         function injectButtons() {
           const isStatusPage = location.pathname.includes('/status/');
           for (const article of document.querySelectorAll('article')) {
             // 用「區塊內有沒有按鈕」判斷，X 重建畫面時就會自動補回
             if (article.querySelector('.mao-boo-dl-container')) continue;
-            if (!article.querySelector('video, [data-testid="videoComponent"], [data-testid="tweetPhoto"]')) continue;
+            if (!article.querySelector('video, [data-testid="videoComponent"], [data-testid="tweetPhoto"], [data-engagement-action="media"]')) continue;
             const tweetUrl = getTweetUrl(article);
             if (!tweetUrl) continue;
+            // 新版介面
+            const shareNew = article.querySelector('button[data-engagement-action="share"]');
+            if (shareNew && shareNew.parentElement) {
+              shareNew.parentElement.insertBefore(makeButtonNew(shareNew, tweetUrl), shareNew.parentElement.firstElementChild);
+              continue;
+            }
             const bookmark = () => article.querySelector('[data-testid="bookmark"], [data-testid="removeBookmark"]');
             // 詳細頁優先放在「分享」旁，其他頁面優先放在「書籤」旁
             const targetBtn = isStatusPage ? (findShareButton(article) || bookmark()) : (bookmark() || findShareButton(article));
